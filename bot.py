@@ -17,6 +17,8 @@ from community import community_week
 from tmdb_client import TmdbClient
 from mdblist_client import MdbListClient
 from imdb_client import ImdbClient
+from recommendation_engine import rating_value, select_sources, source_weight, rank_candidates, recommendation_lineup
+from recommendation_ui import RecommendationView
 
 load_dotenv()
 
@@ -2776,15 +2778,17 @@ async def _recommendation_sources(uid,user,token,media_filter):
                 if tmdb_id is None:
                     continue
                 status=item.get("status")
-                if status in {"watching","completed","dropped","plantowatch"}:
+                if status in {"watching","completed","dropped","plantowatch","hold"}:
                     excluded.add(("movie",int(tmdb_id)))
-                if status not in {"plantowatch","dropped"} and (status in {"watching","completed"} or item.get("last_watched_at")):
+                if status not in {"plantowatch","dropped","hold"} and (status in {"watching","completed"} or item.get("last_watched_at")):
                     sources.append({
                         "kind":"movie",
                         "tmdb_id":int(tmdb_id),
                         "title":media.get("title") or "a watched movie",
                         "watched_at":item.get("last_watched_at") or "",
                         "anime":media_filter=="anime",
+                        "media_type":"movies", "rating":item.get("user_rating"),
+                        "genres":media.get("genres") or item.get("genres") or [],
                     })
                 continue
 
@@ -2797,15 +2801,17 @@ async def _recommendation_sources(uid,user,token,media_filter):
                 if tmdb_id is None:
                     continue
                 status=movie_item.get("status")
-                if status in {"watching","completed","dropped","plantowatch"}:
+                if status in {"watching","completed","dropped","plantowatch","hold"}:
                     excluded.add(("movie",int(tmdb_id)))
-                if status not in {"plantowatch","dropped"} and (status in {"watching","completed"} or movie_item.get("last_watched_at")):
+                if status not in {"plantowatch","dropped","hold"} and (status in {"watching","completed"} or movie_item.get("last_watched_at")):
                     sources.append({
                         "kind":"movie",
                         "tmdb_id":int(tmdb_id),
                         "title":media.get("title") or "a watched movie",
                         "watched_at":movie_item.get("last_watched_at") or "",
                         "anime":media_filter=="anime" or media_type=="anime",
+                        "media_type":"anime", "rating":movie_item.get("user_rating"),
+                        "genres":media.get("genres") or movie_item.get("genres") or [],
                     })
 
             for show_item in episode_items:
@@ -2817,25 +2823,27 @@ async def _recommendation_sources(uid,user,token,media_filter):
                 if tmdb_id is None:
                     continue
                 status=show_item.get("status")
-                if status in {"watching","completed","dropped","plantowatch"}:
+                if status in {"watching","completed","dropped","plantowatch","hold"}:
                     excluded.add(("tv",int(tmdb_id)))
                 latest=_latest_watched_episode(show_item)
-                if status not in {"plantowatch","dropped"} and (status in {"watching","completed"} or show_item.get("last_watched_at") or latest):
+                if status not in {"plantowatch","dropped","hold"} and (status in {"watching","completed"} or show_item.get("last_watched_at") or latest):
                     watched_at=show_item.get("last_watched_at") or (latest[0].isoformat() if latest else "")
                     sources.append({
                         "kind":"tv",
                         "tmdb_id":int(tmdb_id),
                         "title":media.get("title") or "a watched series",
                         "watched_at":watched_at,
-                        "anime":media_filter=="anime",
+                        "anime":media_type=="anime",
+                        "media_type":media_type, "rating":show_item.get("user_rating"),
+                        "genres":media.get("genres") or show_item.get("genres") or [],
                     })
 
-    sources.sort(key=lambda item:item.get("watched_at") or "",reverse=True)
+    sources=select_sources(sources)
     log.info(
         "Recommendation sources for user %s: %d sources, %d exclusions, filter=%s",
         uid,len(sources),len(excluded),media_filter,
     )
-    return sources[:8],excluded,token
+    return sources,excluded,token
 
 
 async def _get_recommendation_candidates(sources,excluded,media_filter):
@@ -2844,6 +2852,8 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
     total_excluded=0
     total_filtered=0
     total_invalid=0
+    kinds=sorted({source["kind"] for source in sources})
+    genre_maps=dict(zip(kinds,await asyncio.gather(*(tmdb.get_genres(kind) for kind in kinds))))
 
     for source in sources:
         if source["kind"]=="movie":
@@ -2860,16 +2870,17 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
         # user's history, while /similar still has fresh candidates.
         results=[]
         seen_ids=set()
-        for result in (recommendation_results or []) + (similar_results or []):
-            try:
-                result_id=int(result.get("id"))
-            except (TypeError,ValueError):
-                total_invalid+=1
-                continue
-            if result_id in seen_ids:
-                continue
-            seen_ids.add(result_id)
-            results.append(result)
+        for channel,group in (("recommendation",recommendation_results),("similar",similar_results)):
+            for result in group or []:
+                try:
+                    result_id=int(result.get("id"))
+                except (TypeError,ValueError):
+                    total_invalid+=1
+                    continue
+                if result_id in seen_ids:
+                    continue
+                seen_ids.add(result_id)
+                results.append((result,channel))
 
         log.info(
             "Recommendation lookup: %s TMDB=%s returned %d recommendation(s) + %d similar title(s) = %d unique candidate(s).",
@@ -2881,7 +2892,7 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
         )
 
         total_raw+=len(results)
-        for result in results:
+        for result,channel in results:
             try:
                 result_id=int(result.get("id"))
             except (TypeError,ValueError):
@@ -2890,9 +2901,9 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
             if (kind,result_id) in excluded:
                 total_excluded+=1
                 continue
-            if media_filter=="anime" and kind=="tv":
+            if media_filter=="anime":
                 origin=result.get("origin_country") or []
-                if "JP" not in origin and result.get("original_language")!="ja":
+                if ("JP" not in origin and result.get("original_language")!="ja") or 16 not in (result.get("genre_ids") or []):
                     total_filtered+=1
                     continue
             if not result.get("name") and not result.get("title"):
@@ -2901,17 +2912,23 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
 
             key=(kind,result_id)
             entry=candidates.get(key)
+            source_genres={str(genre).casefold() for genre in source.get("genres") or []}
+            candidate_genres={genre_maps.get(kind,{}).get(int(genre),"") for genre in result.get("genre_ids") or []}
+            shared=sorted(name for name in candidate_genres if name and name.casefold() in source_genres)
+            match={"title":source["title"],"rating":rating_value(source.get("rating")),
+                   "weight":source_weight(source,channel),"genres":shared,
+                   "source_id":(source["kind"],source["tmdb_id"])}
             if entry is None:
                 entry=dict(result)
                 entry["_recommendation_kind"]=kind
-                entry["_sources"]=1
-                entry["_source_titles"]=[source["title"]]
-                entry["_anime"]=bool(source.get("anime"))
+                entry["_matches"]=[match]
+                entry["_matched_genres"]=set(shared)
+                entry["_anime"]=bool(source.get("anime") and result.get("original_language")=="ja" and 16 in (result.get("genre_ids") or []))
             else:
-                entry["_sources"]+=1
-                if source["title"] not in entry["_source_titles"]:
-                    entry["_source_titles"].append(source["title"])
-                entry["_anime"]=entry.get("_anime",False) or bool(source.get("anime"))
+                if not any(existing["source_id"]==match["source_id"] for existing in entry["_matches"]):
+                    entry["_matches"].append(match)
+                entry["_matched_genres"].update(shared)
+                entry["_anime"]=entry.get("_anime",False) or bool(source.get("anime") and result.get("original_language")=="ja" and 16 in (result.get("genre_ids") or []))
                 if float(result.get("vote_average") or 0) > float(entry.get("vote_average") or 0):
                     entry["vote_average"]=result.get("vote_average")
                     entry["vote_count"]=result.get("vote_count")
@@ -2931,16 +2948,7 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
         list(candidates.keys())[:10],
     )
 
-    ranked=sorted(
-        candidates.values(),
-        key=lambda item:(
-            -int(item.get("_sources",1)),
-            -float(item.get("vote_average") or 0),
-            -float(item.get("popularity") or 0),
-            str(item.get("name") or item.get("title") or "").casefold(),
-        ),
-    )
-    return ranked
+    return rank_candidates(list(candidates.values()))
 
 
 @bot.tree.command(
@@ -2994,7 +3002,8 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
             )
             return
 
-        selected=recommendations[:5]
+        selected=recommendation_lineup(recommendations)
+        detail_cache={}
 
         async def recommendation_ratings(result):
             if mdblist is None or result.get("id") is None:
@@ -3024,49 +3033,66 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
                 resolved=None
             return resolved or page, bool(resolved)
 
-        rating_results,destinations=await asyncio.gather(
-            asyncio.gather(*(recommendation_ratings(result) for result in selected)),
-            asyncio.gather(*(destination(result) for result in selected)),
-        )
-
-        lines=[]
-        for index,(result,ratings,(result_url,on_simkl)) in enumerate(zip(selected,rating_results,destinations),1):
+        async def render_pick(result,index,total):
+            key=(result["_recommendation_kind"],result["id"])
+            if key not in detail_cache:
+                ratings,link=await asyncio.gather(recommendation_ratings(result),destination(result))
+                detail_cache[key]=(ratings,link)
+            ratings,(result_url,on_simkl)=detail_cache[key]
             title=result.get("name") or result.get("title") or "Untitled"
             rating_parts=[]
             imdb_rating=ratings.get("imdb")
             if imdb_rating is not None:
-                rating_parts.append(f"⭐ IMDb **{imdb_rating:.1f}**")
+                rating_parts.append(f"⭐ IMDb {float(imdb_rating):.1f}/10")
             if result.get("_anime"):
                 mal_rating=ratings.get("myanimelist")
                 if mal_rating is not None:
-                    rating_parts.append(f"🌸 MAL **{mal_rating:.1f}**")
-            rating_text=f" · {' · '.join(rating_parts)}" if rating_parts else ""
-            source_titles=result.get("_source_titles") or []
-            source_count=int(result.get("_sources",1))
-            examples=", ".join(f"*{name}*" for name in source_titles[:2])
-            reason=f"Because you watched {examples}" if examples else "Based on your watch history"
-            if source_count>len(source_titles[:2]):
-                reason+=f" and {source_count-len(source_titles[:2])} more"
+                    rating_parts.append(f"🌸 MAL {float(mal_rating):.1f}/10")
+            matches=sorted(result.get("_matches") or [],key=lambda match:-match["weight"])
+            reasons=[]
+            for match in matches[:2]:
+                own_rating=match.get("rating")
+                if own_rating and own_rating>=8:
+                    reasons.append(f"you rated *{match['title']}* {own_rating:g}/10")
+                else:
+                    reasons.append(f"you watched *{match['title']}*")
+            reason="; ".join(reasons) or "Suggested from your watch history"
+            if len(matches)>2:
+                reason+=f"; plus {len(matches)-2} other watched title(s)"
+            shared=sorted(result.get("_matched_genres") or [])
+            if shared:
+                reason+=f"\nShared genre: {', '.join(shared[:2])}"
             release_date=result.get("first_air_date") or result.get("release_date") or ""
             year=release_date[:4] if release_date else "Year unknown"
             kind_label="Movie" if result["_recommendation_kind"]=="movie" else ("Anime" if result.get("_anime") else "TV")
             votes=int(result.get("vote_count") or 0)
             tmdb_score=float(result.get("vote_average") or 0)
-            score=f" · TMDB {tmdb_score:.1f}/10 ({votes:,} votes)" if votes else ""
+            if votes:
+                rating_parts.append(f"TMDB {tmdb_score:.1f}/10 ({votes:,} votes)")
             overview=" ".join((result.get("overview") or "").split())
-            if len(overview)>160:
-                overview=overview[:157].rsplit(" ",1)[0]+"…"
-            lines.append(f"**{index}. [{title}]({result_url})** · {kind_label} · {year}{rating_text}{score}\n"
-                         f"{overview or 'Synopsis unavailable.'}\n"
-                         f"↳ {reason}{' · View on TMDB' if not on_simkl else ''}")
+            if len(overview)>700:
+                overview=overview[:697].rsplit(" ",1)[0]+"…"
+            label="Close match" if index<=3 else "Broader discovery" if index==4 else "Wildcard" if index==5 else "More to explore"
+            embed=discord.Embed(
+                title=title,url=result_url,
+                description=overview or "No synopsis available for this title.",
+                color=0xE91E63 if result.get("_anime") else 0xF1C40F if kind_label=="Movie" else 0x3498DB,
+            )
+            embed.set_author(name=f"{i.user.display_name}'s picks · {label}")
+            embed.add_field(name="Why this pick",value=reason,inline=False)
+            embed.add_field(name="Details",value=f"{kind_label} · {year}"+(f"\n{' · '.join(rating_parts)}" if rating_parts else ""),inline=False)
+            if not on_simkl:
+                embed.add_field(name="Link",value="This title isn't matched on Simkl yet. The title opens its exact TMDB entry.",inline=False)
+            poster=result.get("poster_path")
+            if poster and poster.startswith("/"):
+                embed.set_thumbnail(url=f"https://image.tmdb.org/t/p/w500{poster}")
+            embed.set_footer(text=f"{index} of {total} · Based on your SIMKL watch history")
+            return embed
 
-        embed=discord.Embed(
-            title=f"🧠 {i.user.display_name} · Recommendations",
-            description="\n\n".join(lines),
-            color=0x5865F2,
-        )
-        embed.set_footer(text="Based on your recent SIMKL watches · Unmatched entries open on TMDB")
-        await i.followup.send(embed=embed,ephemeral=True)
+        view=RecommendationView(i.user.id,selected,recommendations,render_pick)
+        view.message=await i.followup.send(embed=await render_pick(selected[0],1,len(selected)),
+                                           view=view,ephemeral=True,wait=True,
+                                           allowed_mentions=discord.AllowedMentions.none())
 
     except SimklAuthError:
         await i.followup.send(
