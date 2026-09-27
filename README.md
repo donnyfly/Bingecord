@@ -16,6 +16,7 @@ It supports automatic SIMKL syncing, episode grouping, artwork and ratings, pers
 ## What you get
 
 - 🎬 Automatic SIMKL activity tracking for TV, anime, and movies
+- 👥 Watched Together combines matching watches from the same polling cycle
 - 📺 Consecutive episode grouping for cleaner Discord posts
 - 🖼️ TMDB artwork with SIMKL fallback
 - ⭐ IMDb ratings and 🌸 MyAnimeList ratings where available
@@ -64,6 +65,9 @@ Admins can use:
 ```
 
 This keeps the core SIMKL activity tracker while disabling optional progression, achievements, challenges, recaps, community goals, leaderboards, and similar extras.
+
+**Watched Together:** matching movies, episodes, or identical episode ranges in the same channel combine when each watch timestamp is within 30 minutes of the others. Mentions do not ping. Everyone keeps their own XP and history. Admins can toggle it with `/simkl-features feature: Watched Together enabled: False`. First watches include “🆕 Started watching this series.” inside the watch post; standalone Started Watching posts are omitted.
+
 
 Use:
 
