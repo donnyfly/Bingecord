@@ -8,6 +8,7 @@ from discord import app_commands
 from dotenv import load_dotenv
 from simkl_client import SimklAuthError, SimklClient, SimklSlowDown
 from storage import DEFAULT_FEATURES, EPOCH_ISO, storage
+from watch_delivery import WatchActivity, WatchBatch
 from achievements import ACHIEVEMENTS, all_achievements
 from progression import RANKS, challenges_for, challenge_progress, level_progress, rank_for_level, xp_for_level, xp_for_watch
 from level_visuals import accent_for_tier, prestige_style, render_achievement_gif, render_level_up_gif, render_prestige_gif
@@ -63,7 +64,7 @@ if mdblist is not None:
 else:
     log.warning("MDBList IMDb ratings disabled: MDBLIST_API_KEY is not set.")
 
-FEATURE_LABELS={"progression":"Levels, ranks and prestige", "achievements":"Achievements",
+FEATURE_LABELS={"watched_together":"Watched Together", "progression":"Levels, ranks and prestige", "achievements":"Achievements",
                 "challenges":"Daily and weekly challenges", "community":"Community challenges",
                 "weekly_recaps":"Weekly recaps", "leaderboards":"Leaderboards",
                 "statistics":"Statistics cards", "discovery":"Watching, random picks and recommendations"}
@@ -405,7 +406,7 @@ def build_embed(t,desc,ts,name,member,image,profile,title=None,title_url=None,po
     e.set_footer(text=f"{label} · SIMKL"); return e
 async def send_embed(ch,e,what):
     try:
-        await ch.send(embed=e)
+        await ch.send(embed=e, allowed_mentions=discord.AllowedMentions.none())
         return True
     except discord.Forbidden:
         log.error("Discord denied permission while sending %s embed to channel %s.", what, getattr(ch, "id", "unknown"))
@@ -512,7 +513,7 @@ async def resolve_member(g,uid):
         except Exception: return None,"Someone"
     return m,m.display_name
 
-async def process_shows(ch,g,uid,name,member,t,items,profile):
+async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
     announced=await storage.get_announced(g,uid); state=await storage.get_activity_state(g,uid); watches=state["watch_times"]; p=await prefs(g,uid); groups=defaultdict(list)
     for e in iter_show_episodes(t,items):
         if e["watched_dt"] is None: continue
@@ -520,6 +521,9 @@ async def process_shows(ch,g,uid,name,member,t,items,profile):
         rw=e["key"] in announced and prevdt and e["watched_dt"]>prevdt
         if e["key"] not in announced or rw: groups[(e["simkl_id"],e["season_num"],"rewatched" if rw else "watched")].append(e)
     count=0; ok=True
+    starting_titles={((item.get("show") or {}).get("ids") or {}).get("simkl")
+                     for item in items or [] if item.get("status")=="watching"}
+    start_claimed=set()
     for (sid,sn,kind),es in groups.items():
         es=sorted(es,key=lambda x:x["episode_number"]); title=es[0]["show_title"]; url=simkl_title_url(t,sid,es[0]["slug"]); fallback=simkl_poster_url(es[0]["poster"])
         if t=="anime":
@@ -551,6 +555,11 @@ async def process_shows(ch,g,uid,name,member,t,items,profile):
             if len(grp)==1:
                 if ep_title: desc+=f"\n*{ep_title}*"
                 if rating is not None: desc+=f"\n⭐ IMDb {rating:.1f}/10"
+            started=(sid in starting_titles and sid not in start_claimed and kind=="watched"
+                     and not any(key.startswith(f"{t}:{sid}:") for key in watches))
+            if started:
+                desc+="\n\n🆕 Started watching this series."
+                start_claimed.add(sid)
             logo=None
             if t=="anime" and p["artwork"] in ("auto", "backdrop"):
                 try:
@@ -577,9 +586,6 @@ async def process_shows(ch,g,uid,name,member,t,items,profile):
                     runtime_by_key[last_episode["key"]]=None
 
             e=build_embed(t,desc,max(x["watched_dt"] for x in grp),name,member,image,profile,title,url,fallback,logo,p)
-            if not await send_embed(ch,e,"episode"):
-                ok=False
-                continue
             keys=[x["key"] for x in grp]
             watch_times={x["key"]:x["watched_raw"] for x in grp}
             records=[{
@@ -591,12 +597,28 @@ async def process_shows(ch,g,uid,name,member,t,items,profile):
                 "amount":xp_for_watch("anime_episode" if t=="anime" else "episode",
                                        runtime_by_key.get(watched["key"])),
             } for watched in grp]
-            await storage.record_activity_batch(g,uid,keys,watch_times,records)
+            async def commit(keys=keys, watch_times=watch_times, records=records, started=started, sid=sid):
+                await storage.record_activity_batch(g,uid,keys,watch_times,records)
+                if started:
+                    await storage.update_activity_state(g,uid,statuses={f"{t}:{sid}":"watching"})
+            if batch is not None:
+                # SIMKL identity plus its mapped season prevents unrelated anime
+                # seasons or colliding third-party IDs from grouping together.
+                batch.add(WatchActivity(str(g),str(uid),t,ch,
+                    ("episode",t,str(sid),sn,tuple(x["episode_number"] for x in grp)),
+                    tuple(x["watched_dt"] for x in grp),e,
+                    f"**{format_episode_range(sn,grp[0]['episode_number'],grp[-1]['episode_number'])}** of **{title}**",
+                    commit,started=started,rewatched=kind=="rewatched",count=len(grp)))
+            elif await send_embed(ch,e,"episode"):
+                await commit()
+            else:
+                ok=False
+                continue
             count+=len(grp)
-    if count: await evaluate_achievements(g,uid,notify_channel=ch)
+    if count and batch is None: await evaluate_achievements(g,uid,notify_channel=ch)
     return count,ok
 
-async def process_movies(ch,g,uid,name,member,items,since,profile):
+async def process_movies(ch,g,uid,name,member,items,since,profile,batch=None,scope="movies"):
     announced=await storage.get_announced(g,uid); state=await storage.get_activity_state(g,uid); watches=state["watch_times"]; p=await prefs(g,uid); count=0; ok=True
     for x in items or []:
         m=x.get("movie") or {}; ids=m.get("ids") or {}; sid=ids.get("simkl"); wr=x.get("last_watched_at")
@@ -662,7 +684,7 @@ async def process_movies(ch,g,uid,name,member,items,since,profile):
         ):
             ratings = await get_movie_ratings(tmdb_movie_id)
 
-        verb="Rewatched" if rw else "Watched a movie"
+        verb="Rewatched" if rw else "Watched"
         desc=f"{verb}"
         if p["activity_text"]=="detailed":
             desc=f"{verb} **{title}**"
@@ -685,16 +707,22 @@ async def process_movies(ch,g,uid,name,member,items,since,profile):
             # opens the movie entry instead of the anime entry.
             activity_url = simkl_redirect_url(tmdb_movie_id, "movie", title)
         e=build_embed("movies",desc,dt,name,member,image,profile,title,activity_url,poster,logo,p)
-        if not await send_embed(ch,e,"movie"):
+        media_type="anime_movie" if anime_movie else "movie"
+        record={"media_type":media_type,"title":title,"item_key":k,"watched_at":wr,
+                "genres":m.get("genres") or x.get("genres"),"amount":xp_for_watch(media_type)}
+        async def commit(k=k, wr=wr, record=record):
+            await storage.record_activity_batch(g,uid,[k],{k:wr},[record])
+        if batch is not None:
+            batch.add(WatchActivity(str(g),str(uid),scope,ch,
+                ("movie",scope,str(sid)),(dt,),e,f"**{title}**",commit,
+                rewatched=bool(rw),movie=True))
+        elif await send_embed(ch,e,"movie"):
+            await commit()
+        else:
             ok=False
             continue
-        media_type="anime_movie" if anime_movie else "movie"
-        await storage.record_activity_batch(g,uid,[k],{k:wr},[{
-            "media_type":media_type,"title":title,"item_key":k,"watched_at":wr,
-            "genres":m.get("genres") or x.get("genres"),"amount":xp_for_watch(media_type),
-        }])
         count+=1
-    if count: await evaluate_achievements(g,uid,notify_channel=ch)
+    if count and batch is None: await evaluate_achievements(g,uid,notify_channel=ch)
     return count,ok
 
 async def process_status(ch,g,uid,name,member,t,items,profile):
@@ -715,6 +743,11 @@ async def process_status(ch,g,uid,name,member,t,items,profile):
         key=f"{t}:{sid}"
         if baseline or statuses.get(key)==status:
             successful[key]=status
+            continue
+        if status=="watching":
+            # Keep status transitions accurate even when no episode was marked.
+            # The start annotation depends on successful watch history instead.
+            await storage.update_activity_state(g,uid,statuses={key:status},flush=True)
             continue
         # Movies already generate a dedicated "watched" activity. Treat the
         # SIMKL "completed" status as internal state for movies so it does not
@@ -1026,7 +1059,7 @@ async def notify_history_backfill(guild_id_value, uid, xp_earned, progression, c
         log.exception("Unexpected failure sending historical progression notification for user %s.", uid)
     return False
 
-async def poll_one(ch,g,uid,u,gu,request_cache=None,force_reconcile=False):
+async def poll_one(ch,g,uid,u,gu,request_cache=None,force_reconcile=False,batch=None):
     previous_failures=gu.get("consecutive_failures",0)
     await storage.update_poll_health(g,uid,last_poll_at=now_iso(),flush=False)
     if await storage.prepare_empty_history_repair(g,uid):
@@ -1151,6 +1184,7 @@ async def poll_one(ch,g,uid,u,gu,request_cache=None,force_reconcile=False):
 
     posted=0
     cycle_errors=[]
+    checkpoints=[]
     for t in MEDIA_TYPES:
         since=last.get(t,EPOCH_ISO)
         sdt=parse_iso(since)
@@ -1170,10 +1204,10 @@ async def poll_one(ch,g,uid,u,gu,request_cache=None,force_reconcile=False):
                     ch,g,uid,name,member,t,anime_shows,profile
                 )
                 show_count,show_ok=await process_shows(
-                    ch,g,uid,name,member,t,anime_shows,profile
+                    ch,g,uid,name,member,t,anime_shows,profile,batch=batch
                 )
                 movie_count,movie_ok=await process_movies(
-                    ch,g,uid,name,member,anime_movies,sdt,profile
+                    ch,g,uid,name,member,anime_movies,sdt,profile,batch=batch,scope=t
                 )
                 wc=show_count+movie_count
                 wo=show_ok and movie_ok
@@ -1181,13 +1215,17 @@ async def poll_one(ch,g,uid,u,gu,request_cache=None,force_reconcile=False):
                 sc,so=await process_status(
                     ch,g,uid,name,member,t,items,profile
                 )
-                wc,wo=await process_movies(
-                    ch,g,uid,name,member,items,sdt,profile
-                )
+                if t=="shows":
+                    wc,wo=await process_shows(ch,g,uid,name,member,t,items,profile,batch=batch)
+                else:
+                    wc,wo=await process_movies(ch,g,uid,name,member,items,sdt,profile,batch=batch)
 
+            posted+=wc
             if so and wo:
-                await storage.update_last_checked(g,uid,t,to_iso(parse_iso(stamp)))
-                posted+=wc
+                if batch is None:
+                    await storage.update_last_checked(g,uid,t,to_iso(parse_iso(stamp)))
+                else:
+                    checkpoints.append((t,to_iso(parse_iso(stamp))))
             else:
                 cycle_errors.append(f"{t}: partial post failure")
                 log.warning("Some %s posts failed for user %s; checkpoint not advanced.",t,uid)
@@ -1195,23 +1233,36 @@ async def poll_one(ch,g,uid,u,gu,request_cache=None,force_reconcile=False):
             cycle_errors.append(f"{t}: {type(exc).__name__}")
             log.error("Failed processing %s activity for user %s: %s: %s",t,uid,type(exc).__name__,exc)
         await storage.flush()
-    if cycle_errors:
-        error="; ".join(cycle_errors)
-        await mark_poll_failure(g,uid,error,previous_failures)
-    else:
-        await storage.update_poll_health(
-            g,uid,last_success_at=now_iso(),last_error="",
-            consecutive_failures=0,flush=False
-        )
-        await storage.flush()
+    async def finalize():
+        if batch is not None:
+            for media_type,stamp in checkpoints:
+                if batch.failed(g,uid,media_type):
+                    cycle_errors.append(f"{media_type}: watch delivery failed")
+                else:
+                    await storage.update_last_checked(g,uid,media_type,stamp)
+            if any(item.delivered for item in batch.activities if item.guild==str(g) and item.user==str(uid)):
+                await evaluate_achievements(g,uid,notify_channel=ch)
+        if cycle_errors:
+            error="; ".join(cycle_errors)
+            await mark_poll_failure(g,uid,error,previous_failures)
+        else:
+            await storage.update_poll_health(
+                g,uid,last_success_at=now_iso(),last_error="",
+                consecutive_failures=0,flush=False
+            )
+            await storage.flush()
 
-    progression_after_poll=await storage.get_progression(uid)
-    for number in (await storage.claim_prestige_notifications(uid) if await feature_enabled(g,"progression") else []):
-        if not await send_prestige_notification(ch.send,f"<@{uid}>",number,progression_after_poll.get("lifetime_xp",0)):
-            await storage.retry_prestige_notification(uid,number)
-            break
-    await notify_level_up(g,uid,progression_before_poll,progression_after_poll,ch)
-    await storage.flush()
+        progression_after_poll=await storage.get_progression(uid)
+        for number in (await storage.claim_prestige_notifications(uid) if await feature_enabled(g,"progression") else []):
+            if not await send_prestige_notification(ch.send,f"<@{uid}>",number,progression_after_poll.get("lifetime_xp",0)):
+                await storage.retry_prestige_notification(uid,number)
+                break
+        await notify_level_up(g,uid,progression_before_poll,progression_after_poll,ch)
+        await storage.flush()
+    if batch is None:
+        await finalize()
+    else:
+        batch.finalizers.append(finalize)
     return posted
 
 async def poll_all(g=None, force_reconcile=False):
@@ -1232,6 +1283,7 @@ async def poll_all(g=None, force_reconcile=False):
         for x in targets:
             users.setdefault(x["discord_user_id"],[]).append(x)
 
+        batch=WatchBatch(send_embed)
         semaphore=asyncio.Semaphore(POLL_CONCURRENCY)
         channel_cache={}
         channel_errors={}
@@ -1265,7 +1317,8 @@ async def poll_all(g=None, force_reconcile=False):
                         channel_errors[channel_key]=(gid,channel_error)
 
                     try:
-                        posted+=await poll_one(ch,int(gid),uid,user_data,x["guild_user_data"],request_cache,force_reconcile=force_reconcile)
+                        posted+=await poll_one(ch,int(gid),uid,user_data,x["guild_user_data"],request_cache,force_reconcile=force_reconcile,
+                                               batch=batch if await feature_enabled(gid,"watched_together") else None)
                         if channel_error:
                             await mark_poll_failure(gid,uid,channel_error,x["guild_user_data"].get("consecutive_failures",0))
                     except SimklAuthError as exc:
@@ -1282,9 +1335,13 @@ async def poll_all(g=None, force_reconcile=False):
         results=await asyncio.gather(
             *(process_user(uid,user_targets) for uid,user_targets in users.items())
         )
+        await batch.deliver()
         for channel_id,(gid,error) in channel_errors.items():
             log.warning("Couldn't access channel %s for guild %s: %s",channel_id,gid,error)
-        posted=sum(results)
+        # Queued counts only become successful after Discord delivery.
+        posted=sum(results) if not batch.activities else (
+            max(0,sum(results)-sum(item.count for item in batch.activities))
+            + sum(item.count for item in batch.activities if item.delivered))
         for gid in sorted({str(target["guild_id"]) for target in targets}):
             try:
                 await refresh_community_state(gid)

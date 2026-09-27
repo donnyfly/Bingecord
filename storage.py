@@ -52,7 +52,7 @@ DEFAULT_EMBED_PREFERENCES = {
 }
 
 DEFAULT_FEATURES = dict.fromkeys(("progression", "achievements", "challenges", "community",
-                                "weekly_recaps", "leaderboards", "statistics", "discovery"), True)
+                                "weekly_recaps", "leaderboards", "statistics", "discovery", "watched_together"), True)
 
 
 def _default_guild() -> dict:

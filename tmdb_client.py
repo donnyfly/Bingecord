@@ -1396,7 +1396,7 @@ class TmdbClient:
         movie_id,
     ) -> str | None:
         """
-        Return the highest-rated TMDB movie backdrop.
+        Return an English TMDB movie backdrop, falling back to unlabelled art.
 
         This intentionally uses a landscape backdrop rather than
         the portrait poster.
@@ -1432,6 +1432,7 @@ class TmdbClient:
         backdrops = sorted(
             backdrops,
             key=lambda image: (
+                image.get("iso_639_1") == "en",
                 image.get("vote_average", 0),
                 image.get("vote_count", 0),
             ),
