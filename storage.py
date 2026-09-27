@@ -249,7 +249,7 @@ def _add_watch_xp_events(progression: dict, events: list[dict]) -> tuple[int,lis
     return amount,added
 
 
-def _complete_watch_challenges(progression: dict, added: list[dict]) -> None:
+def _complete_watch_challenges(progression: dict, added: list[dict], *, notify: bool = False) -> None:
     """Count each touched day/week once instead of scanning history per watch."""
     watch_types={"episode","anime_episode","movie","anime_movie"}
     touched=set()
@@ -291,6 +291,11 @@ def _complete_watch_challenges(progression: dict, added: list[dict]) -> None:
             key=f"daily:{day}"
             if daily[day][challenge["kind"]]>=challenge["target"] and challenge["id"] not in completions.get(key,{}):
                 completions.setdefault(key,{})[challenge["id"]]={"completed_at":now,"xp":challenge["xp"]}
+                if notify:
+                    progression.setdefault("pending_challenge_notifications",[]).append({
+                        "key":f"{key}:{challenge['id']}","name":challenge["name"],
+                        "period":"Daily","xp":challenge["xp"],
+                    })
                 progression["xp"]+=challenge["xp"]
                 progression["lifetime_xp"]+=challenge["xp"]
                 roll_prestige(progression)
@@ -299,6 +304,11 @@ def _complete_watch_challenges(progression: dict, added: list[dict]) -> None:
             key=f"weekly:{week}"
             if weekly[week][challenge["kind"]]>=challenge["target"] and challenge["id"] not in completions.get(key,{}):
                 completions.setdefault(key,{})[challenge["id"]]={"completed_at":now,"xp":challenge["xp"]}
+                if notify:
+                    progression.setdefault("pending_challenge_notifications",[]).append({
+                        "key":f"{key}:{challenge['id']}","name":challenge["name"],
+                        "period":"Weekly","xp":challenge["xp"],
+                    })
                 progression["xp"]+=challenge["xp"]
                 progression["lifetime_xp"]+=challenge["xp"]
                 roll_prestige(progression)
@@ -352,6 +362,7 @@ def _normalise_user(user: dict) -> None:
     progression.setdefault("watch_xp_keys", {})
     progression.setdefault("xp_events", [])
     progression.setdefault("challenge_completions", {})
+    progression.setdefault("pending_challenge_notifications", [])
     progression.setdefault("community_rewards", {})
     progression.setdefault("achievement_xp_awarded", {})
     progression.setdefault("history_xp_seeded", False)
@@ -360,6 +371,7 @@ def _normalise_user(user: dict) -> None:
     if not isinstance(progression["watch_xp_keys"], dict): progression["watch_xp_keys"] = {}
     if not isinstance(progression["xp_events"], list): progression["xp_events"] = []
     if not isinstance(progression["challenge_completions"], dict): progression["challenge_completions"] = {}
+    if not isinstance(progression["pending_challenge_notifications"], list): progression["pending_challenge_notifications"] = []
     if not isinstance(progression["community_rewards"], dict): progression["community_rewards"] = {}
     if not isinstance(progression["achievement_xp_awarded"], dict): progression["achievement_xp_awarded"] = {}
     progression["history_xp_seeded"] = bool(progression.get("history_xp_seeded", False))
@@ -940,7 +952,8 @@ class Storage:
 
     @staticmethod
     def _apply_watch_records_locked(guild_user: dict, global_user: dict,
-                                     records: list[dict], timezone_name: str | None) -> int:
+                                     records: list[dict], timezone_name: str | None,
+                                     notify_challenges: bool = False) -> int:
         xp_events=[]
         for record in records:
             media_type=record["media_type"]
@@ -954,7 +967,7 @@ class Storage:
                               "amount":record["amount"]})
         progression=global_user["progression"]
         amount,added=_add_watch_xp_events(progression,xp_events)
-        _complete_watch_challenges(progression,added)
+        _complete_watch_challenges(progression,added,notify=notify_challenges)
         return amount
 
     async def record_activity_batch(self, guild_id: str | int, discord_user_id: str,
@@ -969,7 +982,8 @@ class Storage:
                 return 0
             guild=self._guild(guild_id)
             amount=self._apply_watch_records_locked(guild_user,global_user,records,
-                                                     guild.get("timezone"))
+                                                     guild.get("timezone"),
+                                                     notify_challenges=bool(guild["features"]["progression"] and guild["features"]["challenges"]))
             guild_user["announced"].update(keys)
             guild_user["activity_state"]["watch_times"].update(watch_times)
             self._dirty=True
@@ -1049,6 +1063,24 @@ class Storage:
             if not user:
                 return {}
             return {"xp_events": copy.deepcopy(user["progression"].get("xp_events", [])), "challenge_completions": copy.deepcopy(user["progression"].get("challenge_completions", {}))}
+
+    async def get_pending_challenge_notifications(self, discord_user_id: str) -> list[dict]:
+        async with _lock:
+            user=self._user(discord_user_id)
+            return copy.deepcopy(user["progression"].get("pending_challenge_notifications",[])) if user else []
+
+    async def ack_challenge_notifications(self, discord_user_id: str, keys: set[str]) -> None:
+        async with _lock:
+            user=self._user(discord_user_id)
+            if not user:
+                return
+            progression=user["progression"]
+            progression["pending_challenge_notifications"]=[
+                item for item in progression.get("pending_challenge_notifications",[])
+                if item.get("key") not in keys
+            ]
+            self._dirty=True
+        await self.flush()
 
     async def claim_prestige_notifications(self, discord_user_id: str) -> list[int]:
         """Claim each new prestige once, even across servers and polling workers."""
@@ -1503,6 +1535,7 @@ class Storage:
                     "start":start.isoformat(),"end":end.isoformat(),
                     "target":target,"pool":target*300,
                     "members":sorted(guild.get("users") or {}),"awards":{},
+                    "notified_awards":{},
                 }
                 self._dirty=True
             current=records[week_key]
@@ -1520,6 +1553,10 @@ class Storage:
                 period_end=datetime.fromisoformat(record["end"])
                 if now < period_end:
                     continue
+                if not isinstance(record.get("notified_awards"),dict):
+                    # Existing paid weeks predate these notifications.
+                    record["notified_awards"]=copy.deepcopy(record.get("awards") or {})
+                    self._dirty=True
                 contributions=counts_for(record)
                 desired=(split_pool(contributions,int(record["pool"]))
                          if sum(contributions.values()) >= int(record["target"]) else {})
@@ -1544,6 +1581,21 @@ class Storage:
                         changes.append({"uid":uid,"before":before,"after":user["progression"]["xp"],"delta":delta})
                 record["awards"]=desired
                 self._dirty=True
+            pending=[]
+            for key,record in sorted(records.items()):
+                awards=record.get("awards") or {}
+                notified=record.get("notified_awards") or {}
+                if not isinstance(record.get("notified_awards"),dict) or awards==notified:
+                    continue
+                changes_to_report={uid:int(awards.get(uid,0))-int(notified.get(uid,0))
+                                   for uid in set(awards)|set(notified)}
+                initial=not bool(notified) and bool(awards)
+                members=sorted((counts_for(record) if initial else changes_to_report),
+                               key=lambda uid:(-int(awards.get(uid,0)),uid))
+                pending.append({"key":key,"target":int(record["target"]),
+                                "pool":int(record["pool"]),"awards":copy.deepcopy(awards),
+                                "contributions":counts_for(record),"deltas":changes_to_report,
+                                "members":members,"initial":initial})
             contributions=counts_for(current)
             total=sum(contributions.values())
             state={
@@ -1553,9 +1605,21 @@ class Storage:
                 "awards":copy.deepcopy(current.get("awards") or {}),
                 "status":("completed" if current.get("awards") else "missed") if now >= end else ("goal_reached" if total >= int(current["target"]) else "active"),
                 "changes":changes,
+                "pending_notifications":pending,
             }
         await self.flush()
         return state
+
+    async def ack_community_notification(self, guild_id: str | int, week_key: str, awards: dict) -> None:
+        """Acknowledge only the payout snapshot that was actually delivered."""
+        async with _lock:
+            guild=self._guild(str(guild_id))
+            record=(guild or {}).get("community_challenges",{}).get(week_key)
+            if not record or record.get("awards") != awards:
+                return
+            record["notified_awards"]=copy.deepcopy(awards)
+            self._dirty=True
+        await self.flush()
 
     async def set_account_id(self, discord_user_id: str, simkl_account_id: int | str) -> None:
         async with _lock:

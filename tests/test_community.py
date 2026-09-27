@@ -41,12 +41,20 @@ def test_pool_payout_is_idempotent_and_reverses_when_goal_is_lost():
                 after=datetime(2026,9,29,tzinfo=timezone.utc)
                 paid=await store.get_community_state("123",week,start,end,after)
                 assert paid["awards"]=={"41":7500,"42":4500}
+                notice=paid["pending_notifications"]
+                assert len(notice)==1
+                assert notice[0]["initial"] and notice[0]["members"]==["41","42"]
+                assert notice[0]["deltas"]=={"41":7500,"42":4500}
                 assert (await store.get_progression("41"))["xp"]==7500
                 repeated=await store.get_community_state("123",week,start,end,after)
                 assert repeated["changes"]==[]
+                assert len(repeated["pending_notifications"])==1
+                await store.ack_community_notification("123",week,paid["awards"])
+                assert (await store.get_community_state("123",week,start,end,after))["pending_notifications"]==[]
                 store._data["users"]["42"]["progression"]["xp_events"].pop()
                 reversed_state=await store.get_community_state("123",week,start,end,after)
                 assert reversed_state["status"]=="missed" and reversed_state["awards"]=={}
+                assert reversed_state["pending_notifications"][0]["deltas"]=={"41":-7500,"42":-4500}
                 assert (await store.get_progression("41"))["xp"]==0
                 assert (await store.get_progression("42"))["community_rewards"]=={}
             finally:

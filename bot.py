@@ -1297,6 +1297,7 @@ async def poll_one(ch,g,uid,u,gu,request_cache=None,force_reconcile=False,batch=
             await storage.flush()
 
         progression_after_poll=await storage.get_progression(uid)
+        await notify_challenge_rewards(g,uid,ch)
         for number in (await storage.claim_prestige_notifications(uid) if await feature_enabled(g,"progression") else []):
             if not await send_prestige_notification(ch.send,f"<@{uid}>",number,progression_after_poll.get("lifetime_xp",0)):
                 await storage.retry_prestige_notification(uid,number)
@@ -1744,6 +1745,65 @@ async def notify_level_up(guild_id_value, uid, before_progression, after_progres
             )
     return False
 
+async def notify_challenge_rewards(guild_id_value,uid,channel):
+    if not channel or not await feature_enabled(guild_id_value,"challenges"):
+        return False
+    pending=await storage.get_pending_challenge_notifications(uid)
+    if not pending:
+        return False
+    total=sum(int(item["xp"]) for item in pending)
+    rows=[f"**{item['period']} · {item['name']}** — +{int(item['xp']):,} XP" for item in pending[:12]]
+    if len(pending)>12:
+        rows.append(f"…and {len(pending)-12} more completed challenges.")
+    embed=discord.Embed(
+        title="Challenges Completed",
+        description=f"<@{uid}> earned **+{total:,} XP**\n\n"+"\n".join(rows),
+        color=0x5865F2,
+    )
+    embed.set_footer(text="SIMKL Tracker · Daily and weekly challenges")
+    try:
+        await channel.send(embed=embed,allowed_mentions=discord.AllowedMentions(users=True,roles=False,everyone=False))
+    except Exception:
+        log.exception("Could not send challenge reward notification for user %s in guild %s.",uid,guild_id_value)
+        return False
+    await storage.ack_challenge_notifications(uid,{item["key"] for item in pending})
+    return True
+
+
+async def notify_community_rewards(guild_id_value,channel,notification):
+    members=notification["members"] if notification["initial"] else [
+        uid for uid in notification["members"] if notification["deltas"].get(uid)
+    ]
+    if not members:
+        return True
+    for offset in range(0,len(members),20):
+        lines=[]
+        for uid in members[offset:offset+20]:
+            if notification["initial"]:
+                episodes=notification["contributions"].get(uid,0)
+                lines.append(f"<@{uid}> · {episodes:,} episode{'s' if episodes!=1 else ''} · **+{int(notification['awards'].get(uid,0)):,} XP**")
+            else:
+                delta=int(notification["deltas"][uid])
+                lines.append(f"<@{uid}> · **{delta:+,} XP**")
+        embed=discord.Embed(
+            title="Community Challenge Completed" if notification["initial"] else "Community Challenge Rewards Updated",
+            description=(
+                f"Week of **{notification['key']}** · {notification['target']:,} episode goal\n"
+                f"**{notification['pool']:,} XP pool** shared by contribution\n\n"
+                +"\n".join(lines)
+            ),
+            color=0xC9DCF0,
+        )
+        embed.set_footer(text="SIMKL Tracker · Community challenge")
+        try:
+            await channel.send(embed=embed,allowed_mentions=discord.AllowedMentions(users=True,roles=False,everyone=False))
+        except Exception:
+            log.exception("Could not announce community reward for guild %s, week %s.",guild_id_value,notification["key"])
+            return False
+    await storage.ack_community_notification(guild_id_value,notification["key"],notification["awards"])
+    return True
+
+
 async def refresh_community_state(guild_id_value):
     if not await feature_enabled(guild_id_value,"community"):
         return None
@@ -1751,11 +1811,14 @@ async def refresh_community_state(guild_id_value):
     now=datetime.now(timezone.utc)
     key,start,end=community_week(now,zone)
     state=await storage.get_community_state(guild_id_value,key,start,end,now)
+    channel_id=await storage.get_channel(guild_id_value)
+    channel=bot.get_channel(int(channel_id)) if channel_id else None
+    if channel:
+        for notification in state.get("pending_notifications",[]):
+            await notify_community_rewards(guild_id_value,channel,notification)
     for change in state.get("changes",[]):
         if change["delta"] <= 0:
             continue
-        channel_id=await storage.get_channel(guild_id_value)
-        channel=bot.get_channel(int(channel_id)) if channel_id else None
         if channel:
             progression=await storage.get_progression(change["uid"])
             for number in await storage.claim_prestige_notifications(change["uid"]):
