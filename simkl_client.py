@@ -285,7 +285,10 @@ class SimklClient:
         # seasonal anime as separate entries but the bot should display
         # their normal TVDB/American-style season number (S01, S02, etc.).
         extended = "full_anime_seasons" if media_type == "anime" else "full"
-        params = self._params(extended=extended, episode_watched_at="yes")
+        # SIMKL omits episode arrays for completed and dropped shows by default.
+        # `yes` also supplies virtual rows for shows marked complete in one action,
+        # matching SIMKL's watched-episode counter when individual dates are absent.
+        params = self._params(extended=extended, episode_watched_at="yes", include_all_episodes="yes", language="en")
         if date_from:
             params["date_from"] = date_from
 

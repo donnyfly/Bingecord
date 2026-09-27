@@ -631,13 +631,40 @@ class TmdbClient:
                         if imdb_id:
                             break
 
-                if not imdb_id and episode.get("name"):
-                    target_title = str(episode["name"]).strip().casefold()
+                # TVMaze is useful for resolving SIMKL/TVDB's season
+                # structure, but its episode metadata can use the anime's
+                # original-language title and may omit IMDb IDs. Once TVMaze
+                # identifies the episode, prefer the matching canonical TMDB
+                # episode for the final title, artwork, and IMDb ID.
+                found = None
+
+                # First try the same season/episode on TMDB. This is the
+                # cheapest and most precise match when both providers agree.
+                for current_series_id in candidate_series_ids:
+                    tmdb_episode = await self.get_episode_details(
+                        current_series_id,
+                        season_number,
+                        episode_number,
+                    )
+                    if tmdb_episode:
+                        found = (
+                            current_series_id,
+                            season_number,
+                            episode_number,
+                            tmdb_episode,
+                        )
+                        break
+
+                # If season numbering differs, use TVMaze's air date to find
+                # the canonical TMDB episode across all seasons. This handles
+                # cases such as Hunter x Hunter, where TVMaze/SIMKL exposes
+                # S01E84 while TMDB stores the same episode as S02E84.
+                airdate = str(episode.get("airdate") or "").strip()
+                if found is None and airdate:
                     for current_series_id in candidate_series_ids:
                         series = await self._get_series_details(current_series_id)
                         seasons = (series or {}).get("seasons") or []
 
-                        found = None
                         for season in seasons:
                             try:
                                 tmdb_season_number = int(season.get("season_number"))
@@ -651,29 +678,120 @@ class TmdbClient:
                             if not season_data:
                                 continue
 
-                            for item in season_data.get("episodes") or []:
-                                item_title = str(item.get("name") or "").strip().casefold()
-                                if item_title != target_title:
-                                    continue
+                            matching_episode = next(
+                                (
+                                    item
+                                    for item in (season_data.get("episodes") or [])
+                                    if str(item.get("air_date") or "").strip() == airdate
+                                ),
+                                None,
+                            )
+                            if matching_episode is None:
+                                continue
 
-                                found = await self.get_episode_details(
+                            tmdb_episode = await self.get_episode_details(
+                                current_series_id,
+                                tmdb_season_number,
+                                matching_episode.get("episode_number"),
+                            )
+                            if tmdb_episode:
+                                found = (
                                     current_series_id,
                                     tmdb_season_number,
-                                    item.get("episode_number"),
+                                    int(matching_episode.get("episode_number")),
+                                    tmdb_episode,
                                 )
                                 break
 
-                            if found:
-                                break
-
-                        if found:
-                            imdb_id = (
-                                (found.get("external_ids") or {}).get("imdb_id")
-                            )
-
-                        if imdb_id:
+                        if found is not None:
                             break
 
+                # Finally, use title matching as a fallback. This remains
+                # useful when air dates are unavailable, but it is deliberately
+                # secondary because anime providers often localize titles.
+                if found is None and episode.get("name"):
+                    target_title = str(episode["name"]).strip().casefold()
+                    for current_series_id in candidate_series_ids:
+                        series = await self._get_series_details(current_series_id)
+                        seasons = (series or {}).get("seasons") or []
+
+                        for season in seasons:
+                            try:
+                                tmdb_season_number = int(season.get("season_number"))
+                            except (TypeError, ValueError):
+                                continue
+
+                            season_data = await self._get_season_details(
+                                current_series_id,
+                                tmdb_season_number,
+                            )
+                            if not season_data:
+                                continue
+
+                            matching_episode = next(
+                                (
+                                    item
+                                    for item in (season_data.get("episodes") or [])
+                                    if str(item.get("name") or "").strip().casefold()
+                                    == target_title
+                                ),
+                                None,
+                            )
+                            if matching_episode is None:
+                                continue
+
+                            tmdb_episode = await self.get_episode_details(
+                                current_series_id,
+                                tmdb_season_number,
+                                matching_episode.get("episode_number"),
+                            )
+                            if tmdb_episode:
+                                found = (
+                                    current_series_id,
+                                    tmdb_season_number,
+                                    int(matching_episode.get("episode_number")),
+                                    tmdb_episode,
+                                )
+                                break
+
+                        if found is not None:
+                            break
+
+                if found is not None:
+                    found_series_id, found_season_number, found_episode_number, found_episode = found
+                    imdb_id = (
+                        (found_episode.get("external_ids") or {}).get("imdb_id")
+                        or imdb_id
+                    )
+                    result = {
+                        "series_id": found_series_id,
+                        "season_number": found_season_number,
+                        "episode_number": found_episode_number,
+                        "episode": found_episode,
+                        "still_url": (
+                            f"{IMAGE_BASE}{found_episode['still_path']}"
+                            if found_episode.get("still_path")
+                            else (
+                                (episode.get("image") or {}).get("original")
+                                or (episode.get("image") or {}).get("medium")
+                            )
+                        ),
+                        "source": "tmdb_tvmaze",
+                    }
+                    self._anime_episode_cache[cache_key] = result
+                    log.info(
+                        "Resolved anime episode via TMDB using TVMaze: "
+                        "TVDB=%s SIMKL=%s -> TMDB S%02dE%02d.",
+                        tvdb_id,
+                        f"S{season_number:02d}E{episode_number:02d}",
+                        found_season_number,
+                        found_episode_number,
+                    )
+                    return result
+
+                # No canonical TMDB match was found, so retain TVMaze as the
+                # metadata fallback rather than losing the otherwise-correct
+                # episode artwork.
                 result = {
                     "series_id": None,
                     "season_number": season_number,
@@ -864,6 +982,19 @@ class TmdbClient:
         self._season_cache[cache_key] = data
 
         return data
+
+    async def get_tv_episode_count(self, series_id) -> int | None:
+        """Return the total number of episodes in a TMDB TV series."""
+        data = await self._get_series_details(series_id)
+        if not data:
+            return None
+
+        try:
+            count = int(data.get("number_of_episodes"))
+        except (TypeError, ValueError):
+            return None
+
+        return count if count > 0 else None
 
     # ------------------------------------------------------------------
     # TV series title
@@ -1153,6 +1284,108 @@ class TmdbClient:
             self._tv_logo_cache,
             series_id,
         )
+
+    # ------------------------------------------------------------------
+    # Recommendations
+    # ------------------------------------------------------------------
+
+    async def get_tv_recommendations(self, series_id, page=1) -> list[dict]:
+        """Return TMDB recommendations for a TV series."""
+        try:
+            series_id=int(series_id)
+            page=int(page)
+        except (TypeError,ValueError):
+            return []
+
+        data=await self._get_json(
+            f"{API_BASE}/tv/{series_id}/recommendations",
+            {"language":"en-US","page":page},
+        )
+        results=(data or {}).get("results") if isinstance(data,dict) else None
+        return results if isinstance(results,list) else []
+
+    async def get_movie_recommendations(self, movie_id, page=1) -> list[dict]:
+        """Return TMDB recommendations for a movie."""
+        try:
+            movie_id=int(movie_id)
+            page=int(page)
+        except (TypeError,ValueError):
+            return []
+
+        data=await self._get_json(
+            f"{API_BASE}/movie/{movie_id}/recommendations",
+            {"language":"en-US","page":page},
+        )
+        results=(data or {}).get("results") if isinstance(data,dict) else None
+        return results if isinstance(results,list) else []
+
+    async def get_tv_similar(self, series_id, page=1) -> list[dict]:
+        """Return TMDB titles similar to a TV series."""
+        try:
+            series_id=int(series_id)
+            page=int(page)
+        except (TypeError,ValueError):
+            return []
+
+        data=await self._get_json(
+            f"{API_BASE}/tv/{series_id}/similar",
+            {"language":"en-US","page":page},
+        )
+        results=(data or {}).get("results") if isinstance(data,dict) else None
+        return results if isinstance(results,list) else []
+
+    async def get_movie_similar(self, movie_id, page=1) -> list[dict]:
+        """Return TMDB movies similar to a movie."""
+        try:
+            movie_id=int(movie_id)
+            page=int(page)
+        except (TypeError,ValueError):
+            return []
+
+        data=await self._get_json(
+            f"{API_BASE}/movie/{movie_id}/similar",
+            {"language":"en-US","page":page},
+        )
+        results=(data or {}).get("results") if isinstance(data,dict) else None
+        return results if isinstance(results,list) else []
+
+    # ------------------------------------------------------------------
+    # Movie search
+    # ------------------------------------------------------------------
+
+    async def find_movie_by_title(self, title: str) -> dict | None:
+        """Find a TMDB movie by title using the English-localized search."""
+        if not title:
+            return None
+
+        query = str(title).strip()
+        if not query:
+            return None
+
+        data = await self._get_json(
+            f"{API_BASE}/search/movie",
+            {
+                "query": query,
+                "language": "en-US",
+                "include_adult": "false",
+            },
+        )
+        results = (data or {}).get("results") if isinstance(data, dict) else None
+        if not results:
+            return None
+
+        result = results[0]
+        movie_id = result.get("id")
+        try:
+            movie_id = int(movie_id)
+        except (TypeError, ValueError):
+            return None
+
+        return {
+            "id": movie_id,
+            "title": result.get("title"),
+            "original_title": result.get("original_title"),
+        }
 
     # ------------------------------------------------------------------
     # Movies

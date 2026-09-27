@@ -1,166 +1,125 @@
 # SIMKLTrackerBot
 
-A self-hosted Discord bot that automatically tracks your **SIMKL** watch activity and posts it to a Discord channel.
+A self-hosted Discord bot that turns your **SIMKL watch activity** into clean Discord updates for **TV shows, anime, and movies**.
 
-SIMKLTrackerBot supports **TV shows, anime, and movies**, with automatic account authentication, activity tracking, artwork, ratings, episode grouping, customizable embeds, and multi-server support.
+It supports automatic SIMKL syncing, episode grouping, artwork and ratings, personal/server statistics, achievements, XP progression, challenges, leaderboards, and optional weekly recaps. All linked-account data is stored locally on your own server.
 
-Everything is self-hosted, and linked SIMKL account data is stored locally on your own server.
+<p>
+  <img width="400" alt="SIMKLTrackerBot activity example" src="https://github.com/user-attachments/assets/62b58b48-a792-4b67-99df-6741f9d742b4" />
+  <img width="400" alt="SIMKLTrackerBot activity example" src="https://github.com/user-attachments/assets/82ffdb47-6a17-4cfb-96bc-a6ae2fa1c929" />
+</p>
+<p>
+  <img width="400" alt="SIMKLTrackerBot activity example" src="https://github.com/user-attachments/assets/c51ab135-a55f-4b6f-b711-01d4b9171095" />
+  <img width="400" alt="SIMKLTrackerBot activity example" src="https://github.com/user-attachments/assets/e3c04ba3-47b1-4026-987b-87161fc6ac7b" />
+</p>
 
-<img width="400" height="" alt="simkldiscordbotsample7" src="https://github.com/user-attachments/assets/62b58b48-a792-4b67-99df-6741f9d742b4" />
+## What you get
 
-<img width="400" height="" alt="simkldiscordbotsample8" src="https://github.com/user-attachments/assets/82ffdb47-6a17-4cfb-96bc-a6ae2fa1c929" />
-
-<img width="400" height="" alt="simkldiscordbotsample12" src="https://github.com/user-attachments/assets/c51ab135-a55f-4b6f-b711-01d4b9171095" />
-
-<img width="400" height="" alt="simkldiscordbotsample9" src="https://github.com/user-attachments/assets/e3c04ba3-47b1-4026-987b-87161fc6ac7b" />
-
----
-
-# Features & Commands
-
-## Features
-
-- 🎬 Tracks **TV shows, anime, and movies** from SIMKL
-
-- ⭐ IMDb ratings for movies and individual TV/anime episodes when available
-- 🌸 MyAnimeList ratings for anime movies when available
-- 🎨 Multiple embed styles
-- ✍️ Short or detailed activity text
-- 📺 Groups consecutive episodes into a single Discord message
-- 🖼️ TMDB artwork with SIMKL poster fallback
-- ⚙️ Per-user and server-wide rating visibility controls
-- 🔗 Clickable SIMKL titles
-- 🔗 Users link their own SIMKL accounts through Discord
-- 🔄 Automatically refreshes SIMKL authentication tokens
-- 📊 Uses incremental activity syncing to reduce unnecessary API requests
-- ⏱️ Configurable automatic polling
-- 🏠 Supports multiple Discord servers
-- 💾 Stores data locally in `data/store.json`
+- 🎬 Automatic SIMKL activity tracking for TV, anime, and movies
+- 📺 Consecutive episode grouping for cleaner Discord posts
+- 🖼️ TMDB artwork with SIMKL fallback
+- ⭐ IMDb ratings and 🌸 MyAnimeList ratings where available
+- 🎨 Rich/minimal embeds, artwork choices, and short/detailed activity text
+- 📊 Personal and server watch statistics
+- 🔥 Watch streaks
+- 🏆 Server leaderboards
+- 📈 XP, levels, ranks, and prestige
+- 🎯 Daily and weekly watch challenges
+- 🏅 Achievements with XP rewards
+- 📅 Automatic weekly recaps
+- ⚙️ Server-wide feature switches for communities that only want basic activity tracking
+- 🏠 Multi-server support
+- 💾 Local persistent storage
 - 🐳 Docker support with a pre-built image
-- 🛠️ Administrator tools for configuration and manual checks
 
 ## Commands
 
-| Command | Permission | What it does |
+| Command | Who can use it | Purpose |
 | --- | --- | --- |
-| `/simkl-link` | Everyone | Link your SIMKL account to the bot |
+| `/simkl-link` | Everyone | Link your SIMKL account |
 | `/simkl-unlink` | Everyone | Unlink your SIMKL account |
-| `/simkl-style` | Everyone | Set your personal embed, artwork, and text preferences |
-| `/simkl-setchannel` | Manage Server | Choose where watch activity is posted |
-| `/simkl-style-server` | Manage Server | Set the server-wide default embed preferences |
-| `/simkl-ratings` | Everyone | Set your personal IMDb/MyAnimeList rating visibility |
-| `/simkl-ratings-server` | Manage Server | Set the server-wide rating visibility defaults |
-| `/simkl-status` | Manage Server | View the server's configuration, linked users, and polling health |
-| `/simkl-checknow` | Manage Server | Immediately check SIMKL for new activity |
+| `/simkl-stats` | Everyone | View your watch/progression profile |
+| `/simkl-achievements` | Everyone | View achievements and XP rewards |
+| `/simkl-challenges` | Everyone | View daily and weekly challenges |
+| `/simkl-leaderboard` | Everyone | View server leaderboards |
+| `/simkl-server-stats` | Everyone | View server watch statistics |
+| `/simkl-community` | Everyone | View the server's weekly cooperative episode goal |
+| `/simkl-style` | Everyone | Change personal activity-post preferences |
+| `/simkl-user-reset` | Everyone | Reset your tracking history for the current server |
+| `/simkl-setchannel` | Manage Server | Choose the activity channel |
+| `/simkl-style-server` | Manage Server | Set server-wide style defaults |
+| `/simkl-features` | Manage Server | Enable or disable optional feature groups |
+| `/simkl-timezone` | Manage Server | Set the server timezone |
+| `/simkl-weekly-recap` | Manage Server | Post/test a weekly recap |
+| `/simkl-status` | Manage Server | View configuration and sync health |
+| `/simkl-checknow` | Manage Server | Check SIMKL immediately |
+| `/simkl-debug` | Manage Server | Preview progression notifications without changing XP |
 
-### Rating customization
+### Prefer the simple tracker experience?
 
-Ratings can be controlled with `/simkl-ratings`.
+Admins can use:
 
-Users can choose whether IMDb and MyAnimeList ratings are shown on their own activity messages. Administrators can use `/simkl-ratings-server` to set the server-wide defaults.
+```text
+/simkl-features preset: Activity only
+```
 
-Personal rating preferences override the server defaults.
+This keeps the core SIMKL activity tracker while disabling optional progression, achievements, challenges, recaps, community goals, leaderboards, and similar extras.
 
-### Embed customization
+Use:
 
-Activity messages can be customized using `/simkl-style`.
+```text
+/simkl-features preset: All features
+```
 
-**Style**
-- **Rich** — large landscape artwork
-- **Minimal** — compact thumbnail
-
-**Artwork**
-- **Automatic** — chooses the most appropriate available artwork
-- **Poster only** — uses poster artwork
-- **Backdrop** — uses landscape backdrop artwork; when TMDB has a title logo, it is shown as a small thumbnail in the embed's corner
-
-**Activity text**
-- **Short** — compact activity messages
-- **Detailed** — more information about the activity
-
-Personal preferences override the server's defaults.
-
-Administrators can use `/simkl-style-server` to configure the server-wide defaults.
+to restore the full experience.
 
 ---
 
 # Installation
 
-Docker Compose is the **recommended installation method**.
-
-The bot can also be run directly with Python on Windows, Linux, or macOS.
-
-## Docker Compose — Recommended
+## Recommended: Docker Compose
 
 ### Requirements
 
-- A computer, home server, or VPS that can run Docker
-- A Discord account
-- A Discord server where you can add bots
-- A SIMKL account
-- Discord Bot Token
-- SIMKL Client ID
-- TMDB API key
-- MDBList API key if you want ratings
+You will need:
 
-### 1. Create the Discord bot
+- A machine that can run Docker
+- A Discord bot token
+- A SIMKL Client ID
+- A TMDB API key
+- An optional MDBList API key for additional ratings
 
-Open the Discord Developer Portal and create a new application.
+### 1. Create a Discord bot
 
-Go to **Bot → Add Bot** and copy the bot token.
+Create an application in the [Discord Developer Portal](https://discord.com/developers/applications), add a bot, and copy its token.
 
-Then go to:
-
-**OAuth2 → URL Generator**
-
-Select these scopes:
+When inviting it to your server, include:
 
 - `bot`
 - `applications.commands`
 
-The bot needs permission to:
-
-- Send Messages
-- Read Message History
-
-Use the generated URL to invite the bot to your Discord server.
-
-Keep your bot token private.
+The bot needs permission to send messages and read message history in the channel you choose.
 
 ### 2. Create a SIMKL application
 
-Log in to SIMKL and create an application in the developer settings.
+Create an application in the SIMKL developer settings and copy its **Client ID**.
 
-Copy the application's **Client ID**.
+Individual Discord users will connect their own SIMKL accounts later with `/simkl-link`.
 
-Users will link their own SIMKL accounts later using `/simkl-link`.
+### 3. Get a TMDB API key
 
-### 3. Get API keys
+TMDB is used for artwork and media metadata.
 
-SIMKLTrackerBot uses:
+MDBList is optional and is used for additional IMDb/MyAnimeList ratings.
 
-- **TMDB** for artwork and episode information
-- **MDBList** for movie/show IMDb and MyAnimeList ratings
-- **IMDb's public ratings dataset** for individual episode IMDb ratings
-
-The MDBList API key is optional. It is used for movie/show IMDb ratings and anime movie MyAnimeList ratings. Individual episode IMDb ratings use IMDb's public ratings dataset and do not require an MDBList API key.
-
-### 4. Install Docker
-
-Install Docker and make sure Docker Compose is available:
-
-```bash
-docker compose version
-```
-
-### 5. Create the bot directory
+### 4. Create the Docker setup
 
 ```bash
 mkdir -p ~/simkl-discord-bot
 cd ~/simkl-discord-bot
 ```
 
-### 6. Create `docker-compose.yml`
+Create `docker-compose.yml`:
 
 ```yaml
 services:
@@ -174,577 +133,205 @@ services:
       - ./data:/app/data
 ```
 
-### 7. Create `.env`
-
-```bash
-nano .env
-```
-
-Add:
+Create `.env`:
 
 ```env
 DISCORD_BOT_TOKEN=your_discord_bot_token_here
 SIMKL_CLIENT_ID=your_simkl_client_id_here
 TMDB_API_KEY=your_tmdb_api_key_here
 MDBLIST_API_KEY=your_mdblist_api_key_here
+
 POLL_INTERVAL_MINUTES=60
 POLL_CONCURRENCY=5
+HISTORY_BACKFILL_CONCURRENCY=2
 ```
 
-The default polling interval is **60 minutes**, matching SIMKL's recommended polling interval.
-
-You can change it for your own installation if desired.
-
-### 8. Start the bot
+Start the bot:
 
 ```bash
-sudo docker compose up -d
+docker compose up -d
 ```
 
-Check that it is running:
+Check it:
 
 ```bash
-sudo docker compose ps
+docker compose ps
+docker compose logs -f
 ```
 
-View the logs:
+Once the bot is online:
 
-```bash
-sudo docker compose logs -f
-```
-
-Once the bot is online, use `/simkl-link` in your Discord server to connect a SIMKL account.
-
-Press `Ctrl+C` to stop viewing the logs. The bot will continue running.
+1. Run `/simkl-setchannel` to choose where activity should be posted.
+2. Run `/simkl-link` to connect your SIMKL account.
+3. Watch something and let the bot handle the rest.
 
 ---
 
-## Docker CLI
+## Running with Python
 
-Docker Compose is recommended, but you can also run the container directly.
-
-Create the required directories:
+Docker is recommended, but the bot can also run directly with Python 3.10+.
 
 ```bash
-mkdir -p ~/simkl-discord-bot/data
-```
-
-Create the environment file:
-
-```bash
-nano ~/simkl-discord-bot/.env
-```
-
-Use the same environment variables shown in the Docker Compose installation.
-
-Run:
-
-```bash
-sudo docker run -d \
-  --name simkltrackerbot \
-  --restart unless-stopped \
-  --env-file ~/simkl-discord-bot/.env \
-  -v ~/simkl-discord-bot/data:/app/data \
-  ghcr.io/donnyfly/simkltrackerbot:latest
-```
-
-View the logs:
-
-```bash
-sudo docker logs -f simkltrackerbot
-```
-
----
-
-## Windows — Python
-
-Docker is recommended on Windows, but you can also run the bot directly with Python.
-
-### Requirements
-
-- Python 3.10 or newer
-- Git
-
-Check Python:
-
-```powershell
-python --version
-```
-
-Check Git:
-
-```powershell
-git --version
-```
-
-### Clone the repository
-
-```powershell
 git clone https://github.com/donnyfly/SIMKLTrackerBot.git
 cd SIMKLTrackerBot
-```
 
-### Create a virtual environment
-
-```powershell
 python -m venv venv
 ```
 
-Activate it:
+Activate the environment:
 
-```powershell
-.\venv\Scripts\Activate.ps1
-```
-
-If PowerShell blocks the activation script:
-
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
-
-Then activate again:
-
-```powershell
-.\venv\Scripts\Activate.ps1
-```
-
-### Install dependencies
-
-```powershell
-python -m pip install -r requirements.txt
-```
-
-### Create `.env`
-
-```powershell
-Copy-Item .env.example .env
-notepad .env
-```
-
-Fill in your API keys and bot token.
-
-### Start the bot
-
-```powershell
-python bot.py
-```
-
-For automatic startup after a reboot, Windows Task Scheduler can be used to launch the bot.
-
----
-
-## Linux / macOS — Python
-
-Docker is recommended, but you can run the bot directly with Python.
-
-### Requirements
-
-- Python 3.10 or newer
-- Git
-
-### Clone the repository
+**Linux/macOS**
 
 ```bash
-git clone https://github.com/donnyfly/SIMKLTrackerBot.git
-cd SIMKLTrackerBot
-```
-
-### Create a virtual environment
-
-```bash
-python3 -m venv venv
 source venv/bin/activate
 ```
 
-### Install dependencies
+**Windows PowerShell**
 
-```bash
-python -m pip install -r requirements.txt
+```powershell
+.\venv\Scripts\Activate.ps1
 ```
-
-### Create `.env`
-
-```bash
-cp .env.example .env
-nano .env
-```
-
-Fill in your API keys and bot token.
-
-### Start the bot
-
-```bash
-python bot.py
-```
-
-### Linux servers
-
-For a Linux server where the bot should automatically start after reboot, you can run it using **systemd**.
-
-Create:
-
-```bash
-sudo nano /etc/systemd/system/simkltrackerbot.service
-```
-
-Example:
-
-```ini
-[Unit]
-Description=SIMKLTrackerBot
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=username
-WorkingDirectory=/home/username/SIMKLTrackerBot
-ExecStart=/home/username/SIMKLTrackerBot/venv/bin/python bot.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Replace `username` and the paths with your actual account and installation directory.
 
 Then:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now simkltrackerbot
+python -m pip install -r requirements.txt
 ```
 
-Check the service:
+Copy `.env.example` to `.env`, fill in your credentials, and start:
 
 ```bash
-sudo systemctl status simkltrackerbot
-```
-
-View logs:
-
-```bash
-sudo journalctl -u simkltrackerbot -f
+python bot.py
 ```
 
 ---
 
 # Configuration
 
-The main configuration is stored in `.env`.
+The main settings live in `.env`.
 
-Example:
+| Setting | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `DISCORD_BOT_TOKEN` | Yes | — | Discord bot token |
+| `SIMKL_CLIENT_ID` | Yes | — | SIMKL application Client ID |
+| `TMDB_API_KEY` | Yes | — | Artwork and media metadata |
+| `MDBLIST_API_KEY` | No | — | Additional IMDb/MAL ratings |
+| `POLL_INTERVAL_MINUTES` | No | `60` | How often SIMKL is checked |
+| `POLL_CONCURRENCY` | No | `5` | Number of users processed together |
+| `HISTORY_BACKFILL_CONCURRENCY` | No | `2` | Limits simultaneous first-time history imports |
+| `SIMKL_DEFAULT_TIMEZONE` | No | `Asia/Singapore` | Default timezone for statistics and streaks |
 
-```env
-DISCORD_BOT_TOKEN=your_discord_bot_token_here
-SIMKL_CLIENT_ID=your_simkl_client_id_here
-TMDB_API_KEY=your_tmdb_api_key_here
-MDBLIST_API_KEY=your_mdblist_api_key_here
-POLL_INTERVAL_MINUTES=60
-POLL_CONCURRENCY=5
-```
+Server admins can override the timezone with `/simkl-timezone`.
 
-## Required settings
+## Activity customization
 
-### `DISCORD_BOT_TOKEN`
+Users can run `/simkl-style` to choose:
 
-Your Discord bot token.
+- **Rich** or **Minimal** embeds
+- Automatic, poster, or backdrop artwork
+- Short or detailed activity text
+- Rating visibility
 
-### `SIMKL_CLIENT_ID`
-
-Your SIMKL application's Client ID.
-
-### `TMDB_API_KEY`
-
-Used for artwork and episode information.
-
-### `MDBLIST_API_KEY`
-
-Optional. Used for IMDb and MyAnimeList ratings.
-
-## Optional settings
-
-### `POLL_INTERVAL_MINUTES`
-
-Controls how often the bot checks SIMKL for new activity.
-
-The default is:
-
-```env
-POLL_INTERVAL_MINUTES=60
-```
-
-This matches SIMKL's recommended polling interval.
-
-You can choose a different interval for your own installation, for example:
-
-```env
-POLL_INTERVAL_MINUTES=15
-```
-
-Shorter intervals result in more frequent API requests.
-
-Restart the bot after changing the setting.
-
-### `POLL_CONCURRENCY`
-
-Controls how many different SIMKL users can be processed at the same time.
-
-The default is:
-
-```env
-POLL_CONCURRENCY=5
-```
-
-The default value is suitable for most installations.
+Server admins can set defaults with `/simkl-style-server`. Personal settings override server defaults.
 
 ---
 
-# How It Works
+# Progression & statistics
 
-## Linking a SIMKL account
+When enabled, the bot adds a progression layer on top of normal SIMKL tracking.
 
-Each Discord user links their own SIMKL account using:
+- Episodes award watch XP
+- Movies award watch XP
+- Achievements and challenges can award bonus XP
+- Users progress through levels, ranks, and prestige tiers
+- `/simkl-stats` shows watch history, XP, streaks, achievements, recent activity, and more
+- `/simkl-leaderboard` compares server members across watch/progression categories
+- Weekly recaps summarize recent server activity
 
-```text
-/simkl-link
-```
-
-The bot uses SIMKL's authentication flow and stores the resulting account credentials locally.
-
-Users do not need to give their SIMKL password to the bot.
-
-When a user first links their account, existing watch history is synchronized so old activity is not posted as new activity.
-
-## Activity tracking
-
-The bot periodically checks SIMKL for changes.
-
-It uses incremental syncing to avoid repeatedly downloading the user's entire watch history.
-
-New activity can include:
-
-- Watched
-- Rewatched
-- Started watching
-- Completed
-- Planned
-- Dropped
-
-## Episode grouping
-
-Consecutive episodes are grouped together.
-
-For example:
-
-```text
-S02E08
-S02E09
-S02E10
-```
-
-can be posted as one activity instead of three separate messages.
-
-Non-consecutive episodes remain separate.
-
-## Multiple Discord servers
-
-One bot instance can be used across multiple Discord servers.
-
-Server-specific settings such as:
-
-- Activity channel
-- Server embed defaults
-
-are kept separate.
-
-Users can use the same SIMKL account across servers without creating a separate SIMKL account.
-
-## Ratings
-
-Ratings are provided by two sources:
-
-- **Movies** — IMDb ratings from MDBList
-- **Individual TV/anime episodes** — IMDb ratings from IMDb's public ratings dataset
-- **Anime movies** — IMDb and MyAnimeList ratings from MDBList
-
-Individual/ranged episode activity is handled differently: a single episode can display its IMDb rating when available, while grouped/ranged episodes do not display an episode rating.
-
-Ratings depend on the relevant source having the information available. The IMDb episode dataset is refreshed automatically and stored locally in `data/imdb_ratings.db`.
-
-## Artwork
-
-The bot uses TMDB artwork where available.
-
-Episodes can use episode stills, while movies and other activity can use landscape or poster artwork depending on the selected settings.
-
-If suitable TMDB artwork is unavailable, the bot can fall back to SIMKL artwork.
+These systems are optional. Servers that only want SIMKL activity posts can use the **Activity only** feature preset.
 
 ---
 
-# Updating & Backups
+# Updating
 
 ## Docker Compose
 
-Pull the latest image:
-
 ```bash
 cd ~/simkl-discord-bot
-sudo docker compose pull
-sudo docker compose up -d
+docker compose pull
+docker compose up -d
 ```
-
-Your persistent data remains in:
-
-```text
-data/store.json
-data/imdb_ratings.db
-```
-
-`data/imdb_ratings.db` is automatically rebuilt from IMDb's public ratings dataset when it is missing or older than 24 hours. The downloaded dataset is temporary and is removed after the database is built.
-
-## Docker CLI
-
-Pull the latest image:
-
-```bash
-sudo docker pull ghcr.io/donnyfly/simkltrackerbot:latest
-```
-
-Then recreate the container using the same `docker run` command from the installation section.
 
 ## Python
 
-Update the repository:
-
 ```bash
 git pull
-```
-
-Update dependencies:
-
-```bash
 python -m pip install -r requirements.txt
 ```
 
-Restart the bot.
+Then restart the bot.
 
-If using systemd:
+---
 
-```bash
-sudo systemctl restart simkltrackerbot
-```
+# Data & backups
 
-## Backing up your data
+Persistent data is stored in the mounted `data` directory.
 
-The bot's persistent data is stored in:
+The important file to back up is:
 
 ```text
 data/store.json
-data/imdb_ratings.db
 ```
 
-Back up `data/store.json` because it contains authentication information. The IMDb database can be regenerated automatically, so it does not need to be backed up.
+It contains bot state and linked-account authentication information, so **keep it private**.
 
-For a simple backup:
-
-```bash
-cp data/store.json data/store.json.backup
-```
+The IMDb ratings database can be rebuilt automatically and does not normally need to be backed up.
 
 ---
 
 # Troubleshooting
 
-## Bot does not start
-
-Check the logs.
-
-### Docker Compose
-
-```bash
-sudo docker compose logs -f
-```
-
-### Docker
-
-```bash
-sudo docker logs -f simkltrackerbot
-```
-
-### Python
-
-```bash
-python bot.py
-```
-
-### systemd
-
-```bash
-sudo journalctl -u simkltrackerbot -f
-```
-
-## Slash commands are not appearing
-
-Make sure the bot was invited with:
-
-- `bot`
-- `applications.commands`
-
-Slash commands are synchronized globally, so newly added or changed commands may take some time to appear. Make sure the bot was invited with the `applications.commands` scope.
-
-## Bot is online but does not post activity
+### Bot is online but does not post activity
 
 Check that:
 
-1. The user has linked their SIMKL account with `/simkl-link`.
-2. A posting channel has been configured with `/simkl-setchannel`.
-3. The bot has permission to send messages in that channel.
-4. There is new SIMKL activity to report.
-5. The bot is running normally.
+1. You linked your account with `/simkl-link`.
+2. An activity channel is configured with `/simkl-setchannel`.
+3. The bot can send messages in that channel.
+4. The bot has detected new SIMKL activity.
 
-Administrators can also use:
+Admins can run `/simkl-checknow` and `/simkl-status` for an immediate check.
 
-```text
-/simkl-checknow
-```
+### Slash commands are missing
 
-to manually trigger an activity check.
+Make sure the bot was invited with both the `bot` and `applications.commands` scopes.
 
-## Docker container keeps restarting
+Discord global command changes can also take some time to appear.
 
-Check the last 100 log lines:
+### Container keeps restarting
 
 ```bash
-sudo docker compose logs --tail=100
+docker compose ps
+docker compose logs --tail=100
 ```
 
-Then check:
-
-```bash
-sudo docker compose ps
-```
-
-Configuration errors are reported when the bot starts.
+Most startup/configuration problems will be shown in the logs.
 
 ---
 
 # Security
 
-Never commit or share:
+Never publicly share or commit:
 
 - `.env`
 - Discord bot tokens
 - SIMKL authentication tokens
 - `data/store.json`
 
-Keep your bot's credentials private.
-
-If your Discord bot token is accidentally exposed, regenerate it immediately through the Discord Developer Portal.
+If a Discord bot token is exposed, regenerate it immediately in the Discord Developer Portal.
 
 ---
 
 # License
 
-This project is licensed under the MIT License.
+SIMKLTrackerBot is licensed under the MIT License.
