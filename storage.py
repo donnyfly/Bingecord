@@ -330,6 +330,7 @@ def _default_guild_user(start_time_iso: str | None = None) -> dict:
         "last_success_at": None,
         "last_error": None,
         "consecutive_failures": 0,
+        "failure_notified": False,
     }
 
 
@@ -426,6 +427,7 @@ def _normalise_guild_user(user: dict) -> None:
         user["consecutive_failures"] = max(int(user.get("consecutive_failures", 0)), 0)
     except (TypeError, ValueError):
         user["consecutive_failures"] = 0
+    user["failure_notified"] = bool(user.get("failure_notified", False))
 
     announced = user.get("announced", [])
     if isinstance(announced, set):
@@ -1342,9 +1344,14 @@ class Storage:
         last_success_at: str | None = None,
         last_error: str | None = None,
         consecutive_failures: int | None = None,
+        failure_notified: bool | None = None,
         flush: bool = True,
     ) -> None:
-        """Update persistent polling health information for one guild/user."""
+        """Update persistent polling health information for one guild/user.
+
+        Resetting ``consecutive_failures`` to 0 also clears ``failure_notified``
+        so the user is warned again if their link breaks in the future.
+        """
         async with _lock:
             self._migrate_legacy_guild_locked(str(guild_id))
             user = self._guild_user(guild_id, discord_user_id)
@@ -1358,6 +1365,10 @@ class Storage:
                 user["last_error"] = last_error
             if consecutive_failures is not None:
                 user["consecutive_failures"] = max(int(consecutive_failures), 0)
+                if user["consecutive_failures"] == 0:
+                    user["failure_notified"] = False
+            if failure_notified is not None:
+                user["failure_notified"] = bool(failure_notified)
             self._dirty = True
         if flush:
             await self.flush()

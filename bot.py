@@ -42,6 +42,10 @@ except ZoneInfoNotFoundError:
     log_placeholder = True
     DEFAULT_TIMEZONE_NAME = "UTC"
 POLL_CONCURRENCY=positive_int_env("POLL_CONCURRENCY", 5)
+# After this many consecutive failed polls, the automatic background poll stops
+# calling SIMKL for that guild-user until a manual /simkl-checknow succeeds or
+# the user relinks. This avoids burning an API call every cycle on a revoked token.
+MAX_CONSECUTIVE_FAILURES=positive_int_env("MAX_CONSECUTIVE_FAILURES", 5)
 HISTORY_BACKFILL_CONCURRENCY=positive_int_env("HISTORY_BACKFILL_CONCURRENCY", 2)
 history_backfill_semaphore=asyncio.Semaphore(HISTORY_BACKFILL_CONCURRENCY)
 if not DISCORD_BOT_TOKEN or not SIMKL_CLIENT_ID:
@@ -825,6 +829,42 @@ async def mark_poll_failure(g,uid,error,previous_failures=0):
     failures=max(int(previous_failures or 0),0)+1
     await storage.update_poll_health(g,uid,last_error=error,consecutive_failures=failures,flush=True)
 
+def poll_failures_exceeded(guild_user):
+    """Return True when automatic polling should skip this guild-user."""
+    try:
+        failures=int((guild_user or {}).get("consecutive_failures",0) or 0)
+    except (TypeError,ValueError):
+        failures=0
+    return failures>=MAX_CONSECUTIVE_FAILURES
+
+async def notify_poll_failures_exceeded(g,uid,guild_user):
+    """DM a user once when automatic polling is paused for their SIMKL link."""
+    if (guild_user or {}).get("failure_notified"):
+        return False
+    guild=bot.get_guild(int(g))
+    server=f"**{guild.name}**" if guild else "a server"
+    last_error=(guild_user or {}).get("last_error") or "unknown error"
+    message=(
+        f"Hi! The SIMKL tracker in {server} has failed to check your SIMKL account "
+        f"{MAX_CONSECUTIVE_FAILURES} times in a row, so automatic tracking there is paused.\n"
+        f"Last error: `{str(last_error)[:300]}`\n\n"
+        "Your SIMKL link probably needs attention (for example, access was revoked). "
+        "Run `/simkl-link` in that server to reconnect; tracking resumes automatically after a successful check."
+    )
+    try:
+        user=bot.get_user(int(uid)) or await bot.fetch_user(int(uid))
+        await user.send(message)
+    except discord.Forbidden:
+        # DMs are closed; retrying every cycle would never succeed, so treat as notified.
+        log.info("Couldn't DM user %s about paused SIMKL polling in guild %s: DMs are closed.",uid,g)
+    except Exception as exc:
+        log.warning("Couldn't DM user %s about paused SIMKL polling in guild %s: %s: %s",uid,g,type(exc).__name__,exc)
+        return False
+    else:
+        log.info("Notified user %s that SIMKL polling is paused in guild %s.",uid,g)
+    await storage.update_poll_health(g,uid,failure_notified=True,flush=True)
+    return True
+
 def watch_xp_base_key(media_type, media_key):
     """Return the stable SIMKL item prefix used by watch-XP event keys."""
     if media_type in {"episode", "anime_episode"}:
@@ -1265,7 +1305,13 @@ async def poll_one(ch,g,uid,u,gu,request_cache=None,force_reconcile=False,batch=
         batch.finalizers.append(finalize)
     return posted
 
-async def poll_all(g=None, force_reconcile=False):
+async def poll_all(g=None, force_reconcile=False, ignore_failure_threshold=False):
+    """Poll linked users.
+
+    The automatic background poll skips guild-users that have reached
+    MAX_CONSECUTIVE_FAILURES. Manual checks (/simkl-checknow) pass
+    ignore_failure_threshold=True so they always attempt every target.
+    """
     started = time.monotonic()
 
     async with poll_lock:
@@ -1287,6 +1333,7 @@ async def poll_all(g=None, force_reconcile=False):
         semaphore=asyncio.Semaphore(POLL_CONCURRENCY)
         channel_cache={}
         channel_errors={}
+        skipped=[]
 
         async def resolve_channel(channel_id):
             channel=bot.get_channel(int(channel_id))
@@ -1305,6 +1352,13 @@ async def poll_all(g=None, force_reconcile=False):
 
                 for x in user_targets:
                     gid=x["guild_id"]
+                    if not ignore_failure_threshold and poll_failures_exceeded(x["guild_user_data"]):
+                        skipped.append((gid,uid))
+                        try:
+                            await notify_poll_failures_exceeded(gid,uid,x["guild_user_data"])
+                        except Exception:
+                            log.exception("Failed to handle paused SIMKL polling for %s in guild %s.",uid,gid)
+                        continue
                     channel_id=x["channel_id"]
                     channel_key=str(channel_id) if channel_id else None
                     if channel_key:
@@ -1338,6 +1392,9 @@ async def poll_all(g=None, force_reconcile=False):
         await batch.deliver()
         for channel_id,(gid,error) in channel_errors.items():
             log.warning("Couldn't access channel %s for guild %s: %s",channel_id,gid,error)
+        if skipped:
+            log.info("Skipped %d target(s) with %d+ consecutive poll failures; use /simkl-checknow to retry.",
+                     len(skipped),MAX_CONSECUTIVE_FAILURES)
         # Queued counts only become successful after Discord delivery.
         posted=sum(results) if not batch.activities else (
             max(0,sum(results)-sum(item.count for item in batch.activities))
@@ -3314,7 +3371,9 @@ async def simkl_status(i):
         last_success=gu.get("last_success_at")
         last_error=gu.get("last_error")
         failures=max(int(gu.get("consecutive_failures",0) or 0),0)
-        if failures:
+        if failures>=MAX_CONSECUTIVE_FAILURES:
+            health_state=f"paused · {failures} consecutive failure(s); automatic polling skipped until `/simkl-checknow` succeeds or the user relinks"
+        elif failures:
             health_state=f"degraded · {failures} consecutive failure(s)"
         elif last_success:
             health_state="healthy"
@@ -3351,7 +3410,7 @@ async def simkl_checknow(i):
     if poll_lock.locked(): await i.response.send_message("A SIMKL activity check is already running.",ephemeral=True); return
     last_checknow_at=time.monotonic()
     await i.response.send_message("Checking this server's SIMKL activity now...",ephemeral=True)
-    posted=await poll_all(g,force_reconcile=True)
+    posted=await poll_all(g,force_reconcile=True,ignore_failure_threshold=True)
     await i.followup.send(f"Done. Posted **{posted}** new activity item(s). Check the bot logs if this says 0.",ephemeral=True)
 
 POLL_RETRY_DELAY_SECONDS=60
