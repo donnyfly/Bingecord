@@ -189,7 +189,7 @@ async def is_anime_movie_item(item):
     # With include_all_episodes=yes a film can also have a virtual S01E01;
     # the explicit movie type must take precedence over episode rows.
     if item.get("anime_type") == "movie" or show.get("type") == "movie" or show.get("anime_type") == "movie":
-        log.info(
+        log.debug(
             "Classified anime item as movie: %s (SIMKL metadata).",
             show.get("title") or "Untitled",
         )
@@ -241,7 +241,7 @@ async def is_anime_movie_item(item):
         return False
 
     if movie_title:
-        log.info(
+        log.debug(
             "Classified anime item as movie: %s (TMDB=%s).",
             show.get("title") or "Untitled",
             tmdb_id,
@@ -1233,6 +1233,17 @@ async def poll_all(g=None, force_reconcile=False):
             users.setdefault(x["discord_user_id"],[]).append(x)
 
         semaphore=asyncio.Semaphore(POLL_CONCURRENCY)
+        channel_cache={}
+        channel_errors={}
+
+        async def resolve_channel(channel_id):
+            channel=bot.get_channel(int(channel_id))
+            if channel is not None:
+                return channel,None
+            try:
+                return await bot.fetch_channel(int(channel_id)),None
+            except Exception as exc:
+                return None,f"Discord channel unavailable: {type(exc).__name__}: {exc}"
 
         async def process_user(uid,user_targets):
             async with semaphore:
@@ -1243,14 +1254,15 @@ async def poll_all(g=None, force_reconcile=False):
                 for x in user_targets:
                     gid=x["guild_id"]
                     channel_id=x["channel_id"]
-                    ch=bot.get_channel(int(channel_id)) if channel_id else None
-                    channel_error=None
-                    if channel_id and ch is None:
-                        try:
-                            ch=await bot.fetch_channel(int(channel_id))
-                        except Exception as exc:
-                            channel_error=f"Discord channel unavailable: {type(exc).__name__}: {exc}"
-                            log.warning("Couldn't access channel %s for guild %s: %s: %s",channel_id,gid,type(exc).__name__,exc)
+                    channel_key=str(channel_id) if channel_id else None
+                    if channel_key:
+                        if channel_key not in channel_cache:
+                            channel_cache[channel_key]=asyncio.create_task(resolve_channel(channel_id))
+                        ch,channel_error=await channel_cache[channel_key]
+                    else:
+                        ch,channel_error=None,None
+                    if channel_error:
+                        channel_errors[channel_key]=(gid,channel_error)
 
                     try:
                         posted+=await poll_one(ch,int(gid),uid,user_data,x["guild_user_data"],request_cache,force_reconcile=force_reconcile)
@@ -1270,6 +1282,8 @@ async def poll_all(g=None, force_reconcile=False):
         results=await asyncio.gather(
             *(process_user(uid,user_targets) for uid,user_targets in users.items())
         )
+        for channel_id,(gid,error) in channel_errors.items():
+            log.warning("Couldn't access channel %s for guild %s: %s",channel_id,gid,error)
         posted=sum(results)
         for gid in sorted({str(target["guild_id"]) for target in targets}):
             try:
@@ -1496,7 +1510,7 @@ async def notify_level_up(guild_id_value, uid, before_progression, after_progres
 
     before_level = level_progress(int(before_progression.get("xp", 0)))[0]
     after_level = level_progress(int(after_progression.get("xp", 0)))[0]
-    log.info(
+    log.debug(
         "Progression check for user %s in guild %s: level %d -> %d (XP %d -> %d).",
         uid,
         guild_id_value,
