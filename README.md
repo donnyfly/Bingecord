@@ -56,6 +56,7 @@ Everything is self-hosted, and linked SIMKL account data is stored locally on yo
 | `/simkl-setchannel` | Manage Server | Choose where watch activity is posted |
 | `/simkl-style-server` | Manage Server | Set the server-wide default embed, text, and rating preferences |
 | `/simkl-status` | Manage Server | View the server's configuration, linked users, and polling health |
+| `/simkl-features` | Manage Server | View server feature switches, change one, or select Activity only / All features |
 | `/simkl-timezone` | Manage Server | View or set the server timezone used for dates, statistics, and streaks |
 | `/simkl-weekly-recap` | Manage Server | Post a weekly watch recap; use the period option to test it immediately |
 | `/simkl-challenges` | Everyone | View current daily and weekly watch challenges |
@@ -65,6 +66,14 @@ Everything is self-hosted, and linked SIMKL account data is stored locally on yo
 | `/simkl-user-reset` | Everyone | Reset your tracking history for the current server |
 | `/simkl-debug` | Manage Server | Privately preview level-up, rank-up, achievement, or prestige notifications without changing progression |
 | `/simkl-checknow` | Manage Server | Immediately check SIMKL for new activity |
+
+### Server feature controls
+
+Use `/simkl-features preset: Activity only` for basic SIMKL activity tracking. This disables optional commands and automated recaps, community processing, and progression/achievement notifications in that server. Linking, activity posting, styles, status, and manual checks stay available. `/simkl-features preset: All features` restores the full experience; existing servers keep all features enabled until an admin changes them.
+
+Use `/simkl-features feature: Weekly recaps enabled: False` (or another feature) to change one switch. Omit options to see settings. Independent switches cover progression, achievements, daily/weekly challenges, community goals, recaps, leaderboards, statistics, and discovery tools. Challenges and community goals require progression. The admin debug command stays available for private previews.
+
+Disabled commands can still appear in Discord's global command menu, but respond privately that the feature is disabled. Statistics and watch leaderboards can remain enabled without showing progression. Watch history and shared global XP/achievement accounting continue to reconcile; disabling a server feature does not erase records or reset accounts in other servers. Existing community records are retained and reconciled when re-enabled. These switches control the server experience, not deletion of shared account data.
 
 ### Weekly Recaps
 
@@ -94,6 +103,16 @@ Each server also has a `/simkl-community` weekly cooperative episode goal. The t
 Use `/simkl-stats` to see current XP, level, rank, prestige, lifetime XP, and the XP breakdown. `/simkl-leaderboard category: XP / progression` replaces the old XP leaderboard. Before prestige, rank colors progress from slate and cool tones into violet and gold. Each prestige has ten vivid rank colors, rotating through orange, pink, purple, blue, turquoise, green, and gold; the starting color advances with each prestige and cycles after five tiers. Rank-up animations and profile cards share the same rank accent and prestige-specific geometric backdrop. Prestige unlocks retain their numbered insignia and metallic finish and post an animation in the configured activity channel.
 
 Use `/simkl-debug feature: Level up` to preview the next level, or set `level`, `rank`, and `prestige` to preview a specific combination (for example, level 43 and prestige 6). `feature: Rank up` previews the next rank or a chosen rank boundary. `feature: Achievement unlocked` with `achievement` previews any achievement. `feature: Prestige unlocked` accepts an optional `prestige` number. Only the admin sees these previews. They use the live notification layout and animated GIF, but do not unlock anything or change XP.
+
+Prestiged level/rank cards use the prestige emblem in the pulsing left marker, matching the prestige-unlock card. The selected rank still controls the accent and backdrop color.
+
+### Performance review
+
+History imports and ranged watches use batched storage writes; SIMKL responses and anime classification are reused within a poll. Initial imports are concurrency-limited. Longest streaks use a single pass after sorting dates, guild schema normalization happens on load instead of rescanning all members on every read, and achievement evaluation avoids copying full XP histories for ignored return values.
+
+The main remaining scaling limits are the full JSON store serialization on writes, retained per-watch histories, and CPU spent generating GIF frames. Image work runs outside the event loop, but many simultaneous renders can still use CPU. A future database migration and bounded render queue deserve separate load testing; feature switches do not eliminate the shared history synchronization needed for consistent accounts.
+
+TMDB metadata caches also have no size bound or expiry for many entries, including failed lookups. A bounded cache with shorter expiry for misses would address both long-running memory growth and stale missing metadata. The large command/polling module would benefit from separation by responsibility alongside regression coverage; no command was removed during this review because the existing views serve distinct purposes.
 
 ## Watch statistics
 

@@ -292,9 +292,13 @@ def render_level_up_gif(
             ring_color = _mix(_PANEL, accent_soft, fade * 0.75)
             draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), outline=ring_color, width=2)
 
-        core_radius = 27 + int(4 * pulse)
-        draw.ellipse((cx - core_radius, cy - core_radius, cx + core_radius, cy + core_radius), fill=_mix(accent_soft, accent, 0.45 + pulse * 0.4))
-        draw.ellipse((cx - 8, cy - 8, cx + 8, cy + 8), fill=_TEXT)
+        core_radius = (34 if prestige else 27) + int(4 * pulse)
+        core_color=prestige_accent if prestige else accent
+        draw.ellipse((cx - core_radius, cy - core_radius, cx + core_radius, cy + core_radius), fill=_mix(_mix(_PANEL,core_color,0.55), core_color, 0.55 + pulse * 0.4))
+        if prestige:
+            _prestige_emblem(draw,cx,cy,prestige_emblem)
+        else:
+            draw.ellipse((cx - 8, cy - 8, cx + 8, cy + 8), fill=_TEXT)
 
         # Typography enters without visual clutter.
         x = 230
@@ -305,8 +309,6 @@ def render_level_up_gif(
             width=draw.textbbox((0,0),badge,font=small_font)[2]
             badge_center=610
             draw.text((badge_center-width/2,60), badge, font=small_font, fill=prestige_accent)
-            draw.ellipse((badge_center-29,113,badge_center+29,171),fill=_mix(_PANEL,prestige_accent,0.8))
-            _prestige_emblem(draw,badge_center,142,prestige_emblem)
 
         displayed_level = previous_level if t < 0.18 else level
         level_color = _mix(_MUTED, _TEXT, reveal)

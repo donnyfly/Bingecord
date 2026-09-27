@@ -51,10 +51,14 @@ DEFAULT_EMBED_PREFERENCES = {
     "episode_code": False,
 }
 
+DEFAULT_FEATURES = dict.fromkeys(("progression", "achievements", "challenges", "community",
+                                "weekly_recaps", "leaderboards", "statistics", "discovery"), True)
+
 
 def _default_guild() -> dict:
     return {
         "channel_id": None,
+        "features": dict(DEFAULT_FEATURES),
         "embed_preferences": copy.deepcopy(DEFAULT_EMBED_PREFERENCES),
         "force_embed_preferences": False,
         "timezone": None,
@@ -435,6 +439,10 @@ def _normalise_guild_user(user: dict) -> None:
 def _normalise_guild(guild: dict) -> None:
     defaults = _default_guild()
     guild.setdefault("channel_id", defaults["channel_id"])
+    if not isinstance(guild.get("features"), dict):
+        guild["features"] = dict(DEFAULT_FEATURES)
+    for key, value in DEFAULT_FEATURES.items():
+        guild["features"].setdefault(key, value)
     guild.setdefault("embed_preferences", copy.deepcopy(DEFAULT_EMBED_PREFERENCES))
     guild.setdefault("force_embed_preferences", False)
     guild.setdefault("timezone", None)
@@ -466,6 +474,20 @@ def _normalise_guild(guild: dict) -> None:
 
 
 class Storage:
+    async def get_features(self, guild_id: str | int) -> dict:
+        async with _lock:
+            guild = self._guild(str(guild_id))
+            return dict(guild["features"]) if guild else dict(DEFAULT_FEATURES)
+
+    async def set_features(self, guild_id: str | int, changes: dict) -> None:
+        if any(key not in DEFAULT_FEATURES or not isinstance(value, bool) for key,value in changes.items()):
+            raise ValueError("Unknown feature or invalid feature value")
+        async with _lock:
+            guild = self._guild(str(guild_id), create=True)
+            guild["features"].update(changes)
+            self._dirty = True
+        await self.flush()
+
     def __init__(self):
         self._data = _load_from_disk()
         migrated_legacy_preferences = False
@@ -517,8 +539,8 @@ class Storage:
             guild = _default_guild()
             self._data["guilds"][guild_id] = guild
             self._dirty = True
-        if isinstance(guild, dict):
-            _normalise_guild(guild)
+        # Loaded guilds are normalized once in __init__; new guilds already
+        # contain defaults. Avoid rescanning every member on every lookup.
         return guild
 
     def _guild_user(self, guild_id: str, discord_user_id: str, create: bool = False) -> dict | None:
@@ -1181,7 +1203,7 @@ class Storage:
         amount: int,
         title: str,
         awarded_at: str,
-        *, flush: bool = True,
+        *, flush: bool = True, include_progression: bool = True,
     ) -> dict:
         """Award achievement XP exactly once, including for old unlocks."""
         async with _lock:
@@ -1191,7 +1213,7 @@ class Storage:
             progression = user["progression"]
             awarded = progression.setdefault("achievement_xp_awarded", {})
             if achievement_id in awarded:
-                return {"awarded": False, "amount": 0, "progression": copy.deepcopy(progression)}
+                return {"awarded": False, "amount": 0, "progression": copy.deepcopy(progression) if include_progression else {}}
             xp = max(0, int(amount))
             awarded[achievement_id] = awarded_at
             progression["xp"] = int(progression.get("xp", 0)) + xp
@@ -1206,7 +1228,7 @@ class Storage:
             })
             roll_prestige(progression)
             self._dirty = True
-            result = copy.deepcopy(progression)
+            result = copy.deepcopy(progression) if include_progression else {}
         if flush:
             await self.flush()
         return {"awarded": True, "amount": xp, "progression": result}

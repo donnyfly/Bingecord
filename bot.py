@@ -7,7 +7,7 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 from simkl_client import SimklAuthError, SimklClient, SimklSlowDown
-from storage import EPOCH_ISO, storage
+from storage import DEFAULT_FEATURES, EPOCH_ISO, storage
 from achievements import ACHIEVEMENTS, all_achievements
 from progression import RANKS, challenges_for, challenge_progress, level_progress, rank_for_level, xp_for_level, xp_for_watch
 from level_visuals import accent_for_tier, prestige_style, render_achievement_gif, render_level_up_gif, render_prestige_gif
@@ -63,9 +63,36 @@ if mdblist is not None:
 else:
     log.warning("MDBList IMDb ratings disabled: MDBLIST_API_KEY is not set.")
 
+FEATURE_LABELS={"progression":"Levels, ranks and prestige", "achievements":"Achievements",
+                "challenges":"Daily and weekly challenges", "community":"Community challenges",
+                "weekly_recaps":"Weekly recaps", "leaderboards":"Leaderboards",
+                "statistics":"Statistics cards", "discovery":"Watching, random picks and recommendations"}
+COMMAND_FEATURES={"simkl-challenges":"challenges","simkl-community":"community",
+                  "simkl-achievements":"achievements","simkl-weekly-recap":"weekly_recaps",
+                  "simkl-leaderboard":"leaderboards","simkl-stats":"statistics",
+                  "simkl-server-stats":"statistics","simkl-watching":"discovery",
+                  "simkl-random":"discovery","simkl-recommend":"discovery"}
+
+async def feature_enabled(g, feature):
+    features=await storage.get_features(g)
+    return features[feature] and (feature not in {"challenges","community"} or features["progression"])
+
+class FeatureCommandTree(app_commands.CommandTree):
+    async def interaction_check(self, interaction):
+        name=(interaction.data or {}).get("name")
+        feature=COMMAND_FEATURES.get(name)
+        if feature and interaction.guild_id and not await feature_enabled(interaction.guild_id,feature):
+            if interaction.type == discord.InteractionType.autocomplete:
+                await interaction.response.autocomplete([])
+                return False
+            await interaction.response.send_message(
+                "This feature is disabled in this server. An admin can enable it with `/simkl-features`.",ephemeral=True)
+            return False
+        return True
+
 class SimklBot(discord.Client):
     def __init__(self):
-        super().__init__(intents=discord.Intents.default()); self.tree=app_commands.CommandTree(self)
+        super().__init__(intents=discord.Intents.default()); self.tree=FeatureCommandTree(self)
     async def setup_hook(self):
         await self.tree.sync()
 
@@ -941,6 +968,8 @@ async def seed_progression_history(uid, u, token, request_cache=None):
     return token
 async def notify_history_backfill(guild_id_value, uid, xp_earned, progression, channel):
     """Send a one-time summary after historical XP backfill completes."""
+    if not await feature_enabled(guild_id_value,"progression"):
+        return False
     if channel is None:
         log.warning("Historical progression notification skipped for user %s: no channel.", uid)
         return False
@@ -1177,7 +1206,7 @@ async def poll_one(ch,g,uid,u,gu,request_cache=None,force_reconcile=False):
         await storage.flush()
 
     progression_after_poll=await storage.get_progression(uid)
-    for number in await storage.claim_prestige_notifications(uid):
+    for number in (await storage.claim_prestige_notifications(uid) if await feature_enabled(g,"progression") else []):
         if not await send_prestige_notification(ch.send,f"<@{uid}>",number,progression_after_poll.get("lifetime_xp",0)):
             await storage.retry_prestige_notification(uid,number)
             break
@@ -1302,6 +1331,8 @@ def achievement_progress_from_events(events, timezone_name=DEFAULT_TIMEZONE_NAME
 
 async def evaluate_achievements(g, uid, notify_channel=None):
     """Keep achievement locks and rewards in sync with current SIMKL history."""
+    if not await feature_enabled(g,"achievements"):
+        notify_channel=None
     timezone_info=await storage.get_timezone(g)
     progression=await storage.get_progression(uid)
     progress=achievement_progress_from_events(
@@ -1344,9 +1375,9 @@ async def evaluate_achievements(g, uid, notify_channel=None):
                 achievement["name"],
                 now,
                 flush=False,
+                include_progression=False,
             )
-    if newly_unlocked:
-        await storage.flush()
+    await storage.flush()
 
     if newly_unlocked and notify_channel is not None:
         guild=bot.get_guild(int(g))
@@ -1379,14 +1410,12 @@ def calculate_streaks(watch_dates, timezone_name=DEFAULT_TIMEZONE_NAME):
     while cursor in dates:
         current+=1
         cursor-=timedelta(days=1)
-    longest=0
+    longest=length=0
+    previous=None
     for date in sorted(dates):
-        length=1
-        cursor=date-timedelta(days=1)
-        while cursor in dates:
-            length+=1
-            cursor-=timedelta(days=1)
+        length=length+1 if previous is not None and date-previous==timedelta(days=1) else 1
         longest=max(longest,length)
+        previous=date
     return current,longest
 
 
@@ -1459,6 +1488,8 @@ async def send_prestige_notification(send, mention, prestige, lifetime_xp, *, pr
 
 
 async def notify_level_up(guild_id_value, uid, before_progression, after_progression, channel, *, preview_interaction=None):
+    if preview_interaction is None and not await feature_enabled(guild_id_value,"progression"):
+        return False
     if channel is None:
         log.warning("Level-up notification skipped for user %s: no channel.", uid)
         return False
@@ -1582,6 +1613,8 @@ async def notify_level_up(guild_id_value, uid, before_progression, after_progres
     return False
 
 async def refresh_community_state(guild_id_value):
+    if not await feature_enabled(guild_id_value,"community"):
+        return None
     zone=(await storage.get_timezone(guild_id_value))["name"]
     now=datetime.now(timezone.utc)
     key,start,end=community_week(now,zone)
@@ -1684,6 +1717,8 @@ async def send_visual_summary(send, guild_name, heading, result, filename):
         await send(embed=embed)
 
 async def send_weekly_recap(guild, period="current"):
+    if not await feature_enabled(guild.id,"weekly_recaps"):
+        return False
     channel_id=await storage.get_channel(guild.id)
     if channel_id is None:
         return False
@@ -1699,6 +1734,8 @@ async def send_weekly_recap(guild, period="current"):
 async def send_due_weekly_recaps():
     for guild in bot.guilds:
         try:
+            if not await feature_enabled(guild.id,"weekly_recaps"):
+                continue
             timezone_info=await storage.get_timezone(guild.id)
             tz=ZoneInfo(timezone_info["name"])
             now=datetime.now(tz)
@@ -1724,6 +1761,32 @@ EPISODE_FORMAT_CHOICES=[
 RATING_CHOICES=[app_commands.Choice(name="Show",value="true"),app_commands.Choice(name="Hide",value="false")]
 
 NOT_ADMIN_MESSAGE="You need the Manage Server permission to do that."
+
+@bot.tree.command(name="simkl-features",description="(Admin) Configure optional features or use activity-only mode.")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.choices(
+    preset=[app_commands.Choice(name="Activity only",value="classic"),app_commands.Choice(name="All features",value="all")],
+    feature=[app_commands.Choice(name=label,value=key) for key,label in FEATURE_LABELS.items()],
+)
+async def simkl_features(i, preset: app_commands.Choice[str] | None = None,
+                         feature: app_commands.Choice[str] | None = None, enabled: bool | None = None):
+    g=guild_id(i)
+    if not g or not is_admin(i):
+        await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True)
+        return
+    if (preset and (feature is not None or enabled is not None)) or ((feature is None)!=(enabled is None)):
+        await i.response.send_message("Choose a preset, or a feature with enabled True/False. Omit all options to view settings.",ephemeral=True)
+        return
+    if preset:
+        await storage.set_features(g,dict.fromkeys(DEFAULT_FEATURES,preset.value=="all"))
+    elif feature:
+        await storage.set_features(g,{feature.value:enabled})
+    features=await storage.get_features(g)
+    lines=[f"{'✓' if value else '—'} **{FEATURE_LABELS[key]}:** {'On' if value else 'Off'}" for key,value in features.items() if key in FEATURE_LABELS]
+    await i.response.send_message(
+        "**Server features**\n"+"\n".join(lines)+
+        "\n\nActivity tracking stays available. Challenges and community goals also require progression. "
+        "Disabled commands may still appear in Discord's menu. Existing history and global XP are retained and watch XP continues syncing so shared accounts stay consistent.",ephemeral=True)
 
 @bot.tree.command(name="simkl-timezone",description="(Admin) Set or view the server timezone.")
 @app_commands.describe(timezone="IANA timezone such as Asia/Singapore, or 'reset' to use the environment default")
@@ -2072,13 +2135,22 @@ async def show_profile(i,user):
     timezone_info=await storage.get_timezone(g)
     unlocked_achievements=await storage.get_achievements(g,str(target.id))
     current,longest=calculate_streaks(stats.get("watch_dates"),timezone_info["name"])
+    features=await storage.get_features(g)
+    if not features["progression"]:
+        embed=discord.Embed(title=f"{target.display_name}'s SIMKL Statistics",color=0x5865F2)
+        embed.add_field(name="Watch history",value=f"{stats.get('episodes_watched',0):,} episodes · {stats.get('movies_watched',0):,} movies",inline=False)
+        embed.add_field(name="Anime (included above)",value=f"{stats.get('anime_episodes_watched',0):,} episodes · {stats.get('anime_movies_watched',0):,} movies",inline=False)
+        embed.add_field(name="Streak",value=f"{current} current · {longest} longest",inline=False)
+        await i.followup.send(embed=embed)
+        return
     today=datetime.now(ZoneInfo(timezone_info["name"])).date()
     data=profile_snapshot(stats,progression,unlocked_achievements,current,longest,today=today)
+    data["achievements_enabled"]=features["achievements"]
     embed=discord.Embed(
         title=f"{target.display_name}'s SIMKL Profile",
         description=(f"Level **{data['level']}** · **{data['rank']}** · Prestige **{data['prestige']}**\n"
                      f"**{data['xp']:,} XP** · **{data['total']:,} watches** · "
-                     f"**{data['achievements']}/{data['achievement_total']} achievements**"),
+                     + (f"**{data['achievements']}/{data['achievement_total']} achievements**" if features["achievements"] else "Achievements disabled")),
         color=discord.Color.from_rgb(*accent_for_tier(data["level"],data["prestige"])),
     )
     try:
@@ -2116,6 +2188,10 @@ async def simkl_leaderboard(i,category: app_commands.Choice[str] | None = None):
     if not g:
         await i.response.send_message("This command must be used in a server.",ephemeral=True); return
     category=category.value if category else "total"
+    progression_enabled=await feature_enabled(g,"progression")
+    if not progression_enabled and category in {"xp","level","prestige"}:
+        await i.response.send_message("Progression is disabled in this server. Choose a watch category.",ephemeral=True)
+        return
     await i.response.defer()
     rows=await storage.get_guild_leaderboard_snapshot(g)
     values=[]
@@ -2137,6 +2213,12 @@ async def simkl_leaderboard(i,category: app_commands.Choice[str] | None = None):
                  if pending else "No leaderboard data has been recorded in this server yet.")
         await i.followup.send(message,ephemeral=True); return
     labels={"total":"Total watches","episodes":"Episodes","movies":"Movies","anime":"Anime","xp":"XP progression","level":"Level","prestige":"Prestige"}
+    if not progression_enabled:
+        values.sort(key=lambda row:(-row[category],row["name"].casefold()))
+        embed=discord.Embed(title=f"{i.guild.name} · {labels[category]}",color=0xEFBE69,
+                            description="\n".join(f"**{n}.** {row['name']} · **{row[category]:,}**" for n,row in enumerate(values[:10],1)))
+        await i.followup.send(embed=embed)
+        return
     embed=discord.Embed(title=f"{i.guild.name} · {labels[category]}",color=0xEFBE69)
     embed.set_footer(text="Server watch counts · Global XP and prestige · Top 10")
     try:

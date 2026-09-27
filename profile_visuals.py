@@ -136,7 +136,7 @@ def render_profile_png(name, data):
     _panel(draw,(48,560,1032,755))
     draw.text((75,578),"MOMENTUM & MILESTONES",font=_font(17),fill=accent)
     fields=[("Current streak",f"{data['current_streak']} days"),("Longest streak",f"{data['longest_streak']} days"),
-            ("Achievements",f"{data['achievements']} / {data['achievement_total']}"),
+            ("Achievements",f"{data['achievements']} / {data['achievement_total']}" if data.get("achievements_enabled",True) else "Off"),
             ("Last 30 days",data["last_30"]),("Active days",data["active_days"]),
             ("Lifetime XP",f"{data['lifetime_xp']:,}")]
     for index,(label,value) in enumerate(fields):
