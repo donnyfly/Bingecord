@@ -7,7 +7,7 @@ from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 
 from achievements import ACHIEVEMENTS
-from level_visuals import accent_for_tier, draw_prestige_backdrop, prestige_style
+from level_visuals import accent_for_tier, draw_prestige_backdrop, prestige_style, _prestige_emblem
 from progression import level_progress, rank_for_level
 
 BG=(12,14,20)
@@ -103,13 +103,15 @@ def render_profile_png(name, data):
         image.paste(header,(48,24),mask)
         draw=ImageDraw.Draw(image)
     draw.text((48,36),"SIMKL / PROFILE",font=_font(19),fill=accent)
-    badge=f"P{prestige}"
-    badge_font=_font(31)
-    badge_width=draw.textbbox((0,0),badge,font=badge_font)[2]
-    badge_left=1000-badge_width
+    badge_left=933 if prestige else 960
     name_width=badge_left-48-28
     draw.text((48,67),_short(draw,name,_font(37),name_width),font=_font(37),fill=WHITE)
-    draw.text((badge_left,72),badge,font=badge_font,fill=prestige_style(prestige)[0] if prestige else accent)
+    if prestige:
+        finish, emblem=prestige_style(prestige)
+        draw.ellipse((953,42,1019,108),fill=finish,outline=WHITE,width=2)
+        _prestige_emblem(draw,986,75,emblem)
+    else:
+        draw.text((badge_left,72),"P0",font=_font(31),fill=accent)
     draw.rounded_rectangle((48,115,1032,120),radius=2,fill=accent)
 
     _panel(draw,(48,144,1032,320))

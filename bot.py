@@ -565,13 +565,15 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
                 desc+="\n\n🆕 Started watching this series."
                 start_claimed.add(sid)
             logo=None
-            if t=="anime" and p["artwork"] in ("auto", "backdrop"):
+            if p["artwork"] in ("auto", "backdrop"):
                 try:
-                    anime_tmdb_id=await resolve_anime_tmdb_id({
+                    series_tmdb_id=await resolve_anime_tmdb_id({
                         "tmdb": grp[0].get("tmdb_id"),
                         "tvdb": grp[0].get("tvdb_id"),
-                    })
-                    logo=await tmdb.get_tv_logo(anime_tmdb_id) if anime_tmdb_id is not None else None
+                    }) if t=="anime" else grp[0].get("tmdb_id")
+                    if series_tmdb_id is None and grp[0].get("tvdb_id") is not None:
+                        series_tmdb_id=await tmdb.find_series_by_tvdb(grp[0]["tvdb_id"])
+                    logo=await tmdb.get_tv_logo(series_tmdb_id) if series_tmdb_id is not None else None
                 except Exception:
                     log.warning("TMDB TV logo lookup failed for %s.", title, exc_info=True)
             # Ranged activity optimization:
@@ -2780,6 +2782,7 @@ async def _recommendation_sources(uid,user,token,media_filter):
                     sources.append({
                         "kind":"movie",
                         "tmdb_id":int(tmdb_id),
+                        "title":media.get("title") or "a watched movie",
                         "watched_at":item.get("last_watched_at") or "",
                         "anime":media_filter=="anime",
                     })
@@ -2800,6 +2803,7 @@ async def _recommendation_sources(uid,user,token,media_filter):
                     sources.append({
                         "kind":"movie",
                         "tmdb_id":int(tmdb_id),
+                        "title":media.get("title") or "a watched movie",
                         "watched_at":movie_item.get("last_watched_at") or "",
                         "anime":media_filter=="anime" or media_type=="anime",
                     })
@@ -2821,6 +2825,7 @@ async def _recommendation_sources(uid,user,token,media_filter):
                     sources.append({
                         "kind":"tv",
                         "tmdb_id":int(tmdb_id),
+                        "title":media.get("title") or "a watched series",
                         "watched_at":watched_at,
                         "anime":media_filter=="anime",
                     })
@@ -2900,9 +2905,12 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
                 entry=dict(result)
                 entry["_recommendation_kind"]=kind
                 entry["_sources"]=1
+                entry["_source_titles"]=[source["title"]]
                 entry["_anime"]=bool(source.get("anime"))
             else:
                 entry["_sources"]+=1
+                if source["title"] not in entry["_source_titles"]:
+                    entry["_source_titles"].append(source["title"])
                 entry["_anime"]=entry.get("_anime",False) or bool(source.get("anime"))
                 if float(result.get("vote_average") or 0) > float(entry.get("vote_average") or 0):
                     entry["vote_average"]=result.get("vote_average")
@@ -3006,12 +3014,23 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
                 )
                 return {}
 
-        rating_results=await asyncio.gather(
-            *(recommendation_ratings(result) for result in selected)
+        async def destination(result):
+            kind=result["_recommendation_kind"]
+            page=f"https://www.themoviedb.org/{'movie' if kind=='movie' else 'tv'}/{int(result['id'])}"
+            try:
+                resolved=await simkl.resolve_title_url(result["id"],kind)
+            except Exception:
+                log.debug("Recommendation link resolution failed for TMDB=%s",result["id"],exc_info=True)
+                resolved=None
+            return resolved or page, bool(resolved)
+
+        rating_results,destinations=await asyncio.gather(
+            asyncio.gather(*(recommendation_ratings(result) for result in selected)),
+            asyncio.gather(*(destination(result) for result in selected)),
         )
 
         lines=[]
-        for index,(result,ratings) in enumerate(zip(selected,rating_results),1):
+        for index,(result,ratings,(result_url,on_simkl)) in enumerate(zip(selected,rating_results,destinations),1):
             title=result.get("name") or result.get("title") or "Untitled"
             rating_parts=[]
             imdb_rating=ratings.get("imdb")
@@ -3022,19 +3041,31 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
                 if mal_rating is not None:
                     rating_parts.append(f"🌸 MAL **{mal_rating:.1f}**")
             rating_text=f" · {' · '.join(rating_parts)}" if rating_parts else ""
+            source_titles=result.get("_source_titles") or []
             source_count=int(result.get("_sources",1))
-            reason=f"matches **{source_count}** watched title{'s' if source_count != 1 else ''}"
+            examples=", ".join(f"*{name}*" for name in source_titles[:2])
+            reason=f"Because you watched {examples}" if examples else "Based on your watch history"
+            if source_count>len(source_titles[:2]):
+                reason+=f" and {source_count-len(source_titles[:2])} more"
             release_date=result.get("first_air_date") or result.get("release_date") or ""
-            year=release_date[:4] if release_date else None
-            result_url=simkl_redirect_url(result.get("id"),"movie" if result.get("_recommendation_kind")=="movie" else "tv",title,year)
-            lines.append(f"**{index}.** [{title}]({result_url}){rating_text} — {reason}")
+            year=release_date[:4] if release_date else "Year unknown"
+            kind_label="Movie" if result["_recommendation_kind"]=="movie" else ("Anime" if result.get("_anime") else "TV")
+            votes=int(result.get("vote_count") or 0)
+            tmdb_score=float(result.get("vote_average") or 0)
+            score=f" · TMDB {tmdb_score:.1f}/10 ({votes:,} votes)" if votes else ""
+            overview=" ".join((result.get("overview") or "").split())
+            if len(overview)>160:
+                overview=overview[:157].rsplit(" ",1)[0]+"…"
+            lines.append(f"**{index}. [{title}]({result_url})** · {kind_label} · {year}{rating_text}{score}\n"
+                         f"{overview or 'Synopsis unavailable.'}\n"
+                         f"↳ {reason}{' · View on TMDB' if not on_simkl else ''}")
 
         embed=discord.Embed(
             title=f"🧠 {i.user.display_name} · Recommendations",
-            description="\n".join(lines),
+            description="\n\n".join(lines),
             color=0x5865F2,
         )
-        embed.set_footer(text="Personalized from your SIMKL watch history · IMDb ratings")
+        embed.set_footer(text="Based on your recent SIMKL watches · Unmatched entries open on TMDB")
         await i.followup.send(embed=embed,ephemeral=True)
 
     except SimklAuthError:

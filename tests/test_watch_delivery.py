@@ -46,6 +46,14 @@ def test_combined_layout_starts_and_rewatches():
     assert 'rewatched **S2E03**' in together_embed([first,second]).description
 
 
+def test_combined_watch_keeps_available_title_logo():
+    first,second=activity(1),activity(2)
+    second.embed.set_thumbnail(url='https://image.tmdb.org/t/p/w500/logo.png')
+    combined=together_embed([first,second])
+    assert combined.thumbnail.url==second.embed.thumbnail.url
+    assert first.embed.thumbnail.url is None
+
+
 @pytest.mark.parametrize('success',[True,False])
 def test_failed_delivery_never_acknowledges_participants(success):
     async def scenario():
