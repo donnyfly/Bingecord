@@ -13,7 +13,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from progression import challenges_for, roll_prestige, xp_for_level
-from community import episode_contributions, split_pool
+from community import challenge_for_week, watch_contributions, split_pool
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "store.json")
 
@@ -1530,10 +1530,10 @@ class Storage:
                 return {}
             records=guild.setdefault("community_challenges", {})
             if week_key not in records:
-                target=max(25,20*len(guild.get("users") or {}))
+                challenge=challenge_for_week(week_key,len(guild.get("users") or {}))
                 records[week_key]={
                     "start":start.isoformat(),"end":end.isoformat(),
-                    "target":target,"pool":target*300,
+                    **challenge,
                     "members":sorted(guild.get("users") or {}),"awards":{},
                     "notified_awards":{},
                 }
@@ -1547,7 +1547,7 @@ class Storage:
             def counts_for(record):
                 period_start=datetime.fromisoformat(record["start"])
                 period_end=datetime.fromisoformat(record["end"])
-                return episode_contributions(self._data["users"],record.get("members") or [],period_start,period_end)
+                return watch_contributions(self._data["users"],record.get("members") or [],period_start,period_end,record.get("kind","episodes"))
 
             for key,record in records.items():
                 period_end=datetime.fromisoformat(record["end"])
@@ -1593,6 +1593,7 @@ class Storage:
                 members=sorted((counts_for(record) if initial else changes_to_report),
                                key=lambda uid:(-int(awards.get(uid,0)),uid))
                 pending.append({"key":key,"target":int(record["target"]),
+                                "kind":record.get("kind","episodes"),
                                 "pool":int(record["pool"]),"awards":copy.deepcopy(awards),
                                 "contributions":counts_for(record),"deltas":changes_to_report,
                                 "members":members,"initial":initial})
@@ -1601,6 +1602,7 @@ class Storage:
             state={
                 "key":week_key,"start":current["start"],"end":current["end"],
                 "target":int(current["target"]),"pool":int(current["pool"]),
+                "kind":current.get("kind","episodes"),
                 "contributions":contributions,"total":total,
                 "awards":copy.deepcopy(current.get("awards") or {}),
                 "status":("completed" if current.get("awards") else "missed") if now >= end else ("goal_reached" if total >= int(current["target"]) else "active"),

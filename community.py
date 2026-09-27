@@ -1,4 +1,4 @@
-"""Weekly cooperative episode goals, with a fixed pool split by contribution."""
+"""Rotating weekly cooperative watch goals and contribution-based rewards."""
 
 from __future__ import annotations
 
@@ -16,14 +16,32 @@ def community_week(now: datetime, timezone_name: str):
     return monday.isoformat(),start,end
 
 
-def episode_contributions(users: dict, member_ids, start: datetime, end: datetime):
+CHALLENGES={
+    "episodes": {"name":"Episode Marathon","unit":"episode","media_types":{"episode","anime_episode"},"per_member":20,"minimum":25,"xp_per_watch":300},
+    "movies": {"name":"Movie Night","unit":"movie","media_types":{"movie","anime_movie"},"per_member":3,"minimum":3,"xp_per_watch":900},
+    "anime": {"name":"Anime Spotlight","unit":"anime watch","media_types":{"anime_episode","anime_movie"},"per_member":12,"minimum":15,"xp_per_watch":350},
+    "all": {"name":"Watch Party","unit":"watch","media_types":{"episode","anime_episode","movie","anime_movie"},"per_member":22,"minimum":25,"xp_per_watch":300},
+}
+
+
+def challenge_for_week(week_key: str, member_count: int) -> dict:
+    """Rotate in calendar order; keep the rollout week on its original episode goal."""
+    week_number=(datetime.fromisoformat(week_key).date()-datetime(2026,9,21).date()).days//7
+    kind=tuple(CHALLENGES)[week_number%len(CHALLENGES)]
+    challenge=CHALLENGES[kind]
+    target=max(challenge["minimum"],challenge["per_member"]*member_count)
+    return {"kind":kind,"target":target,"pool":target*challenge["xp_per_watch"]}
+
+
+def watch_contributions(users: dict, member_ids, start: datetime, end: datetime, kind: str = "episodes"):
     """Count distinct, still-active SIMKL watch events for linked members."""
+    media_types=CHALLENGES.get(kind,CHALLENGES["episodes"])["media_types"]
     counts={}
     for uid in member_ids:
         events=((users.get(str(uid)) or {}).get("progression") or {}).get("xp_events") or []
         keys=set()
         for event in events:
-            if event.get("media_type") not in {"episode","anime_episode"}:
+            if event.get("media_type") not in media_types:
                 continue
             stamp=event.get("at")
             try:
@@ -37,6 +55,11 @@ def episode_contributions(users: dict, member_ids, start: datetime, end: datetim
         if keys:
             counts[str(uid)]=len(keys)
     return counts
+
+
+def episode_contributions(users: dict, member_ids, start: datetime, end: datetime):
+    """Compatibility helper for previously stored episode challenges."""
+    return watch_contributions(users,member_ids,start,end)
 
 
 def split_pool(contributions: dict[str,int], pool: int):

@@ -13,7 +13,7 @@ from achievements import ACHIEVEMENTS, all_achievements
 from progression import RANKS, challenges_for, challenge_progress, level_progress, rank_for_level, xp_for_level, xp_for_watch
 from level_visuals import accent_for_tier, prestige_style, render_achievement_gif, render_level_up_gif, render_prestige_gif
 from profile_visuals import profile_snapshot, render_profile_png, render_leaderboard_png, render_summary_png
-from community import community_week
+from community import CHALLENGES, community_week
 from tmdb_client import TmdbClient
 from mdblist_client import MdbListClient
 from imdb_client import ImdbClient
@@ -1320,6 +1320,7 @@ async def poll_all(g=None, force_reconcile=False, ignore_failure_threshold=False
     started = time.monotonic()
 
     async with poll_lock:
+        requests_before=simkl.request_counts.copy()
         targets=await storage.get_poll_targets(g)
 
 
@@ -1414,6 +1415,9 @@ async def poll_all(g=None, force_reconcile=False, ignore_failure_threshold=False
             "Polling cycle complete: %d user(s), %d target(s), %d posted, %.2fs elapsed, concurrency=%d.",
             len(users),len(targets),posted,duration,POLL_CONCURRENCY
         )
+        request_delta=simkl.request_counts-requests_before
+        log.info("SIMKL GETs this cycle: activities=%d, full_history=%d, history_delta=%d, other=%d (includes retries).",
+                 *(request_delta[k] for k in ("activities","full_history","history_delta","other")))
         return posted
 
 
@@ -1771,6 +1775,8 @@ async def notify_challenge_rewards(guild_id_value,uid,channel):
 
 
 async def notify_community_rewards(guild_id_value,channel,notification):
+    challenge=CHALLENGES.get(notification.get("kind"),CHALLENGES["episodes"])
+    unit=challenge["unit"]
     members=notification["members"] if notification["initial"] else [
         uid for uid in notification["members"] if notification["deltas"].get(uid)
     ]
@@ -1780,15 +1786,15 @@ async def notify_community_rewards(guild_id_value,channel,notification):
         lines=[]
         for uid in members[offset:offset+20]:
             if notification["initial"]:
-                episodes=notification["contributions"].get(uid,0)
-                lines.append(f"<@{uid}> · {episodes:,} episode{'s' if episodes!=1 else ''} · **+{int(notification['awards'].get(uid,0)):,} XP**")
+                watches=notification["contributions"].get(uid,0)
+                lines.append(f"<@{uid}> · {watches:,} {unit}{'s' if watches!=1 else ''} · **+{int(notification['awards'].get(uid,0)):,} XP**")
             else:
                 delta=int(notification["deltas"][uid])
                 lines.append(f"<@{uid}> · **{delta:+,} XP**")
         embed=discord.Embed(
             title="Community Challenge Completed" if notification["initial"] else "Community Challenge Rewards Updated",
             description=(
-                f"Week of **{notification['key']}** · {notification['target']:,} episode goal\n"
+                f"Week of **{notification['key']}** · {challenge['name']} · {notification['target']:,} {unit} goal\n"
                 f"**{notification['pool']:,} XP pool** shared by contribution\n\n"
                 +"\n".join(lines)
             ),
@@ -2101,7 +2107,7 @@ async def simkl_challenges(i):
     await i.response.send_message(embed=e)
 
 
-@bot.tree.command(name="simkl-community", description="View this server's weekly cooperative episode challenge.")
+@bot.tree.command(name="simkl-community", description="View this server's rotating weekly watch challenge.")
 async def simkl_community(i):
     g=guild_id(i)
     if not g:
@@ -2114,21 +2120,23 @@ async def simkl_community(i):
         return
     total=state["total"]
     target=state["target"]
+    challenge=CHALLENGES.get(state.get("kind"),CHALLENGES["episodes"])
+    unit=challenge["unit"]
     filled=min(20,round(20*total/target))
     bar="█"*filled+"░"*(20-filled)
     ends=datetime.fromisoformat(state["end"])
     contributors=sorted(state["contributions"].items(),key=lambda item:(-item[1],item[0]))
-    rows=[f"<@{uid}> · **{count:,}** episode{'s' if count!=1 else ''}" for uid,count in contributors[:10]]
-    description=(f"**Watch {target:,} episodes together this week**\n{bar}\n"
-                 f"**{total:,} / {target:,}** episodes · **{state['pool']:,} XP pool**\n"
+    rows=[f"<@{uid}> · **{count:,}** {unit}{'s' if count!=1 else ''}" for uid,count in contributors[:10]]
+    description=(f"**{challenge['name']}: {target:,} {unit}s together this week**\n{bar}\n"
+                 f"**{total:,} / {target:,}** {unit}s · **{state['pool']:,} XP pool**\n"
                  f"Ends {discord.utils.format_dt(ends,style='R')} · {discord.utils.format_dt(ends,style='F')}\n\n"
-                 f"Your contribution: **{state['contributions'].get(str(i.user.id),0):,}** episodes")
+                 f"Your contribution: **{state['contributions'].get(str(i.user.id),0):,}** {unit}s")
     if state["status"]=="goal_reached":
         description+="\n**Goal reached!** The pool is distributed by contribution after the week ends."
     elif state["status"]=="active":
-        description+="\nContribute at least one episode before the deadline to qualify if the goal is reached."
+        description+=f"\nContribute at least one {unit} before the deadline to qualify if the goal is reached."
     e=discord.Embed(title=f"{i.guild.name} · Community Challenge",description=description,color=0xC9DCF0)
-    e.add_field(name="Contributors",value="\n".join(rows) if rows else "No episodes contributed yet.",inline=False)
+    e.add_field(name="Contributors",value="\n".join(rows) if rows else f"No {unit}s contributed yet.",inline=False)
     e.set_footer(text="Server-local weekly goal · bonus XP is added to normal watch XP")
     await i.followup.send(embed=e,allowed_mentions=discord.AllowedMentions.none())
 

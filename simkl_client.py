@@ -9,6 +9,7 @@ SIMKL API client for the Discord watch activity bot.
 """
 
 import asyncio
+from collections import Counter
 import json
 import logging
 from urllib.parse import urlparse
@@ -50,6 +51,7 @@ class SimklClient:
     def __init__(self, client_id: str):
         self.client_id = client_id
         self._session: aiohttp.ClientSession | None = None
+        self.request_counts: Counter[str] = Counter()
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Return the shared HTTP session, creating it if needed."""
@@ -149,6 +151,10 @@ class SimklClient:
 
         for attempt in range(4):
             try:
+                category=("activities" if path == "/sync/activities" else
+                          "full_history" if path.startswith("/sync/all-items/") and "date_from" not in request_params else
+                          "history_delta" if path.startswith("/sync/all-items/") else "other")
+                self.request_counts[category]+=1
                 async with session.get(
                     f"{API_BASE}{path}",
                     params=request_params,
