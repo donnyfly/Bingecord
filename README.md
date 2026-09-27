@@ -44,7 +44,7 @@ It supports automatic SIMKL syncing, episode grouping, artwork and ratings, pers
 | `/simkl-challenges` | Everyone | View daily and weekly challenges |
 | `/simkl-leaderboard` | Everyone | View server leaderboards |
 | `/simkl-server-stats` | Everyone | View server watch statistics |
-| `/simkl-community` | Everyone | View the server's weekly cooperative episode goal |
+| `/simkl-community` | Everyone | View the rotating weekly cooperative watch goal |
 | `/simkl-style` | Everyone | Change personal activity-post preferences |
 | `/simkl-user-reset` | Everyone | Reset your tracking history for the current server |
 | `/simkl-setchannel` | Manage Server | Choose the activity channel |

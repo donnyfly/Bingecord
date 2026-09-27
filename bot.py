@@ -13,10 +13,12 @@ from achievements import ACHIEVEMENTS, all_achievements
 from progression import RANKS, challenges_for, challenge_progress, level_progress, rank_for_level, xp_for_level, xp_for_watch
 from level_visuals import accent_for_tier, prestige_style, render_achievement_gif, render_level_up_gif, render_prestige_gif
 from profile_visuals import profile_snapshot, render_profile_png, render_leaderboard_png, render_summary_png
-from community import community_week
+from community import CHALLENGES, community_week
 from tmdb_client import TmdbClient
 from mdblist_client import MdbListClient
 from imdb_client import ImdbClient
+from recommendation_engine import rating_value, select_sources, source_weight, rank_candidates, recommendation_lineup
+from recommendation_ui import RecommendationView
 
 load_dotenv()
 
@@ -42,6 +44,10 @@ except ZoneInfoNotFoundError:
     log_placeholder = True
     DEFAULT_TIMEZONE_NAME = "UTC"
 POLL_CONCURRENCY=positive_int_env("POLL_CONCURRENCY", 5)
+# After this many consecutive failed polls, the automatic background poll stops
+# calling SIMKL for that guild-user until a manual /simkl-checknow succeeds or
+# the user relinks. This avoids burning an API call every cycle on a revoked token.
+MAX_CONSECUTIVE_FAILURES=positive_int_env("MAX_CONSECUTIVE_FAILURES", 5)
 HISTORY_BACKFILL_CONCURRENCY=positive_int_env("HISTORY_BACKFILL_CONCURRENCY", 2)
 history_backfill_semaphore=asyncio.Semaphore(HISTORY_BACKFILL_CONCURRENCY)
 if not DISCORD_BOT_TOKEN or not SIMKL_CLIENT_ID:
@@ -561,13 +567,15 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
                 desc+="\n\n🆕 Started watching this series."
                 start_claimed.add(sid)
             logo=None
-            if t=="anime" and p["artwork"] in ("auto", "backdrop"):
+            if p["artwork"] in ("auto", "backdrop"):
                 try:
-                    anime_tmdb_id=await resolve_anime_tmdb_id({
+                    series_tmdb_id=await resolve_anime_tmdb_id({
                         "tmdb": grp[0].get("tmdb_id"),
                         "tvdb": grp[0].get("tvdb_id"),
-                    })
-                    logo=await tmdb.get_tv_logo(anime_tmdb_id) if anime_tmdb_id is not None else None
+                    }) if t=="anime" else grp[0].get("tmdb_id")
+                    if series_tmdb_id is None and grp[0].get("tvdb_id") is not None:
+                        series_tmdb_id=await tmdb.find_series_by_tvdb(grp[0]["tvdb_id"])
+                    logo=await tmdb.get_tv_logo(series_tmdb_id) if series_tmdb_id is not None else None
                 except Exception:
                     log.warning("TMDB TV logo lookup failed for %s.", title, exc_info=True)
             # Ranged activity optimization:
@@ -824,6 +832,42 @@ async def process_status(ch,g,uid,name,member,t,items,profile):
 async def mark_poll_failure(g,uid,error,previous_failures=0):
     failures=max(int(previous_failures or 0),0)+1
     await storage.update_poll_health(g,uid,last_error=error,consecutive_failures=failures,flush=True)
+
+def poll_failures_exceeded(guild_user):
+    """Return True when automatic polling should skip this guild-user."""
+    try:
+        failures=int((guild_user or {}).get("consecutive_failures",0) or 0)
+    except (TypeError,ValueError):
+        failures=0
+    return failures>=MAX_CONSECUTIVE_FAILURES
+
+async def notify_poll_failures_exceeded(g,uid,guild_user):
+    """DM a user once when automatic polling is paused for their SIMKL link."""
+    if (guild_user or {}).get("failure_notified"):
+        return False
+    guild=bot.get_guild(int(g))
+    server=f"**{guild.name}**" if guild else "a server"
+    last_error=(guild_user or {}).get("last_error") or "unknown error"
+    message=(
+        f"Hi! The SIMKL tracker in {server} has failed to check your SIMKL account "
+        f"{MAX_CONSECUTIVE_FAILURES} times in a row, so automatic tracking there is paused.\n"
+        f"Last error: `{str(last_error)[:300]}`\n\n"
+        "Your SIMKL link probably needs attention (for example, access was revoked). "
+        "Run `/simkl-link` in that server to reconnect; tracking resumes automatically after a successful check."
+    )
+    try:
+        user=bot.get_user(int(uid)) or await bot.fetch_user(int(uid))
+        await user.send(message)
+    except discord.Forbidden:
+        # DMs are closed; retrying every cycle would never succeed, so treat as notified.
+        log.info("Couldn't DM user %s about paused SIMKL polling in guild %s: DMs are closed.",uid,g)
+    except Exception as exc:
+        log.warning("Couldn't DM user %s about paused SIMKL polling in guild %s: %s: %s",uid,g,type(exc).__name__,exc)
+        return False
+    else:
+        log.info("Notified user %s that SIMKL polling is paused in guild %s.",uid,g)
+    await storage.update_poll_health(g,uid,failure_notified=True,flush=True)
+    return True
 
 def watch_xp_base_key(media_type, media_key):
     """Return the stable SIMKL item prefix used by watch-XP event keys."""
@@ -1253,6 +1297,7 @@ async def poll_one(ch,g,uid,u,gu,request_cache=None,force_reconcile=False,batch=
             await storage.flush()
 
         progression_after_poll=await storage.get_progression(uid)
+        await notify_challenge_rewards(g,uid,ch)
         for number in (await storage.claim_prestige_notifications(uid) if await feature_enabled(g,"progression") else []):
             if not await send_prestige_notification(ch.send,f"<@{uid}>",number,progression_after_poll.get("lifetime_xp",0)):
                 await storage.retry_prestige_notification(uid,number)
@@ -1265,10 +1310,17 @@ async def poll_one(ch,g,uid,u,gu,request_cache=None,force_reconcile=False,batch=
         batch.finalizers.append(finalize)
     return posted
 
-async def poll_all(g=None, force_reconcile=False):
+async def poll_all(g=None, force_reconcile=False, ignore_failure_threshold=False):
+    """Poll linked users.
+
+    The automatic background poll skips guild-users that have reached
+    MAX_CONSECUTIVE_FAILURES. Manual checks (/simkl-checknow) pass
+    ignore_failure_threshold=True so they always attempt every target.
+    """
     started = time.monotonic()
 
     async with poll_lock:
+        requests_before=simkl.request_counts.copy()
         targets=await storage.get_poll_targets(g)
 
 
@@ -1287,6 +1339,7 @@ async def poll_all(g=None, force_reconcile=False):
         semaphore=asyncio.Semaphore(POLL_CONCURRENCY)
         channel_cache={}
         channel_errors={}
+        skipped=[]
 
         async def resolve_channel(channel_id):
             channel=bot.get_channel(int(channel_id))
@@ -1305,6 +1358,13 @@ async def poll_all(g=None, force_reconcile=False):
 
                 for x in user_targets:
                     gid=x["guild_id"]
+                    if not ignore_failure_threshold and poll_failures_exceeded(x["guild_user_data"]):
+                        skipped.append((gid,uid))
+                        try:
+                            await notify_poll_failures_exceeded(gid,uid,x["guild_user_data"])
+                        except Exception:
+                            log.exception("Failed to handle paused SIMKL polling for %s in guild %s.",uid,gid)
+                        continue
                     channel_id=x["channel_id"]
                     channel_key=str(channel_id) if channel_id else None
                     if channel_key:
@@ -1338,6 +1398,9 @@ async def poll_all(g=None, force_reconcile=False):
         await batch.deliver()
         for channel_id,(gid,error) in channel_errors.items():
             log.warning("Couldn't access channel %s for guild %s: %s",channel_id,gid,error)
+        if skipped:
+            log.info("Skipped %d target(s) with %d+ consecutive poll failures; use /simkl-checknow to retry.",
+                     len(skipped),MAX_CONSECUTIVE_FAILURES)
         # Queued counts only become successful after Discord delivery.
         posted=sum(results) if not batch.activities else (
             max(0,sum(results)-sum(item.count for item in batch.activities))
@@ -1352,6 +1415,9 @@ async def poll_all(g=None, force_reconcile=False):
             "Polling cycle complete: %d user(s), %d target(s), %d posted, %.2fs elapsed, concurrency=%d.",
             len(users),len(targets),posted,duration,POLL_CONCURRENCY
         )
+        request_delta=simkl.request_counts-requests_before
+        log.info("SIMKL GETs this cycle: activities=%d, full_history=%d, history_delta=%d, other=%d (includes retries).",
+                 *(request_delta[k] for k in ("activities","full_history","history_delta","other")))
         return posted
 
 
@@ -1683,6 +1749,67 @@ async def notify_level_up(guild_id_value, uid, before_progression, after_progres
             )
     return False
 
+async def notify_challenge_rewards(guild_id_value,uid,channel):
+    if not channel or not await feature_enabled(guild_id_value,"challenges"):
+        return False
+    pending=await storage.get_pending_challenge_notifications(uid)
+    if not pending:
+        return False
+    total=sum(int(item["xp"]) for item in pending)
+    rows=[f"**{item['period']} · {item['name']}** — +{int(item['xp']):,} XP" for item in pending[:12]]
+    if len(pending)>12:
+        rows.append(f"…and {len(pending)-12} more completed challenges.")
+    embed=discord.Embed(
+        title="Challenges Completed",
+        description=f"<@{uid}> earned **+{total:,} XP**\n\n"+"\n".join(rows),
+        color=0x5865F2,
+    )
+    embed.set_footer(text="SIMKL Tracker · Daily and weekly challenges")
+    try:
+        await channel.send(embed=embed,allowed_mentions=discord.AllowedMentions(users=True,roles=False,everyone=False))
+    except Exception:
+        log.exception("Could not send challenge reward notification for user %s in guild %s.",uid,guild_id_value)
+        return False
+    await storage.ack_challenge_notifications(uid,{item["key"] for item in pending})
+    return True
+
+
+async def notify_community_rewards(guild_id_value,channel,notification):
+    challenge=CHALLENGES.get(notification.get("kind"),CHALLENGES["episodes"])
+    unit=challenge["unit"]
+    members=notification["members"] if notification["initial"] else [
+        uid for uid in notification["members"] if notification["deltas"].get(uid)
+    ]
+    if not members:
+        return True
+    for offset in range(0,len(members),20):
+        lines=[]
+        for uid in members[offset:offset+20]:
+            if notification["initial"]:
+                watches=notification["contributions"].get(uid,0)
+                lines.append(f"<@{uid}> · {watches:,} {unit}{'s' if watches!=1 else ''} · **+{int(notification['awards'].get(uid,0)):,} XP**")
+            else:
+                delta=int(notification["deltas"][uid])
+                lines.append(f"<@{uid}> · **{delta:+,} XP**")
+        embed=discord.Embed(
+            title="Community Challenge Completed" if notification["initial"] else "Community Challenge Rewards Updated",
+            description=(
+                f"Week of **{notification['key']}** · {challenge['name']} · {notification['target']:,} {unit} goal\n"
+                f"**{notification['pool']:,} XP pool** shared by contribution\n\n"
+                +"\n".join(lines)
+            ),
+            color=0xC9DCF0,
+        )
+        embed.set_footer(text="SIMKL Tracker · Community challenge")
+        try:
+            await channel.send(embed=embed,allowed_mentions=discord.AllowedMentions(users=True,roles=False,everyone=False))
+        except Exception:
+            log.exception("Could not announce community reward for guild %s, week %s.",guild_id_value,notification["key"])
+            return False
+    await storage.ack_community_notification(guild_id_value,notification["key"],notification["awards"])
+    return True
+
+
 async def refresh_community_state(guild_id_value):
     if not await feature_enabled(guild_id_value,"community"):
         return None
@@ -1690,11 +1817,14 @@ async def refresh_community_state(guild_id_value):
     now=datetime.now(timezone.utc)
     key,start,end=community_week(now,zone)
     state=await storage.get_community_state(guild_id_value,key,start,end,now)
+    channel_id=await storage.get_channel(guild_id_value)
+    channel=bot.get_channel(int(channel_id)) if channel_id else None
+    if channel:
+        for notification in state.get("pending_notifications",[]):
+            await notify_community_rewards(guild_id_value,channel,notification)
     for change in state.get("changes",[]):
         if change["delta"] <= 0:
             continue
-        channel_id=await storage.get_channel(guild_id_value)
-        channel=bot.get_channel(int(channel_id)) if channel_id else None
         if channel:
             progression=await storage.get_progression(change["uid"])
             for number in await storage.claim_prestige_notifications(change["uid"]):
@@ -1977,7 +2107,7 @@ async def simkl_challenges(i):
     await i.response.send_message(embed=e)
 
 
-@bot.tree.command(name="simkl-community", description="View this server's weekly cooperative episode challenge.")
+@bot.tree.command(name="simkl-community", description="View this server's rotating weekly watch challenge.")
 async def simkl_community(i):
     g=guild_id(i)
     if not g:
@@ -1990,21 +2120,23 @@ async def simkl_community(i):
         return
     total=state["total"]
     target=state["target"]
+    challenge=CHALLENGES.get(state.get("kind"),CHALLENGES["episodes"])
+    unit=challenge["unit"]
     filled=min(20,round(20*total/target))
     bar="█"*filled+"░"*(20-filled)
     ends=datetime.fromisoformat(state["end"])
     contributors=sorted(state["contributions"].items(),key=lambda item:(-item[1],item[0]))
-    rows=[f"<@{uid}> · **{count:,}** episode{'s' if count!=1 else ''}" for uid,count in contributors[:10]]
-    description=(f"**Watch {target:,} episodes together this week**\n{bar}\n"
-                 f"**{total:,} / {target:,}** episodes · **{state['pool']:,} XP pool**\n"
+    rows=[f"<@{uid}> · **{count:,}** {unit}{'s' if count!=1 else ''}" for uid,count in contributors[:10]]
+    description=(f"**{challenge['name']}: {target:,} {unit}s together this week**\n{bar}\n"
+                 f"**{total:,} / {target:,}** {unit}s · **{state['pool']:,} XP pool**\n"
                  f"Ends {discord.utils.format_dt(ends,style='R')} · {discord.utils.format_dt(ends,style='F')}\n\n"
-                 f"Your contribution: **{state['contributions'].get(str(i.user.id),0):,}** episodes")
+                 f"Your contribution: **{state['contributions'].get(str(i.user.id),0):,}** {unit}s")
     if state["status"]=="goal_reached":
         description+="\n**Goal reached!** The pool is distributed by contribution after the week ends."
     elif state["status"]=="active":
-        description+="\nContribute at least one episode before the deadline to qualify if the goal is reached."
+        description+=f"\nContribute at least one {unit} before the deadline to qualify if the goal is reached."
     e=discord.Embed(title=f"{i.guild.name} · Community Challenge",description=description,color=0xC9DCF0)
-    e.add_field(name="Contributors",value="\n".join(rows) if rows else "No episodes contributed yet.",inline=False)
+    e.add_field(name="Contributors",value="\n".join(rows) if rows else f"No {unit}s contributed yet.",inline=False)
     e.set_footer(text="Server-local weekly goal · bonus XP is added to normal watch XP")
     await i.followup.send(embed=e,allowed_mentions=discord.AllowedMentions.none())
 
@@ -2717,14 +2849,17 @@ async def _recommendation_sources(uid,user,token,media_filter):
                 if tmdb_id is None:
                     continue
                 status=item.get("status")
-                if status in {"watching","completed","dropped","plantowatch"}:
+                if status in {"watching","completed","dropped","plantowatch","hold"}:
                     excluded.add(("movie",int(tmdb_id)))
-                if status not in {"plantowatch","dropped"} and (status in {"watching","completed"} or item.get("last_watched_at")):
+                if status not in {"plantowatch","dropped","hold"} and (status in {"watching","completed"} or item.get("last_watched_at")):
                     sources.append({
                         "kind":"movie",
                         "tmdb_id":int(tmdb_id),
+                        "title":media.get("title") or "a watched movie",
                         "watched_at":item.get("last_watched_at") or "",
                         "anime":media_filter=="anime",
+                        "media_type":"movies", "rating":item.get("user_rating"),
+                        "genres":media.get("genres") or item.get("genres") or [],
                     })
                 continue
 
@@ -2737,14 +2872,17 @@ async def _recommendation_sources(uid,user,token,media_filter):
                 if tmdb_id is None:
                     continue
                 status=movie_item.get("status")
-                if status in {"watching","completed","dropped","plantowatch"}:
+                if status in {"watching","completed","dropped","plantowatch","hold"}:
                     excluded.add(("movie",int(tmdb_id)))
-                if status not in {"plantowatch","dropped"} and (status in {"watching","completed"} or movie_item.get("last_watched_at")):
+                if status not in {"plantowatch","dropped","hold"} and (status in {"watching","completed"} or movie_item.get("last_watched_at")):
                     sources.append({
                         "kind":"movie",
                         "tmdb_id":int(tmdb_id),
+                        "title":media.get("title") or "a watched movie",
                         "watched_at":movie_item.get("last_watched_at") or "",
                         "anime":media_filter=="anime" or media_type=="anime",
+                        "media_type":"anime", "rating":movie_item.get("user_rating"),
+                        "genres":media.get("genres") or movie_item.get("genres") or [],
                     })
 
             for show_item in episode_items:
@@ -2756,24 +2894,27 @@ async def _recommendation_sources(uid,user,token,media_filter):
                 if tmdb_id is None:
                     continue
                 status=show_item.get("status")
-                if status in {"watching","completed","dropped","plantowatch"}:
+                if status in {"watching","completed","dropped","plantowatch","hold"}:
                     excluded.add(("tv",int(tmdb_id)))
                 latest=_latest_watched_episode(show_item)
-                if status not in {"plantowatch","dropped"} and (status in {"watching","completed"} or show_item.get("last_watched_at") or latest):
+                if status not in {"plantowatch","dropped","hold"} and (status in {"watching","completed"} or show_item.get("last_watched_at") or latest):
                     watched_at=show_item.get("last_watched_at") or (latest[0].isoformat() if latest else "")
                     sources.append({
                         "kind":"tv",
                         "tmdb_id":int(tmdb_id),
+                        "title":media.get("title") or "a watched series",
                         "watched_at":watched_at,
-                        "anime":media_filter=="anime",
+                        "anime":media_type=="anime",
+                        "media_type":media_type, "rating":show_item.get("user_rating"),
+                        "genres":media.get("genres") or show_item.get("genres") or [],
                     })
 
-    sources.sort(key=lambda item:item.get("watched_at") or "",reverse=True)
+    sources=select_sources(sources)
     log.info(
         "Recommendation sources for user %s: %d sources, %d exclusions, filter=%s",
         uid,len(sources),len(excluded),media_filter,
     )
-    return sources[:8],excluded,token
+    return sources,excluded,token
 
 
 async def _get_recommendation_candidates(sources,excluded,media_filter):
@@ -2782,6 +2923,8 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
     total_excluded=0
     total_filtered=0
     total_invalid=0
+    kinds=sorted({source["kind"] for source in sources})
+    genre_maps=dict(zip(kinds,await asyncio.gather(*(tmdb.get_genres(kind) for kind in kinds))))
 
     for source in sources:
         if source["kind"]=="movie":
@@ -2798,16 +2941,17 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
         # user's history, while /similar still has fresh candidates.
         results=[]
         seen_ids=set()
-        for result in (recommendation_results or []) + (similar_results or []):
-            try:
-                result_id=int(result.get("id"))
-            except (TypeError,ValueError):
-                total_invalid+=1
-                continue
-            if result_id in seen_ids:
-                continue
-            seen_ids.add(result_id)
-            results.append(result)
+        for channel,group in (("recommendation",recommendation_results),("similar",similar_results)):
+            for result in group or []:
+                try:
+                    result_id=int(result.get("id"))
+                except (TypeError,ValueError):
+                    total_invalid+=1
+                    continue
+                if result_id in seen_ids:
+                    continue
+                seen_ids.add(result_id)
+                results.append((result,channel))
 
         log.info(
             "Recommendation lookup: %s TMDB=%s returned %d recommendation(s) + %d similar title(s) = %d unique candidate(s).",
@@ -2819,7 +2963,7 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
         )
 
         total_raw+=len(results)
-        for result in results:
+        for result,channel in results:
             try:
                 result_id=int(result.get("id"))
             except (TypeError,ValueError):
@@ -2828,9 +2972,9 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
             if (kind,result_id) in excluded:
                 total_excluded+=1
                 continue
-            if media_filter=="anime" and kind=="tv":
+            if media_filter=="anime":
                 origin=result.get("origin_country") or []
-                if "JP" not in origin and result.get("original_language")!="ja":
+                if ("JP" not in origin and result.get("original_language")!="ja") or 16 not in (result.get("genre_ids") or []):
                     total_filtered+=1
                     continue
             if not result.get("name") and not result.get("title"):
@@ -2839,14 +2983,23 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
 
             key=(kind,result_id)
             entry=candidates.get(key)
+            source_genres={str(genre).casefold() for genre in source.get("genres") or []}
+            candidate_genres={genre_maps.get(kind,{}).get(int(genre),"") for genre in result.get("genre_ids") or []}
+            shared=sorted(name for name in candidate_genres if name and name.casefold() in source_genres)
+            match={"title":source["title"],"rating":rating_value(source.get("rating")),
+                   "weight":source_weight(source,channel),"genres":shared,
+                   "source_id":(source["kind"],source["tmdb_id"])}
             if entry is None:
                 entry=dict(result)
                 entry["_recommendation_kind"]=kind
-                entry["_sources"]=1
-                entry["_anime"]=bool(source.get("anime"))
+                entry["_matches"]=[match]
+                entry["_matched_genres"]=set(shared)
+                entry["_anime"]=bool(source.get("anime") and result.get("original_language")=="ja" and 16 in (result.get("genre_ids") or []))
             else:
-                entry["_sources"]+=1
-                entry["_anime"]=entry.get("_anime",False) or bool(source.get("anime"))
+                if not any(existing["source_id"]==match["source_id"] for existing in entry["_matches"]):
+                    entry["_matches"].append(match)
+                entry["_matched_genres"].update(shared)
+                entry["_anime"]=entry.get("_anime",False) or bool(source.get("anime") and result.get("original_language")=="ja" and 16 in (result.get("genre_ids") or []))
                 if float(result.get("vote_average") or 0) > float(entry.get("vote_average") or 0):
                     entry["vote_average"]=result.get("vote_average")
                     entry["vote_count"]=result.get("vote_count")
@@ -2866,16 +3019,7 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
         list(candidates.keys())[:10],
     )
 
-    ranked=sorted(
-        candidates.values(),
-        key=lambda item:(
-            -int(item.get("_sources",1)),
-            -float(item.get("vote_average") or 0),
-            -float(item.get("popularity") or 0),
-            str(item.get("name") or item.get("title") or "").casefold(),
-        ),
-    )
-    return ranked
+    return rank_candidates(list(candidates.values()))
 
 
 @bot.tree.command(
@@ -2929,7 +3073,8 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
             )
             return
 
-        selected=recommendations[:5]
+        selected=recommendation_lineup(recommendations)
+        detail_cache={}
 
         async def recommendation_ratings(result):
             if mdblist is None or result.get("id") is None:
@@ -2949,36 +3094,76 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
                 )
                 return {}
 
-        rating_results=await asyncio.gather(
-            *(recommendation_ratings(result) for result in selected)
-        )
+        async def destination(result):
+            kind=result["_recommendation_kind"]
+            page=f"https://www.themoviedb.org/{'movie' if kind=='movie' else 'tv'}/{int(result['id'])}"
+            try:
+                resolved=await simkl.resolve_title_url(result["id"],kind)
+            except Exception:
+                log.debug("Recommendation link resolution failed for TMDB=%s",result["id"],exc_info=True)
+                resolved=None
+            return resolved or page, bool(resolved)
 
-        lines=[]
-        for index,(result,ratings) in enumerate(zip(selected,rating_results),1):
+        async def render_pick(result,index,total):
+            key=(result["_recommendation_kind"],result["id"])
+            if key not in detail_cache:
+                ratings,link=await asyncio.gather(recommendation_ratings(result),destination(result))
+                detail_cache[key]=(ratings,link)
+            ratings,(result_url,on_simkl)=detail_cache[key]
             title=result.get("name") or result.get("title") or "Untitled"
             rating_parts=[]
             imdb_rating=ratings.get("imdb")
             if imdb_rating is not None:
-                rating_parts.append(f"⭐ IMDb **{imdb_rating:.1f}**")
+                rating_parts.append(f"⭐ IMDb {float(imdb_rating):.1f}/10")
             if result.get("_anime"):
                 mal_rating=ratings.get("myanimelist")
                 if mal_rating is not None:
-                    rating_parts.append(f"🌸 MAL **{mal_rating:.1f}**")
-            rating_text=f" · {' · '.join(rating_parts)}" if rating_parts else ""
-            source_count=int(result.get("_sources",1))
-            reason=f"matches **{source_count}** watched title{'s' if source_count != 1 else ''}"
+                    rating_parts.append(f"🌸 MAL {float(mal_rating):.1f}/10")
+            matches=sorted(result.get("_matches") or [],key=lambda match:-match["weight"])
+            reasons=[]
+            for match in matches[:2]:
+                own_rating=match.get("rating")
+                if own_rating and own_rating>=8:
+                    reasons.append(f"you rated *{match['title']}* {own_rating:g}/10")
+                else:
+                    reasons.append(f"you watched *{match['title']}*")
+            reason="; ".join(reasons) or "Suggested from your watch history"
+            if len(matches)>2:
+                reason+=f"; plus {len(matches)-2} other watched title(s)"
+            shared=sorted(result.get("_matched_genres") or [])
+            if shared:
+                reason+=f"\nShared genre: {', '.join(shared[:2])}"
             release_date=result.get("first_air_date") or result.get("release_date") or ""
-            year=release_date[:4] if release_date else None
-            result_url=simkl_redirect_url(result.get("id"),"movie" if result.get("_recommendation_kind")=="movie" else "tv",title,year)
-            lines.append(f"**{index}.** [{title}]({result_url}){rating_text} — {reason}")
+            year=release_date[:4] if release_date else "Year unknown"
+            kind_label="Movie" if result["_recommendation_kind"]=="movie" else ("Anime" if result.get("_anime") else "TV")
+            votes=int(result.get("vote_count") or 0)
+            tmdb_score=float(result.get("vote_average") or 0)
+            if votes:
+                rating_parts.append(f"TMDB {tmdb_score:.1f}/10 ({votes:,} votes)")
+            overview=" ".join((result.get("overview") or "").split())
+            if len(overview)>700:
+                overview=overview[:697].rsplit(" ",1)[0]+"…"
+            label="Close match" if index<=3 else "Broader discovery" if index==4 else "Wildcard" if index==5 else "More to explore"
+            embed=discord.Embed(
+                title=title,url=result_url,
+                description=overview or "No synopsis available for this title.",
+                color=0xE91E63 if result.get("_anime") else 0xF1C40F if kind_label=="Movie" else 0x3498DB,
+            )
+            embed.set_author(name=f"{i.user.display_name}'s picks · {label}")
+            embed.add_field(name="Why this pick",value=reason,inline=False)
+            embed.add_field(name="Details",value=f"{kind_label} · {year}"+(f"\n{' · '.join(rating_parts)}" if rating_parts else ""),inline=False)
+            if not on_simkl:
+                embed.add_field(name="Link",value="This title isn't matched on Simkl yet. The title opens its exact TMDB entry.",inline=False)
+            poster=result.get("poster_path")
+            if poster and poster.startswith("/"):
+                embed.set_thumbnail(url=f"https://image.tmdb.org/t/p/w500{poster}")
+            embed.set_footer(text=f"{index} of {total} · Based on your SIMKL watch history")
+            return embed
 
-        embed=discord.Embed(
-            title=f"🧠 {i.user.display_name} · Recommendations",
-            description="\n".join(lines),
-            color=0x5865F2,
-        )
-        embed.set_footer(text="Personalized from your SIMKL watch history · IMDb ratings")
-        await i.followup.send(embed=embed,ephemeral=True)
+        view=RecommendationView(i.user.id,selected,recommendations,render_pick)
+        view.message=await i.followup.send(embed=await render_pick(selected[0],1,len(selected)),
+                                           view=view,ephemeral=True,wait=True,
+                                           allowed_mentions=discord.AllowedMentions.none())
 
     except SimklAuthError:
         await i.followup.send(
@@ -3314,7 +3499,9 @@ async def simkl_status(i):
         last_success=gu.get("last_success_at")
         last_error=gu.get("last_error")
         failures=max(int(gu.get("consecutive_failures",0) or 0),0)
-        if failures:
+        if failures>=MAX_CONSECUTIVE_FAILURES:
+            health_state=f"paused · {failures} consecutive failure(s); automatic polling skipped until `/simkl-checknow` succeeds or the user relinks"
+        elif failures:
             health_state=f"degraded · {failures} consecutive failure(s)"
         elif last_success:
             health_state="healthy"
@@ -3351,7 +3538,7 @@ async def simkl_checknow(i):
     if poll_lock.locked(): await i.response.send_message("A SIMKL activity check is already running.",ephemeral=True); return
     last_checknow_at=time.monotonic()
     await i.response.send_message("Checking this server's SIMKL activity now...",ephemeral=True)
-    posted=await poll_all(g,force_reconcile=True)
+    posted=await poll_all(g,force_reconcile=True,ignore_failure_threshold=True)
     await i.followup.send(f"Done. Posted **{posted}** new activity item(s). Check the bot logs if this says 0.",ephemeral=True)
 
 POLL_RETRY_DELAY_SECONDS=60

@@ -9,8 +9,10 @@ SIMKL API client for the Discord watch activity bot.
 """
 
 import asyncio
+from collections import Counter
 import json
 import logging
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -49,6 +51,7 @@ class SimklClient:
     def __init__(self, client_id: str):
         self.client_id = client_id
         self._session: aiohttp.ClientSession | None = None
+        self.request_counts: Counter[str] = Counter()
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Return the shared HTTP session, creating it if needed."""
@@ -75,6 +78,35 @@ class SimklClient:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         return headers
+
+    async def resolve_title_url(self, tmdb_id: int, kind: str) -> str | None:
+        """Resolve an external ID to a real title page, never a search fallback."""
+        try:
+            tmdb_id = int(tmdb_id)
+        except (TypeError, ValueError):
+            return None
+        session = await self._get_session()
+        try:
+            async with session.get(
+                f"{API_BASE}/redirect",
+                params=self._params(to="simkl", tmdb=tmdb_id,
+                                    type="movie" if kind == "movie" else "show"),
+                headers=self._headers(), allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as response:
+                if response.status not in (301, 302):
+                    return None
+                location = response.headers.get("Location", "")
+                parsed = urlparse("https:" + location if location.startswith("//") else location)
+                parts = parsed.path.strip("/").split("/")
+                if (parsed.scheme == "https" and parsed.netloc == "simkl.com"
+                        and len(parts) >= 2 and parts[0] in {"tv", "anime", "movies"}
+                        and parts[1].isdigit()
+                        and (kind != "movie" or parts[0] in {"movies", "anime"})):
+                    return f"https://simkl.com/{parts[0]}/{parts[1]}"
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            log.debug("SIMKL redirect lookup failed for TMDB %s", tmdb_id, exc_info=True)
+        return None
 
     def _params(self, **extra) -> dict:
         """Build common SIMKL API query parameters (identifies the app)."""
@@ -119,6 +151,10 @@ class SimklClient:
 
         for attempt in range(4):
             try:
+                category=("activities" if path == "/sync/activities" else
+                          "full_history" if path.startswith("/sync/all-items/") and "date_from" not in request_params else
+                          "history_delta" if path.startswith("/sync/all-items/") else "other")
+                self.request_counts[category]+=1
                 async with session.get(
                     f"{API_BASE}{path}",
                     params=request_params,

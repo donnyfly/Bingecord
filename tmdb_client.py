@@ -96,6 +96,7 @@ class TmdbClient:
             tuple,
             dict | None,
         ] = {}
+        self._genre_cache: dict[str, dict[int, str]] = {}
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Return the shared HTTP session, creating it if needed."""
@@ -1288,6 +1289,18 @@ class TmdbClient:
     # ------------------------------------------------------------------
     # Recommendations
     # ------------------------------------------------------------------
+
+    async def get_genres(self, kind: str) -> dict[int, str]:
+        """Map TMDB genre IDs to names; cache across recommendation requests."""
+        kind = "movie" if kind == "movie" else "tv"
+        if kind not in self._genre_cache:
+            data = await self._get_json(f"{API_BASE}/genre/{kind}/list", {"language": "en-US"})
+            if data:
+                self._genre_cache[kind] = {
+                    int(row["id"]): row["name"] for row in data.get("genres", [])
+                    if row.get("id") is not None and row.get("name")
+                }
+        return self._genre_cache.get(kind, {})
 
     async def get_tv_recommendations(self, series_id, page=1) -> list[dict]:
         """Return TMDB recommendations for a TV series."""

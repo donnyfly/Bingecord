@@ -34,6 +34,11 @@ def together_embed(activities):
     first = activities[0]
     embed = first.embed.copy()
     embed.set_author(name='Watched Together')
+    if not embed.thumbnail or not embed.thumbnail.url:
+        for activity in activities[1:]:
+            if activity.embed.thumbnail and activity.embed.thumbnail.url:
+                embed.set_thumbnail(url=activity.embed.thumbnail.url)
+                break
     all_rewatched = all(item.rewatched for item in activities)
     verb = 'rewatched' if all_rewatched else 'watched'
     lines = [f'{mentions([item.user for item in activities])} {verb} {first.subject} together']

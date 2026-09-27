@@ -39,6 +39,7 @@ def test_prestige_profile_uses_rank_accent_and_distinct_backdrop():
         snapshot=profile_snapshot(stats,{"xp":xp_for_level(43),"prestige":prestige}, {},0,0,today=date(2026,9,26))
         card=Image.open(render_profile_png("Viewer",snapshot)).convert("RGB")
         assert card.getpixel((250,117))==accent_for_tier(43,prestige)
+        assert card.getpixel((986,45))==prestige_style(prestige)[0]
         cards.append(card.tobytes())
     assert len(set(cards))==4
 
