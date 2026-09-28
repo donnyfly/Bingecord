@@ -144,3 +144,40 @@ def test_deleted_watch_revokes_earned_challenge_reward(tmp_path, monkeypatch):
         assert not after["challenge_completions"]
 
     asyncio.run(run())
+
+
+def test_statistics_follow_selected_provider_while_xp_stays_shared(tmp_path, monkeypatch):
+    async def run():
+        monkeypatch.setattr(storage_module, "DATA_PATH", str(tmp_path / "store.json"))
+        store=storage_module.Storage()
+        await store.link_user("123","42","token",None,"simkl-user","2026-09-28T00:00:00Z")
+        await store.record_watch("123","42","movie","SIMKL Film","movies:100",
+                                 "2026-09-27T10:00:00Z")
+        await store.award_watch_xp("42","movie:movies:100:2026-09-27T10:00:00Z",
+                                   "movie","SIMKL Film","2026-09-27T10:00:00Z",300)
+        await store.link_wetrakr("123","42",{"access_token":"a","refresh_token":"r"},
+                                 {"id":19,"user":{"username":"we-user"}})
+        await store.reconcile_wetrakr_plays("123","42",[{
+            "source_event_id":"we-1","media_type":"episode","title":"WeTrakr Show",
+            "show_id":55,"ids":{"tmdb":555},"item_key":"wetrakr:episode:55:1:1",
+            "watched_at":"2026-09-27T11:00:00Z",
+        }])
+
+        simkl_stats=await store.get_statistics("123","42")
+        assert simkl_stats["movies_watched"] == 1
+        assert simkl_stats["episodes_watched"] == 0
+
+        assert await store.set_activity_provider("123","42","wetrakr")
+        wetrakr_stats=await store.get_statistics("123","42")
+        assert wetrakr_stats["movies_watched"] == 0
+        assert wetrakr_stats["episodes_watched"] == 1
+
+        guild_row=(await store.get_guild_statistics("123"))[0]
+        board_row=(await store.get_guild_leaderboard_snapshot("123"))[0]
+        assert guild_row["statistics"]["episodes_watched"] == 1
+        assert board_row["episodes"] == 1
+        assert guild_row["simkl_username"] == "we-user"
+
+        shared=await store.get_progression("42")
+        assert shared["lifetime_xp"] == 400
+    asyncio.run(run())

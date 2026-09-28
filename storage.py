@@ -196,6 +196,21 @@ def _rebuild_watch_statistics(events: dict, timezone_name: str | None) -> dict:
     return stats
 
 
+def _statistics_for_provider(guild_user: dict, provider: str, timezone_name: str | None) -> dict:
+    """Build a read-only statistics view for the selected activity provider."""
+    stats=guild_user.get("statistics") or _default_statistics()
+    events=stats.get("watch_events")
+    if not isinstance(events,dict):
+        return copy.deepcopy(stats) if provider != "wetrakr" else _default_statistics()
+    want_wetrakr=provider == "wetrakr"
+    filtered={
+        key: copy.deepcopy(event)
+        for key,event in events.items()
+        if (str(key).startswith("wetrakr:")) == want_wetrakr
+    }
+    return _rebuild_watch_statistics(filtered,timezone_name)
+
+
 def _record_watch_stats(stats: dict, media_type: str, title: str, item_key: str,
                         watched_at: str, genres, timezone_name: str | None) -> bool:
     event={"media_type":media_type,"title":title or "Untitled","item_key":item_key,"watched_at":watched_at}
@@ -595,12 +610,15 @@ class Storage:
                 if any((other.get("users") or {}).get(uid, {}).get("wetrakr_linked")
                        for other in self._data["guilds"].values()):
                     raise ValueError("Unlink the existing WeTrakr account in all servers before switching accounts")
+            account_user=account.get("user") if isinstance(account.get("user"),dict) else {}
+            account_info=account.get("info") if isinstance(account.get("info"),dict) else {}
             user["wetrakr"] = {
                 "access_token": tokens["access_token"],
                 "refresh_token": tokens["refresh_token"],
                 "expires_at": tokens.get("expires_at"),
-                "account_id": account.get("id"),
-                "username": account.get("username") or (account.get("info") or {}).get("username") or "WeTrakr user",
+                "account_id": account.get("id") or account_user.get("id"),
+                "username": account.get("username") or account_user.get("username") or account_info.get("username") or "WeTrakr user",
+                "profile_url": account.get("profile_url") or account_user.get("profile_url"),
             }
             if uid not in guild["users"]:
                 guild["users"][uid] = _default_guild_user()
@@ -882,6 +900,26 @@ class Storage:
                 return []
             return copy.deepcopy(list(user["progression"].get("wetrakr_plays", {}).values()))
 
+    async def has_wetrakr_show_history(self, discord_user_id: str, show_id=None, ids=None) -> bool:
+        """Return whether WeTrakr already has an episode play for this parent show."""
+        async with _lock:
+            user=self._user(str(discord_user_id))
+            if not user:
+                return False
+            expected_show=str(show_id) if show_id is not None else None
+            expected_ids={str(k):str(v) for k,v in (ids or {}).items() if v is not None}
+            for play in user["progression"].get("wetrakr_plays",{}).values():
+                if play.get("media_type") not in {"episode","anime_episode"}:
+                    continue
+                if expected_show is not None and str(play.get("show_id")) == expected_show:
+                    return True
+                play_ids=play.get("show_ids") or play.get("ids") or {}
+                if expected_ids and any(str(play_ids.get(key)) == value
+                                        for key,value in expected_ids.items()
+                                        if play_ids.get(key) is not None):
+                    return True
+            return False
+
     async def reconcile_wetrakr_plays(self, guild_id: str | int, discord_user_id: str,
                                       plays: list[dict], *, complete: bool = False) -> dict:
         """Apply stable WeTrakr play IDs; a full import can revoke deleted plays.
@@ -966,6 +1004,8 @@ class Storage:
                     challenge_events.extend(added_events)
                 ledger[play_id] = {"watched_at": stamp, "xp_key": None if duplicate else xp_key,
                                    "media_type": kind, "title": title, "item_key": item_key,
+                                   "show_id": play.get("show_id"),
+                                   "show_ids": play.get("show_ids") or {},
                                    "ids": play.get("ids") or {}, "genres": _genre_names(play.get("genres"))}
             if complete:
                 for play_id in set(ledger) - observed:
@@ -1497,8 +1537,14 @@ class Storage:
     async def get_statistics(self, guild_id: str | int, discord_user_id: str) -> dict:
         async with _lock:
             self._migrate_legacy_guild_locked(str(guild_id))
+            guild=self._guild(guild_id)
             user = self._guild_user(guild_id, discord_user_id)
-            return copy.deepcopy(user["statistics"]) if user else _default_statistics()
+            if not user:
+                return _default_statistics()
+            return _statistics_for_provider(
+                user,user.get("activity_provider","simkl"),
+                guild.get("timezone") if guild else None,
+            )
 
     async def get_history_import_state(self, guild_id: str | int, discord_user_id: str) -> dict:
         async with _lock:
@@ -1873,13 +1919,16 @@ class Storage:
             for uid, user in guild["users"].items():
                 _normalise_guild_user(user)
                 global_user = self._user(uid) or {}
+                provider=user.get("activity_provider","simkl")
+                stats=_statistics_for_provider(user,provider,guild.get("timezone"))
                 results.append({
                     "discord_user_id": uid,
                     "simkl_username": ((global_user.get("wetrakr") or {}).get("username")
-                                       if user.get("activity_provider")=="wetrakr" else
+                                       if provider=="wetrakr" else
                                        global_user.get("simkl_username")) or uid,
-                    "statistics": copy.deepcopy(user["statistics"]),
-                    "history_seeded":bool(user.get("history_seeded")),
+                    "statistics": stats,
+                    "history_seeded":(bool((user.get("wetrakr_sync") or {}).get("seeded"))
+                                      if provider=="wetrakr" else bool(user.get("history_seeded"))),
                 })
             return results
 
@@ -1895,18 +1944,20 @@ class Storage:
                 _normalise_guild_user(user)
                 global_user=self._user(uid) or {}
                 p=global_user.get("progression") or {}
-                s=user["statistics"]
+                provider=user.get("activity_provider","simkl")
+                stats=_statistics_for_provider(user,provider,guild.get("timezone"))
                 rows.append({
                     "discord_user_id":uid,
                     "simkl_username":((global_user.get("wetrakr") or {}).get("username")
-                                      if user.get("activity_provider")=="wetrakr" else
+                                      if provider=="wetrakr" else
                                       global_user.get("simkl_username")) or uid,
                     "xp":int(p.get("xp",0)),
                     "prestige":int(p.get("prestige",0)),
-                    "episodes":int(s.get("episodes_watched",0)),
-                    "movies":int(s.get("movies_watched",0)),
-                    "anime":int(s.get("anime_episodes_watched",0))+int(s.get("anime_movies_watched",0)),
-                    "history_seeded":bool(user.get("history_seeded")),
+                    "episodes":int(stats.get("episodes_watched",0)),
+                    "movies":int(stats.get("movies_watched",0)),
+                    "anime":int(stats.get("anime_episodes_watched",0))+int(stats.get("anime_movies_watched",0)),
+                    "history_seeded":(bool((user.get("wetrakr_sync") or {}).get("seeded"))
+                                      if provider=="wetrakr" else bool(user.get("history_seeded"))),
                 })
             return rows
 

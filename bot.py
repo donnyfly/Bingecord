@@ -2,7 +2,7 @@ import asyncio, logging, os, random, time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
@@ -168,6 +168,21 @@ def account_id_from_settings(s): return (s.get("account") or {}).get("id") if is
 def simkl_title_url(t,i,slug=None):
     b={"movies":"https://simkl.com/movies","anime":"https://simkl.com/anime"}.get(t,"https://simkl.com/tv")
     return f"{b}/{i}/{slug}" if slug else f"{b}/{i}"
+
+def wetrakr_profile_url(link):
+    link=link or {}
+    username=str(link.get("username") or "").strip()
+    if username and username != "WeTrakr user":
+        return f"https://wetrakr.com/{quote(username,safe='')}"
+    return "https://wetrakr.com/profile"
+
+def wetrakr_title_url(kind,tmdb_id):
+    try:
+        tmdb_id=int(tmdb_id)
+    except (TypeError,ValueError):
+        return None
+    target="movie" if kind in {"movie","movies","anime_movie"} else "show"
+    return f"https://wetrakr.com/tmdb/{target}/{tmdb_id}"
 
 def simkl_redirect_url(tmdb_id,kind,title=None,year=None):
     """Build a direct Simkl redirect URL from a TMDB ID."""
@@ -1476,6 +1491,8 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
     if status not in {None, "planning", "dropped", "paused", "completed"}:
         return True
     p = await prefs(gid, uid)
+    linked_user = await storage.get_user(uid)
+    profile_url = wetrakr_profile_url((linked_user or {}).get("wetrakr"))
     title = change.get("title") or "Untitled"
     ids = change.get("ids") or {}
     poster = image = logo = None
@@ -1484,6 +1501,7 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
     details = {}
     end_details = {}
     season, number = change.get("season"), change.get("episode")
+    source_season, source_number = season, number
     end_season, end_number = None, None
     media_type = change["media_type"]
     if media_type == "episode":
@@ -1521,10 +1539,18 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
     t = "movies" if media_type == "movie" else "shows"
     tmdb_id = ids.get("tmdb")
     mapped_anime = False
+    anime_item = bool(
+        details.get("is_anime")
+        or details.get("type") == "anime"
+        or ids.get("mal")
+        or any(str(g.get("name") if isinstance(g, dict) else g).casefold() == "anime"
+               for g in details.get("genres") or [])
+    )
     tvdb_id = None
     if t == "shows":
         try:
             if await is_wetrakr_anime(parent if media_type == "episode" else details, tmdb_id):
+                anime_item = True
                 t = "anime"
                 if tmdb_id:
                     title = await tmdb.get_tv_title(tmdb_id, prefer_english=True) or title
@@ -1559,6 +1585,16 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
                 logo = await tmdb.get_tv_logo(tmdb_id)
         except Exception:
             log.warning("TMDB WeTrakr artwork lookup failed for %s.", title, exc_info=True)
+    ratings = {}
+    if tmdb_id and (p.get("show_imdb", True) or p.get("show_mal", True)):
+        try:
+            ratings = await (get_movie_ratings(tmdb_id) if media_type == "movie"
+                             else get_show_ratings(tmdb_id))
+            ratings = ratings or {}
+            anime_item = anime_item or ratings.get("mal") is not None
+        except Exception:
+            log.warning("WeTrakr rating lookup failed for TMDB=%s.", tmdb_id, exc_info=True)
+
     stamp = parse_iso(change.get("watched_at") or change.get("action_at"))
     if status:
         verb = {"planning": "Planned to watch", "dropped": "Dropped", "paused": "Paused",
@@ -1585,11 +1621,29 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
         desc = f"Watched {label} of **{title}**" if p["activity_text"] == "detailed" else f"Watched {label}"
         if not episode_end and episode_title and episode_title != title:
             desc += f"\n*{episode_title}*"
-        started_id = str(change.get("show_id"))
-        if started_id in started_ids:
+        def is_first_episode(s, e):
+            try:
+                return int(s) == 1 and int(e) == 1
+            except (TypeError, ValueError):
+                return False
+        started = False
+        if is_first_episode(source_season, source_number) or is_first_episode(season, number):
+            started = not await storage.has_wetrakr_show_history(uid, change.get("show_id"), ids)
+        if p.get("show_imdb", True) and ratings.get("imdb") is not None:
+            desc += f"\n⭐ IMDb {float(ratings['imdb']):.1f}/10"
+        if anime_item and p.get("show_mal", True) and ratings.get("mal") is not None:
+            desc += f"\n🌸 MAL {float(ratings['mal']):.2f}/10"
+        if started:
             desc += "\n\n🆕 Started watching this series."
-    embed = build_embed(t, desc, stamp, name, member, image, None, title,
-                        poster=poster, logo=logo, preferences=p,
+    if status or t == "movies":
+        if p.get("show_imdb", True) and ratings.get("imdb") is not None:
+            desc += f"\n⭐ IMDb {float(ratings['imdb']):.1f}/10"
+        if anime_item and p.get("show_mal", True) and ratings.get("mal") is not None:
+            desc += f"\n🌸 MAL {float(ratings['mal']):.2f}/10"
+    title_url = wetrakr_title_url("movie" if media_type == "movie" else "show", tmdb_id)
+    embed_type = "anime" if anime_item and media_type == "episode" else t
+    embed = build_embed(embed_type, desc, stamp, name, member, image, profile_url, title,
+                        title_url=title_url, poster=poster, logo=logo, preferences=p,
                         status_activity=bool(status), provider="WeTrakr")
     sent = await send_embed(ch, embed, "WeTrakr activity")
     if sent and media_type == "episode":
@@ -2284,7 +2338,7 @@ WEEKLY_PERIOD_CHOICES=[
     app_commands.Choice(name="Previous week",value="previous"),
 ]
 
-@bot.tree.command(name="tracker-weekly-recap",description="(Admin) Post a weekly SIMKL watch recap.")
+@bot.tree.command(name="tracker-weekly-recap",description="(Admin) Post a weekly tracker watch recap.")
 @app_commands.choices(period=WEEKLY_PERIOD_CHOICES)
 @app_commands.describe(period="Choose the week to generate; use this to test without waiting for the weekly schedule")
 async def simkl_weekly_recap(i, period: app_commands.Choice[str] | None = None):
@@ -2386,7 +2440,7 @@ async def simkl_community(i):
     e.set_footer(text="Server-local weekly goal · bonus XP is added to normal watch XP")
     await i.followup.send(embed=e,allowed_mentions=discord.AllowedMentions.none())
 
-@bot.tree.command(name="tracker-user-reset",description="Reset your SIMKL tracking history for this server.")
+@bot.tree.command(name="tracker-user-reset",description="Reset your tracker history for this server.")
 @app_commands.describe(confirm="Confirm that you want to reset your server-local tracking state")
 async def simkl_user_reset(i, confirm: bool = False):
     g=guild_id(i)
@@ -2427,7 +2481,7 @@ async def simkl_user_reset(i, confirm: bool = False):
     )
 
 
-@bot.tree.command(name="tracker-achievements",description="Show your SIMKL achievements.")
+@bot.tree.command(name="tracker-achievements",description="Show your tracker achievements.")
 @app_commands.describe(user="Optional server member to view")
 async def simkl_achievements(i,user: discord.Member | None = None):
     g=guild_id(i)
@@ -2633,7 +2687,7 @@ LEADERBOARD_CHOICES=[
     app_commands.Choice(name="Prestige",value="prestige"),
 ]
 
-@bot.tree.command(name="tracker-leaderboard",description="Show the server's SIMKL watch leaderboard.")
+@bot.tree.command(name="tracker-leaderboard",description="Show the server's tracker watch leaderboard.")
 @app_commands.choices(category=LEADERBOARD_CHOICES)
 async def simkl_leaderboard(i,category: app_commands.Choice[str] | None = None):
     g=guild_id(i)
@@ -2798,7 +2852,7 @@ def build_server_stats(rows, guild_name, *, with_visual=False):
     return embed
 
 
-@bot.tree.command(name="tracker-server-stats",description="Show this server's combined SIMKL watch statistics.")
+@bot.tree.command(name="tracker-server-stats",description="Show this server's tracker watch statistics.")
 async def simkl_server_stats(i):
     g=guild_id(i)
     if not g:
@@ -3029,15 +3083,29 @@ async def simkl_watching(i,type: app_commands.Choice[str] | None = None):
             media_filter=type.value if type else "all"
             targets=("movies",) if media_filter=="movies" else ("shows", "movies") if media_filter=="all" else ("shows",)
             rows=await wetrakr_tracking_rows(uid,"watching",targets)
-            if not rows:
-                await i.followup.send("You're not currently watching anything on WeTrakr.",ephemeral=True)
+            display_rows=[]
+            for target,row in rows:
+                media=(row.get("movie") if target=="movies" else row.get("show")) or row
+                ids=media.get("ids") or {}
+                anime=target=="shows" and await is_wetrakr_anime(media,ids.get("tmdb"))
+                if media_filter=="anime" and not anime:
+                    continue
+                if media_filter=="shows" and anime:
+                    continue
+                title=media.get("title") or row.get("title") or "Untitled"
+                url=wetrakr_title_url("movie" if target=="movies" else "show",ids.get("tmdb"))
+                display_rows.append((target,anime,title,url))
+            if not display_rows:
+                await i.followup.send("You're not currently watching anything matching that filter on WeTrakr.",ephemeral=True)
                 return
+            display_rows.sort(key=lambda row:row[2].casefold())
             lines=[]
-            for target,row in rows[:15]:
-                title=row.get("title") or (row.get("show") or row.get("movie") or {}).get("title") or "Untitled"
-                lines.append(f"{'🎬' if target=='movies' else '📺'} **{title}**")
-            if len(rows)>15:
-                lines.append(f"…and **{len(rows)-15}** more.")
+            for target,anime,title,url in display_rows[:15]:
+                emoji="🎬" if target=="movies" else "🌸" if anime else "📺"
+                title_text=f"[{title}]({url})" if url else f"**{title}**"
+                lines.append(f"{emoji} {title_text}")
+            if len(display_rows)>15:
+                lines.append(f"…and **{len(display_rows)-15}** more.")
             embed=discord.Embed(title=f"👀 {i.user.display_name} · Currently Watching",
                                 description="\n".join(lines),color=0x5865F2)
             embed.set_footer(text="Live from WeTrakr · Currently watching")
@@ -3373,7 +3441,7 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
         )
         if not recommendations:
             await i.followup.send(
-                "I couldn't find a fresh recommendation from your current SIMKL history. Try adding more watched titles.",
+                f"I couldn't find a fresh recommendation from your current {'WeTrakr' if active_provider=='wetrakr' else 'SIMKL'} history. Try adding more watched titles.",
                 ephemeral=True,
             )
             return
@@ -3403,7 +3471,8 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
             kind=result["_recommendation_kind"]
             page=f"https://www.themoviedb.org/{'movie' if kind=='movie' else 'tv'}/{int(result['id'])}"
             if active_provider=="wetrakr":
-                return page, True
+                resolved=wetrakr_title_url(kind,result["id"])
+                return resolved or page, bool(resolved)
             try:
                 resolved=await simkl.resolve_title_url(result["id"],kind)
             except Exception:
@@ -3416,7 +3485,7 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
             if key not in detail_cache:
                 ratings,link=await asyncio.gather(recommendation_ratings(result),destination(result))
                 detail_cache[key]=(ratings,link)
-            ratings,(result_url,on_simkl)=detail_cache[key]
+            ratings,(result_url,on_tracker)=detail_cache[key]
             title=result.get("name") or result.get("title") or "Untitled"
             rating_parts=[]
             imdb_rating=ratings.get("imdb")
@@ -3459,8 +3528,9 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
             embed.set_author(name=f"{i.user.display_name}'s picks · {label}")
             embed.add_field(name="Why this pick",value=reason,inline=False)
             embed.add_field(name="Details",value=f"{kind_label} · {year}"+(f"\n{' · '.join(rating_parts)}" if rating_parts else ""),inline=False)
-            if not on_simkl:
-                embed.add_field(name="Link",value="This title isn't matched on Simkl yet. The title opens its exact TMDB entry.",inline=False)
+            if not on_tracker:
+                provider_name="WeTrakr" if active_provider=="wetrakr" else "SIMKL"
+                embed.add_field(name="Link",value=f"This title isn't matched on {provider_name} yet. The title opens its exact TMDB entry.",inline=False)
             poster=result.get("poster_path")
             if poster and poster.startswith("/"):
                 embed.set_thumbnail(url=f"https://image.tmdb.org/t/p/w500{poster}")
@@ -3514,24 +3584,29 @@ async def simkl_random(
             rows=await wetrakr_tracking_rows(uid,"planning",targets)
             candidates=[]
             for target,row in rows:
-                media=row.get("movie") if target=="movies" else row.get("show")
-                media=media or row
+                media=(row.get("movie") if target=="movies" else row.get("show")) or row
+                ids=media.get("ids") or {}
+                anime=target=="shows" and await is_wetrakr_anime(media,ids.get("tmdb"))
+                if media_filter=="anime" and not anime:
+                    continue
+                if media_filter=="shows" and anime:
+                    continue
                 if genre_filter and not any(genre_filter.casefold()==str(
                         value.get("name") if isinstance(value,dict) else value).casefold()
                         for value in media.get("genres") or []):
                     continue
-                candidates.append((target,media))
+                candidates.append((target,media,anime))
             if not candidates:
                 await i.followup.send("I couldn't find a matching title in your WeTrakr planning list.",ephemeral=True)
                 return
-            target,media=random.choice(candidates)
+            target,media,anime=random.choice(candidates)
             title=media.get("title") or "Untitled"
             ids=media.get("ids") or {}
             tmdb_id=ids.get("tmdb")
-            url=(f"https://www.themoviedb.org/{'movie' if target=='movies' else 'tv'}/{tmdb_id}"
-                 if tmdb_id else None)
+            url=wetrakr_title_url("movie" if target=="movies" else "show",tmdb_id)
+            kind_label="Movie" if target=="movies" else "Anime" if anime else "Series"
             embed=discord.Embed(title=title,url=url,
-                                description=f"Picked from your WeTrakr Plan To Watch · {'Movie' if target=='movies' else 'Series'}",
+                                description=f"Picked from your WeTrakr Plan To Watch · {kind_label}",
                                 color=0x5865F2)
             poster=media.get("poster_path")
             if poster and str(poster).startswith("/"):
