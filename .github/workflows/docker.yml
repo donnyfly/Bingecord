@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - test
+      - experimental
     tags:
       - "v*"
 
@@ -39,6 +40,6 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ github.ref_type == 'tag' && format('ghcr.io/donnyfly/simkltrackerbot:{0}', github.ref_name) || 'ghcr.io/donnyfly/simkltrackerbot:test' }}
+            ${{ github.ref_type == 'tag' && format('ghcr.io/donnyfly/simkltrackerbot:{0}', github.ref_name) || (github.ref_name == 'experimental' && 'ghcr.io/donnyfly/simkltrackerbot:experimental' || 'ghcr.io/donnyfly/simkltrackerbot:test') }}
             ${{ github.ref_type == 'tag' && contains(github.ref_name, '-') && 'ghcr.io/donnyfly/simkltrackerbot:nightly' || format('ghcr.io/donnyfly/simkltrackerbot:{0}', github.sha) }}
             ${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') && 'ghcr.io/donnyfly/simkltrackerbot:latest' || '' }}
