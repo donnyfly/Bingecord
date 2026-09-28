@@ -1616,6 +1616,12 @@ async def poll_wetrakr_all(g=None):
                 member, name = await resolve_member(gid, uid)
                 if not member:
                     continue
+                if await storage.needs_watch_statistics_rebuild(gid, uid):
+                    simkl_user = target["user_data"]
+                    if not simkl_user.get("simkl_token"):
+                        raise ValueError("Legacy watch statistics need a SIMKL history rebuild before WeTrakr import")
+                    simkl_token = await valid_token(uid, simkl_user)
+                    await reconcile_watch_progression(gid, uid, simkl_user, simkl_token, set(MEDIA_TYPES))
                 checked += 1
                 started_ids = set()
                 metadata_cache = {}
