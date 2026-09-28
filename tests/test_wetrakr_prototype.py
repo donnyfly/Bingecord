@@ -87,7 +87,7 @@ def test_play_ids_survive_date_edits_and_status_rollups_do_not_award_watches():
     removed = normalize_journal_entry({**play, "entry_id": "entry-3", "status": "removed"})
     assert first["source_event_id"] == edited["source_event_id"] == removed["source_event_id"]
     assert [first["action"], edited["action"], removed["action"]] == ["added", "updated", "removed"]
-    assert normalize_journal_entry({**play, "type": "show", "play_id": None}) is None
+    assert normalize_journal_entry({**play, "type": "show", "play_id": None})["status"] == "completed"
     assert normalize_journal_entry({**play, "category": "ratings"}) is None
     compact = normalize_compact_play({"type": "episode", "id": 99, "play_id": "stable-play",
                                       "show_id": 11, "season_number": 2, "number": 3,

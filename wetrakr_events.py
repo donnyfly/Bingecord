@@ -10,6 +10,11 @@ def normalize_journal_entry(entry: dict) -> dict | None:
     media_type = entry.get("type")
     if category == "watched":
         play_id = entry.get("play_id")
+        if media_type == "show" and not play_id and status == "added":
+            return {"source": "wetrakr", "change_id": str(entry.get("entry_id") or ""),
+                    "action": "added", "status": "completed", "media_type": "show",
+                    "wetrakr_id": entry.get("id"), "ids": entry.get("ids") or {},
+                    "title": entry.get("title") or "", "action_at": entry.get("action_at")}
         if not play_id or media_type not in {"movie", "episode"}:
             return None
         if status not in {"added", "updated", "removed"}:

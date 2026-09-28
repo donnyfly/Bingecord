@@ -2,8 +2,8 @@
 
 This branch starts from `test` and keeps the existing SIMKL bot behavior. The
 first slice contains an isolated WeTrakr client, normalized watch changes,
-and independent `/wetrakr-link` and `/wetrakr-unlink` commands. Linked accounts
-are not yet polled or posted to Discord.
+and independent `/wetrakr-link` and `/wetrakr-unlink` commands. An opt-in
+read-only activity poller now posts new WeTrakr watches and selected statuses.
 
 ## Configuration
 
@@ -26,8 +26,33 @@ The app key alone cannot read someone's watch history.
   state. A WeTrakr-only user is never accidentally polled as a SIMKL user.
 - `providers.py`: a source-scoped watch change contract and shared target
   selection. Existing SIMKL state and polling retain their old behavior.
-- `wetrakr_auth.py`: an isolated, rotation-safe access token refresh helper.
-  Polling will invoke it when WeTrakr activity ingestion is enabled.
+- `wetrakr_auth.py`: an isolated, rotation-safe access token refresh helper,
+  invoked by WeTrakr polling.
+- `wetrakr_sync.py`: a compact-history baseline and an incremental journal
+  poller. It acknowledges each successfully delivered entry and re-reads with
+  overlap so equal timestamps cannot lose watches.
+
+## Trying activity on experimental
+
+1. Link WeTrakr with `/wetrakr-link` and choose **WeTrakr** with
+   `/tracker-source` in the server. A user with both links defaults to SIMKL
+   until they make this choice.
+2. Run `/wetrakr-checknow` (admin) once to seed the history baseline. This
+   reads compact history but does not post past watches.
+3. Mark a *new* movie or episode watched, or change a planning/dropped/paused
+   status in WeTrakr. Run `/wetrakr-checknow` again or await the poll interval.
+   The journal may lag by several seconds, so retry on the next cycle if needed.
+4. Switch back with `/tracker-source` → SIMKL. The inactive tracker does not
+   post activity. Switching resets its activity baseline without removing
+   either link or the existing SIMKL progression.
+
+WeTrakr events currently post without awarding XP, updating stats, challenges,
+or achievements. WeTrakr watches are not yet combined into Watched Together
+embeds. This protects existing SIMKL progression while cross-provider play
+provenance is designed and verified with real accounts. API calls and payloads
+have been tested with fakes; an end-to-end run requires a linked development
+account. Statuses are source-specific; automatic watching/waiting transitions
+do not create extra status posts.
 
 ## Account isolation
 
@@ -54,10 +79,10 @@ The long-term shape has three boundaries:
    does not automatically double-post or double-award XP. Once title and play
    matching are measured, dual-source merging can be opt-in.
 
-The `providers.py` contract and WeTrakr sync state are preparatory. Current
-polling still runs SIMKL only. Do not select WeTrakr as an active activity
-provider until history seed, incremental journal delivery, and XP provenance
-are implemented and tested.
+The `providers.py` contract is preparatory for moving SIMKL behind the same
+adapter boundary. The current SIMKL poller retains its legacy state and XP
+model; the WeTrakr poller has its own checkpoint and posts only for users who
+select it in that server.
 
 The API is currently beta (1.0.3, 2026-09-27). Check the breaking changelog
 before wiring live traffic. Documentation:
@@ -74,22 +99,14 @@ before wiring live traffic. Documentation:
    `GET /account/settings` should complete while SIMKL continues working.
    Invoke `WeTrakrAuth.access_token` on upcoming private calls and test the
    rotating token with a live account before unattended polling.
-2. Add a per-guild WeTrakr sync checkpoint. On
-   first link, walk compact movie and episode history with `after`, and seed
-   records without announcing historical watches. Store a baseline timestamp
-   from `/sync/last_activities` and account-specific identity.
-3. On later polls, compare last activities, then read the journal from the
-   saved checkpoint (categories: watched, watching, waiting, planning,
-   dropped, paused, ignored). Apply all pages in order. Persist event IDs and
-   checkpoint together after successful delivery. Keep a small overlap for
-   several entries with the same `action_at` and deduplicate by `entry_id`.
-   On `JOURNAL_EXPIRED` (30-day retention), rebuild a compact baseline.
-4. Convert source changes to the existing activity/card pipeline. A `play_id`
-   is one real watch: add, edit, and removal must update the same record.
-   Group episode watches as before and keep status cards separate. Verify
-   WeTrakr's show/season auto-watch cascade with a real account before XP.
-5. Initially allow **one selected activity source** per user/server. Dual-source
-   mode needs cross-provider title matching and a provenance set for every
+2. Validate journal and metadata shapes with live movie, episode, rewatch,
+   status, edit and removal changes; refine artwork and anime classification.
+3. Add per-play XP provenance and statistics with cross-provider deduplication.
+   An edit or removal must update the same `play_id` while respecting SIMKL's
+   reconciliation. Then wire challenges and achievements.
+4. Reuse Watched Together grouping for both providers. Group episodes as
+   before while keeping status cards separate; verify show/season cascades.
+5. Dual-source mode needs cross-provider title matching and a provenance set for every
    canonical watch so duplicate SIMKL/WeTrakr plays do not award XP twice,
    and removing one provider's record cannot remove the other provider's XP.
 6. Measure calls and quota headers during a private pilot. A quiet 10-minute

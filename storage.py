@@ -328,7 +328,8 @@ def _default_guild_user(start_time_iso: str | None = None) -> dict:
     return {
         "simkl_linked": True,
         "wetrakr_linked": False,
-        "wetrakr_sync": {"seeded": False, "checkpoint": None, "recent_entry_ids": []},
+        "activity_provider": "simkl",
+        "wetrakr_sync": {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []},
         "history_seeded": False,
         "history_stats_repaired": False,
         "last_checked": {
@@ -406,11 +407,15 @@ def _normalise_guild_user(user: dict) -> None:
     defaults = _default_guild_user()
     user.setdefault("simkl_linked", True)
     user.setdefault("wetrakr_linked", False)
+    user.setdefault("activity_provider", "simkl" if user.get("simkl_linked", True) else "wetrakr")
+    if user["activity_provider"] not in {"simkl", "wetrakr"}:
+        user["activity_provider"] = "simkl"
     if not isinstance(user.get("wetrakr_sync"), dict):
-        user["wetrakr_sync"] = {"seeded": False, "checkpoint": None, "recent_entry_ids": []}
+        user["wetrakr_sync"] = {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []}
     sync = user["wetrakr_sync"]
     sync.setdefault("seeded", False)
     sync.setdefault("checkpoint", None)
+    sync.setdefault("last_activity", None)
     if not isinstance(sync.get("recent_entry_ids"), list):
         sync["recent_entry_ids"] = []
     user.setdefault("history_seeded", defaults["history_seeded"])
@@ -529,9 +534,10 @@ class Storage:
             if uid not in guild["users"]:
                 guild["users"][uid] = _default_guild_user()
                 guild["users"][uid]["simkl_linked"] = False
+                guild["users"][uid]["activity_provider"] = "wetrakr"
             guild["users"][uid]["wetrakr_linked"] = True
             if not prior or str(prior.get("account_id")) != str(account.get("id")):
-                guild["users"][uid]["wetrakr_sync"] = {"seeded": False, "checkpoint": None, "recent_entry_ids": []}
+                guild["users"][uid]["wetrakr_sync"] = {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []}
             self._dirty = True
         await self.flush()
 
@@ -558,6 +564,8 @@ class Storage:
             if not user or not user.get("wetrakr") or not guild or uid not in guild["users"] or not guild["users"][uid].get("wetrakr_linked"):
                 return False
             guild["users"][uid]["wetrakr_linked"] = False
+            if guild["users"][uid]["activity_provider"] == "wetrakr":
+                guild["users"][uid]["activity_provider"] = "simkl"
             # Keep the guild membership while the SIMKL link still uses it.
             if not guild["users"][uid].get("simkl_linked", True):
                 guild["users"].pop(uid, None)
@@ -739,9 +747,10 @@ class Storage:
             return copy.deepcopy(user) if user else None
 
     async def get_poll_targets(self, guild_id: str | None = None) -> list[dict]:
-        return await self.get_provider_targets("simkl", guild_id)
+        return await self.get_provider_targets("simkl", guild_id, active_only=True)
 
-    async def get_provider_targets(self, provider: str, guild_id: str | None = None) -> list[dict]:
+    async def get_provider_targets(self, provider: str, guild_id: str | None = None,
+                                   active_only: bool = False) -> list[dict]:
         if provider not in {"simkl", "wetrakr"}:
             raise ValueError(f"Unknown tracking provider: {provider}")
         async with _lock:
@@ -755,6 +764,8 @@ class Storage:
                     user = self._user(uid)
                     if not user or not provider_linked(guild["users"][uid], user, provider):
                         continue
+                    if active_only and guild["users"][uid].get("activity_provider", "simkl") != provider:
+                        continue
                     guild_user = self._guild_user(gid, uid)
                     if not guild_user:
                         continue
@@ -766,6 +777,53 @@ class Storage:
                         "guild_user_data": copy.deepcopy(guild_user),
                     })
             return targets
+
+    async def set_activity_provider(self, guild_id: str | int, discord_user_id: str,
+                                    provider: str) -> bool:
+        if provider not in {"simkl", "wetrakr"}:
+            raise ValueError(f"Unknown tracking provider: {provider}")
+        async with _lock:
+            guild_user = self._guild_user(str(guild_id), str(discord_user_id))
+            user = self._user(str(discord_user_id))
+            if not guild_user or not user or not provider_linked(guild_user, user, provider):
+                return False
+            if guild_user.get("activity_provider") != provider:
+                guild_user["activity_provider"] = provider
+                if provider == "wetrakr":
+                    guild_user["wetrakr_sync"] = {"seeded": False, "checkpoint": None,
+                                                  "last_activity": None, "recent_entry_ids": []}
+                elif guild_user.get("history_seeded"):
+                    stamp = datetime.now(timezone.utc).isoformat()
+                    guild_user["last_checked"] = {kind: stamp for kind in ("shows", "anime", "movies")}
+                self._dirty = True
+        await self.flush()
+        return True
+
+    async def save_wetrakr_sync(self, guild_id: str | int, discord_user_id: str,
+                                account_id: str | int, *, seeded=None, checkpoint=None,
+                                last_activity=None, entry_id=None) -> bool:
+        async with _lock:
+            guild_user = self._guild_user(str(guild_id), str(discord_user_id))
+            user = self._user(str(discord_user_id))
+            if not guild_user or not user or not provider_linked(guild_user, user, "wetrakr"):
+                return False
+            if guild_user.get("activity_provider") != "wetrakr" or str(user["wetrakr"]["account_id"]) != str(account_id):
+                return False
+            sync = guild_user["wetrakr_sync"]
+            if seeded is not None:
+                sync["seeded"] = bool(seeded)
+            if checkpoint is not None:
+                sync["checkpoint"] = checkpoint
+            if last_activity is not None:
+                sync["last_activity"] = last_activity
+            if entry_id:
+                ids = sync["recent_entry_ids"]
+                if entry_id not in ids:
+                    ids.append(entry_id)
+                del ids[:-2000]
+            self._dirty = True
+        await self.flush()
+        return True
 
     async def get_channel(self, guild_id: int | str) -> int | None:
         async with _lock:
@@ -913,7 +971,11 @@ class Storage:
             guild = self._guild(guild_id)
             if not guild or str(discord_user_id) not in guild["users"]:
                 return False
-            guild["users"][str(discord_user_id)] = _default_guild_user(start_time_iso)
+            prior = guild["users"][str(discord_user_id)]
+            replacement = _default_guild_user(start_time_iso)
+            for key in ("simkl_linked", "wetrakr_linked", "activity_provider", "wetrakr_sync"):
+                replacement[key] = copy.deepcopy(prior.get(key, replacement[key]))
+            guild["users"][str(discord_user_id)] = replacement
             self._dirty = True
         await self.flush()
         return True
@@ -1545,6 +1607,9 @@ class Storage:
             if not guild_user.get("simkl_linked", True):
                 return False
             guild_user["simkl_linked"] = False
+            if guild_user.get("activity_provider") == "simkl" and guild_user.get("wetrakr_linked"):
+                guild_user["activity_provider"] = "wetrakr"
+                guild_user["wetrakr_sync"] = {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []}
             if not guild_user.get("wetrakr_linked"):
                 del guild["users"][discord_user_id]
 

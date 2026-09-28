@@ -94,6 +94,18 @@ class WeTrakrClient:
         data, _ = await self._request("GET", "/account/settings", token)
         return data
 
+    async def episode(self, episode_id: int | str) -> dict:
+        data, _ = await self._request("GET", f"/episodes/{int(episode_id)}",
+                                      params={"extended": "episode_level_1"})
+        return data
+
+    async def title(self, media_type: str, title_id: int | str) -> dict:
+        if media_type not in {"movie", "show"}:
+            raise ValueError("WeTrakr title must be a movie or show")
+        path = "movies" if media_type == "movie" else "shows"
+        data, _ = await self._request("GET", f"/{path}/{int(title_id)}")
+        return data
+
     async def last_activities(self, token: str) -> dict:
         data, _ = await self._request("GET", "/sync/last_activities", token)
         return data

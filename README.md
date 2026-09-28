@@ -35,6 +35,12 @@ It supports automatic SIMKL syncing, episode grouping, artwork and ratings, pers
 
 ## Commands
 
+The experimental branch also supports `/wetrakr-link`, `/wetrakr-unlink`,
+`/tracker-source` (choose SIMKL or WeTrakr activity per user and server), and
+the admin command `/wetrakr-checknow`. See
+[`docs/WETRAKR_PROTOTYPE.md`](docs/WETRAKR_PROTOTYPE.md) for setup, the
+silent first sync, and current progression limits.
+
 | Command | Who can use it | Purpose |
 | --- | --- | --- |
 | `/simkl-link` | Everyone | Link your SIMKL account |

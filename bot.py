@@ -8,6 +8,8 @@ from discord import app_commands
 from dotenv import load_dotenv
 from simkl_client import SimklAuthError, SimklClient, SimklSlowDown
 from wetrakr_client import WeTrakrClient, WeTrakrError
+from wetrakr_auth import WeTrakrAuth
+from wetrakr_sync import WeTrakrSync
 from storage import DEFAULT_FEATURES, EPOCH_ISO, storage
 from watch_delivery import WatchActivity, WatchBatch
 from achievements import ACHIEVEMENTS, all_achievements
@@ -63,11 +65,13 @@ STATUS_TEXT={"watching":"Started watching","plantowatch":"Planned to watch","com
 MEDIA_STYLES={"shows":(0x3498DB,"📺 TV"),"anime":(0xE91E63,"🌸 Anime"),"movies":(0xF1C40F,"🎬 Movie")}
 HISTORY_FETCH_TIMEOUT_SECONDS=120; CHECKNOW_COOLDOWN_SECONDS=30
 poll_lock=asyncio.Lock(); last_checknow_at=0.0; linking_users=set(); profile_lookup_attempted=set()
+wetrakr_poll_lock=asyncio.Lock(); last_wetrakr_checknow_at=0.0
 logging.basicConfig(level=logging.INFO,format="%(asctime)s [%(levelname)s] %(message)s"); log=logging.getLogger("simkl-bot")
 if DEFAULT_TIMEZONE_NAME == "UTC" and os.getenv("SIMKL_DEFAULT_TIMEZONE"):
     log.warning("Invalid SIMKL_DEFAULT_TIMEZONE=%r; falling back to UTC.", os.getenv("SIMKL_DEFAULT_TIMEZONE"))
 simkl=SimklClient(SIMKL_CLIENT_ID); tmdb=TmdbClient(TMDB_API_KEY); mdblist=MdbListClient(MDBLIST_API_KEY) if MDBLIST_API_KEY else None; imdb=ImdbClient()
 wetrakr=WeTrakrClient(WETRAKR_API_KEY) if WETRAKR_API_KEY else None
+wetrakr_sync=WeTrakrSync(wetrakr, WeTrakrAuth(wetrakr,storage),storage) if wetrakr else None
 if mdblist is not None:
     log.info("MDBList IMDb ratings enabled.")
 else:
@@ -393,7 +397,7 @@ async def get_show_ratings(tmdb_id):
         log.warning("MDBList show rating lookup failed for %s.", tmdb_id, exc_info=True)
         return None
 
-def build_embed(t,desc,ts,name,member,image,profile,title=None,title_url=None,poster=None,logo=None,preferences=None,status_activity=False):
+def build_embed(t,desc,ts,name,member,image,profile,title=None,title_url=None,poster=None,logo=None,preferences=None,status_activity=False,provider="SIMKL"):
     color,label=MEDIA_STYLES[t]; p={"style":"rich","artwork":"auto","activity_text":"short","show_imdb":True,"show_mal":True}; p.update(preferences or {})
     e=discord.Embed(title=title,url=title_url,description=desc,color=color,timestamp=ts)
     e.set_author(name=f"{name}'s Activity",url=profile,icon_url=member.display_avatar.url if member else None)
@@ -414,7 +418,7 @@ def build_embed(t,desc,ts,name,member,image,profile,title=None,title_url=None,po
             e.set_image(url=selected)
             if p["artwork"] in ("auto", "backdrop") and logo:
                 e.set_thumbnail(url=logo)
-    e.set_footer(text=f"{label} · SIMKL"); return e
+    e.set_footer(text=f"{label} · {provider}"); return e
 async def send_embed(ch,e,what):
     try:
         await ch.send(embed=e, allowed_mentions=discord.AllowedMentions.none())
@@ -1423,6 +1427,110 @@ async def poll_all(g=None, force_reconcile=False, ignore_failure_threshold=False
         request_delta=simkl.request_counts-requests_before
         log.info("SIMKL GETs this cycle: activities=%d, full_history=%d, history_delta=%d, other=%d (includes retries).",
                  *(request_delta[k] for k in ("activities","full_history","history_delta","other")))
+        return posted
+
+
+async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, started_ids):
+    """Render a journal change without touching SIMKL history or shared XP."""
+    action = change["action"]
+    status = change.get("status")
+    if action != "added":
+        return True
+    if status in {"watching", "waiting"}:
+        if status == "watching":
+            started_ids.add(str(change["wetrakr_id"]))
+        return True
+    if status not in {None, "planning", "dropped", "paused", "completed"}:
+        return True
+    p = await prefs(gid, uid)
+    title = change.get("title") or "Untitled"
+    ids = change.get("ids") or {}
+    poster = image = logo = None
+    episode_title = None
+    season, number = change.get("season"), change.get("episode")
+    media_type = change["media_type"]
+    if media_type == "episode":
+        try:
+            details = await wetrakr.episode(change["wetrakr_id"])
+            parent = details.get("media") or details.get("show") or {}
+            title = parent.get("title") or title
+            ids = parent.get("ids") or {}
+            episode_title = details.get("title") or change.get("title")
+            season = season if season is not None else details.get("season_number")
+            number = number if number is not None else details.get("number")
+            poster_path = parent.get("poster_path")
+            if poster_path:
+                poster = f"https://image.tmdb.org/t/p/w500{poster_path}"
+        except Exception:
+            log.warning("WeTrakr episode metadata lookup failed for %s.", change.get("wetrakr_id"), exc_info=True)
+    else:
+        try:
+            details = await wetrakr.title("movie" if media_type == "movie" else "show", change["wetrakr_id"])
+            title = details.get("title") or title
+            ids = details.get("ids") or ids
+            poster_path = details.get("poster_path")
+            if poster_path:
+                poster = f"https://image.tmdb.org/t/p/w500{poster_path}"
+        except Exception:
+            log.warning("WeTrakr title metadata lookup failed for %s.", change.get("wetrakr_id"), exc_info=True)
+    t = "movies" if media_type == "movie" else "shows"
+    tmdb_id = ids.get("tmdb")
+    if tmdb_id and status is None:
+        try:
+            if t == "movies":
+                image = await tmdb.get_movie_backdrop(tmdb_id)
+                logo = await tmdb.get_movie_logo(tmdb_id)
+            elif season is not None and number is not None:
+                image = await tmdb.get_episode_still(tmdb_id, season, number)
+                logo = await tmdb.get_tv_logo(tmdb_id)
+        except Exception:
+            log.warning("TMDB WeTrakr artwork lookup failed for %s.", title, exc_info=True)
+    stamp = parse_iso(change.get("watched_at") or change.get("action_at"))
+    if status:
+        verb = {"planning": "Planned to watch", "dropped": "Dropped", "paused": "Paused",
+                "completed": "Completed"}[status]
+        desc = f"{verb} **{title}**" if p["activity_text"] == "detailed" else verb
+    elif t == "movies":
+        desc = f"Watched **{title}**" if p["activity_text"] == "detailed" else "Watched"
+    else:
+        if season is None or number is None:
+            # Cannot safely identify an episode from a partial journal row.
+            raise ValueError("WeTrakr episode lacks season or episode number")
+        label = format_episode_display(int(season), int(number), int(number), p.get("episode_code", False))
+        desc = f"Watched {label} of **{title}**" if p["activity_text"] == "detailed" else f"Watched {label}"
+        if episode_title and episode_title != title:
+            desc += f"\n*{episode_title}*"
+        if str(change.get("show_id")) in started_ids:
+            desc += "\n\n🆕 Started watching this series."
+            started_ids.discard(str(change.get("show_id")))
+    embed = build_embed(t, desc, stamp, name, member, image, None, title,
+                        poster=poster, logo=logo, preferences=p,
+                        status_activity=bool(status), provider="WeTrakr")
+    return await send_embed(ch, embed, "WeTrakr activity")
+
+
+async def poll_wetrakr_all(g=None):
+    if not wetrakr_sync:
+        return 0
+    async with wetrakr_poll_lock:
+        targets = await storage.get_provider_targets("wetrakr", g, active_only=True)
+        posted = 0
+        for target in targets:
+            gid, uid = target["guild_id"], target["discord_user_id"]
+            channel_id = target["channel_id"]
+            if not channel_id:
+                continue
+            try:
+                ch = bot.get_channel(int(channel_id)) or await bot.fetch_channel(int(channel_id))
+                member, name = await resolve_member(gid, uid)
+                if not member:
+                    continue
+                started_ids = set()
+                async def deliver(change, row):
+                    return await deliver_wetrakr_change(ch, gid, uid, name, member, change, row, started_ids)
+                posted += await wetrakr_sync.poll(target, deliver)
+            except Exception:
+                log.exception("WeTrakr polling failed for user %s in guild %s.", uid, gid)
         return posted
 
 
@@ -3408,7 +3516,11 @@ async def wetrakr_link(i):
         tokens["expires_at"]=(datetime.now(timezone.utc)+timedelta(seconds=int(tokens.get("expires_in",604800)))).isoformat()
         await storage.link_wetrakr(g,uid,tokens,account)
         name=account.get("username") or (account.get("info") or {}).get("username") or "WeTrakr user"
-        await i.followup.send(f"Linked WeTrakr as **{discord.utils.escape_markdown(str(name))}**. Activity import is being built on the experimental branch; this link does not post WeTrakr watches yet.",ephemeral=True)
+        await i.followup.send(
+            f"Linked WeTrakr as **{discord.utils.escape_markdown(str(name))}**. "
+            "Use `/tracker-source` to choose which service posts activity in this server. "
+            "WeTrakr watches currently post without affecting shared XP or stats.",
+            ephemeral=True)
     except Exception as exc:
         log.error("WeTrakr linking failed for user %s in guild %s: %s",uid,g,type(exc).__name__)
         await i.followup.send("WeTrakr linking failed. Check the app key and try again; no WeTrakr watch history was imported.",ephemeral=True)
@@ -3424,6 +3536,60 @@ async def wetrakr_unlink(i):
         return
     linked=await storage.unlink_wetrakr(g,str(i.user.id))
     await i.response.send_message("WeTrakr has been unlinked from this server." if linked else "You don't have a WeTrakr link in this server.",ephemeral=True)
+
+
+@bot.tree.command(name="tracker-source", description="Choose which linked tracker posts your activity in this server.")
+@app_commands.choices(provider=[
+    app_commands.Choice(name="SIMKL", value="simkl"),
+    app_commands.Choice(name="WeTrakr", value="wetrakr"),
+])
+async def tracker_source(i, provider: app_commands.Choice[str] | None = None):
+    g=guild_id(i)
+    if not g:
+        await i.response.send_message("This command must be used in a server.",ephemeral=True)
+        return
+    uid=str(i.user.id)
+    if provider is None:
+        targets=await storage.get_provider_targets("simkl",str(g),active_only=True)
+        if any(t["discord_user_id"]==uid for t in targets):
+            active="SIMKL"
+        else:
+            targets=await storage.get_provider_targets("wetrakr",str(g),active_only=True)
+            active="WeTrakr" if any(t["discord_user_id"]==uid for t in targets) else "none"
+        await i.response.send_message(f"Your activity source here is **{active}**. Choose a provider to change it.",ephemeral=True)
+        return
+    if provider.value=="wetrakr" and not wetrakr_sync:
+        await i.response.send_message("WeTrakr is not configured on this bot.",ephemeral=True)
+        return
+    changed=await storage.set_activity_provider(g,uid,provider.value)
+    if not changed:
+        await i.response.send_message(f"Link your {provider.name} account in this server first.",ephemeral=True)
+        return
+    detail=("The first check seeds your WeTrakr baseline without posting older watches. "
+            "New WeTrakr activity posts afterward; XP and stats are not yet awarded from WeTrakr."
+            if provider.value=="wetrakr" else
+            "SIMKL activity resumes from now; its existing XP and statistics remain in place.")
+    await i.response.send_message(f"Activity source set to **{provider.name}**. {detail}",ephemeral=True)
+
+
+@bot.tree.command(name="wetrakr-checknow", description="(Admin) Check this server's selected WeTrakr activity.")
+async def wetrakr_checknow(i):
+    global last_wetrakr_checknow_at
+    g=guild_id(i)
+    if not g or not is_admin(i):
+        await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True)
+        return
+    if time.monotonic()-last_wetrakr_checknow_at<CHECKNOW_COOLDOWN_SECONDS:
+        await i.response.send_message("Please wait before checking WeTrakr again.",ephemeral=True)
+        return
+    if wetrakr_poll_lock.locked():
+        await i.response.send_message("A WeTrakr activity check is already running.",ephemeral=True)
+        return
+    last_wetrakr_checknow_at=time.monotonic()
+    await i.response.defer(ephemeral=True)
+    posted=await poll_wetrakr_all(g)
+    await i.followup.send(f"WeTrakr check complete. Posted **{posted}** activity item(s). "
+                          "The first check only seeds history and posts nothing.",ephemeral=True)
 
 @bot.tree.command(name="simkl-style",description="Choose your personal style for episode and movie watch activities.")
 @app_commands.choices(style=STYLE_CHOICES,artwork=ARTWORK_CHOICES,activity_text=TEXT_CHOICES,episode_format=EPISODE_FORMAT_CHOICES,show_imdb=RATING_CHOICES,show_mal=RATING_CHOICES)
@@ -3634,6 +3800,7 @@ async def polling_loop():
     while not bot.is_closed():
         try:
             await poll_all()
+            await poll_wetrakr_all()
             await send_due_weekly_recaps()
             retry_delay=POLL_RETRY_DELAY_SECONDS
             next_run+=interval_seconds
