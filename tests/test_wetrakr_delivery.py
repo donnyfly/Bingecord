@@ -78,3 +78,38 @@ def test_anime_detail_season_and_bulk_range(monkeypatch):
         assert "Watched **S2E03-E04** of **Anime**" in send.await_args.args[1].description
         still.assert_awaited_once_with(90, 2, 3)
     asyncio.run(run())
+
+
+def test_anime_uses_tvmaze_season_instead_of_wetrakr_absolute_number(monkeypatch):
+    async def run():
+        monkeypatch.setattr(bot, "wetrakr", SimpleNamespace(episode=AsyncMock(return_value={
+            "title": "Hidden Inventory", "season": {"number": 1}, "number": 25,
+            "media": {"title": "Jujutsu Kaisen", "ids": {"tmdb": 95479, "tvdb": 377543}},
+        })))
+        monkeypatch.setattr(bot, "prefs", AsyncMock(return_value={
+            "style": "rich", "artwork": "backdrop", "activity_text": "detailed",
+            "episode_code": False, "show_imdb": False, "show_mal": False}))
+        monkeypatch.setattr(bot.tmdb, "_get_series_details", AsyncMock(return_value={
+            "original_language": "ja", "origin_country": ["JP"], "genres": [{"id": 16}]}))
+        monkeypatch.setattr(bot.tmdb, "get_tv_title", AsyncMock(return_value="Jujutsu Kaisen"))
+        monkeypatch.setattr(bot.tmdb, "get_episode_details", AsyncMock(return_value={
+            "air_date": "2023-07-06"}))
+        mapper = AsyncMock(return_value=(2, 1))
+        monkeypatch.setattr(bot.tmdb, "map_anime_episode_to_tvmaze", mapper)
+        monkeypatch.setattr(bot.tmdb, "find_anime_episode", AsyncMock(return_value={
+            "still_url": "https://example.com/hidden-inventory.jpg"}))
+        monkeypatch.setattr(bot.tmdb, "get_tv_logo", AsyncMock(return_value=None))
+        send = AsyncMock(return_value=True)
+        monkeypatch.setattr(bot, "send_embed", send)
+        change = {"action": "added", "media_type": "episode", "wetrakr_id": 101,
+                  "show_id": 10, "season": 1, "episode": 25,
+                  "watched_at": "2026-09-28T03:00:00Z"}
+        member = SimpleNamespace(display_avatar=SimpleNamespace(url="https://example.com/avatar.png"))
+        assert await bot.deliver_wetrakr_change(SimpleNamespace(), "123", "42", "Viewer", member,
+                                                change, {}, set())
+        embed = send.await_args.args[1]
+        assert "Watched **S2E01** of **Jujutsu Kaisen**" in embed.description
+        assert embed.footer.text.endswith("Anime · WeTrakr")
+        assert embed.image.url.endswith("hidden-inventory.jpg")
+        mapper.assert_awaited_once_with(377543, air_date="2023-07-06", title="Hidden Inventory")
+    asyncio.run(run())

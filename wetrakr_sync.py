@@ -1,9 +1,12 @@
 """Read-only WeTrakr journal ingestion with per-guild delivery acknowledgement."""
 
 from datetime import datetime, timedelta, timezone
+import logging
 
 from wetrakr_client import WeTrakrError
 from wetrakr_events import normalize_journal_entry
+
+log = logging.getLogger("simkl-bot")
 
 
 def overlap(iso: str) -> str:
@@ -36,6 +39,7 @@ class WeTrakrSync:
                 gid, uid, account_id, seeded=True, checkpoint=current)
             if not saved:
                 raise ValueError("WeTrakr link changed during baseline")
+            log.info("WeTrakr baseline seeded for user %s in guild %s; existing watches not posted.", uid, gid)
             return 0
         # The journal can lag last_activities by a few seconds. Re-reading
         # with overlap avoids losing an entry if it arrives after a quiet poll.
@@ -53,17 +57,20 @@ class WeTrakrSync:
             await self.store.save_wetrakr_sync(
                 gid, uid, account_id, seeded=True, checkpoint=current,
                 last_activity=current)
+            log.warning("WeTrakr journal expired for user %s in guild %s; baseline re-seeded.", uid, gid)
             return 0
         seen = set(state["recent_entry_ids"])
         checkpoint = state["checkpoint"]
         posted = 0
         pending = []
+        duplicate_count = 0
         for row in rows:
             entry_id = str(row.get("entry_id") or "")
             action_at = row.get("action_at")
             if not entry_id or not action_at:
                 raise ValueError("WeTrakr journal entry lacks entry_id or action_at")
             if entry_id in seen:
+                duplicate_count += 1
                 continue
             change = normalize_journal_entry(row)
             pending.append((change, row))
@@ -78,6 +85,7 @@ class WeTrakrSync:
                 return None
 
         index = 0
+        range_count = 0
         while index < len(pending):
             batch = [pending[index]]
             first = episode_pair(batch[0]) if deliver_group else None
@@ -101,6 +109,8 @@ class WeTrakrSync:
                 accepted = not change or await deliver(change, row)
             if not accepted:
                 # Retry the entire batch, including every episode in its embed.
+                log.warning("WeTrakr delivery pending retry for user %s in guild %s: %d journal row(s) in batch.",
+                            uid, gid, len(batch))
                 return posted
             checkpoint = max(checkpoint, *(row["action_at"] for _, row in batch))
             entry_ids = [str(row["entry_id"]) for _, row in batch]
@@ -108,6 +118,7 @@ class WeTrakrSync:
                     gid, uid, account_id, checkpoint=checkpoint, entry_ids=entry_ids):
                 raise ValueError("WeTrakr link changed during journal delivery")
             seen.update(entry_ids)
+            range_count += int(len(batch) > 1)
             for change, _ in batch:
                 if change and change.get("action") == "added":
                     posted += int(change.get("media_type") in {"movie", "episode"}
@@ -116,4 +127,7 @@ class WeTrakrSync:
         if not await self.store.save_wetrakr_sync(
                 gid, uid, account_id, checkpoint=checkpoint, last_activity=current):
             raise ValueError("WeTrakr link changed during journal sync")
+        log.info("WeTrakr sync for user %s in guild %s: %d journal row(s), %d duplicate(s), "
+                 "%d new row(s), %d episode range(s), %d activity item(s).",
+                 uid, gid, len(rows), duplicate_count, len(pending), range_count, posted)
         return posted

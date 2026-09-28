@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections import Counter
 from typing import Any
 
 import aiohttp
@@ -34,6 +35,7 @@ class WeTrakrClient:
         self.app_key = app_key
         self._session = session
         self._owns_session = session is None
+        self.request_counts = Counter()
 
     async def close(self):
         if self._owns_session and self._session and not self._session.closed:
@@ -54,6 +56,10 @@ class WeTrakrClient:
         # responses must reach the caller so polling can pause until reset.
         for attempt in range(3):
             try:
+                parts = path.strip("/").split("/")
+                category = (parts[1] if parts[0] == "sync" and len(parts) > 1
+                            else parts[0])
+                self.request_counts[category] += 1
                 async with self._session.request(method, BASE_URL + path, headers=headers,
                                                  params=params, json=body) as response:
                     payload = await response.json(content_type=None)

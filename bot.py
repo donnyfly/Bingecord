@@ -1334,7 +1334,7 @@ async def poll_all(g=None, force_reconcile=False, ignore_failure_threshold=False
 
 
         if not targets:
-            log.info("Polling cycle: no linked users.")
+            log.info("SIMKL polling: no active SIMKL targets (WeTrakr is checked separately).")
             return 0
 
         # Keep all guilds for the same Discord user in one worker. This
@@ -1430,6 +1430,39 @@ async def poll_all(g=None, force_reconcile=False, ignore_failure_threshold=False
         return posted
 
 
+async def is_wetrakr_anime(parent, tmdb_id):
+    if parent.get("is_anime") or parent.get("type") == "anime":
+        return True
+    if any(str(g.get("name") if isinstance(g, dict) else g).casefold() == "anime"
+           for g in parent.get("genres") or []):
+        return True
+    if not tmdb_id:
+        return False
+    series = await tmdb._get_series_details(tmdb_id)
+    return bool(series and series.get("original_language") == "ja"
+                and any(g.get("id") == 16 for g in series.get("genres") or [])
+                and "JP" in (series.get("origin_country") or []))
+
+
+async def wetrakr_anime_coordinates(tmdb_id, ids, details, season, number):
+    tvdb_id = ids.get("tvdb") or ids.get("thetvdb")
+    if not tvdb_id and tmdb_id:
+        tvdb_id = await tmdb.get_tvdb_id_for_tmdb(tmdb_id)
+    air_date = details.get("air_date") or details.get("first_aired") or details.get("release_date")
+    if not air_date and tmdb_id and season is not None and number is not None:
+        source_episode = await tmdb.get_episode_details(tmdb_id, season, number)
+        air_date = (source_episode or {}).get("air_date")
+    mapped = await tmdb.map_anime_episode_to_tvmaze(
+        tvdb_id, air_date=air_date, title=details.get("title") or details.get("name")) if tvdb_id else None
+    if mapped:
+        log.info("WeTrakr anime episode mapped: TMDB=%s TVDB=%s S%sE%s -> S%sE%s.",
+                 tmdb_id, tvdb_id, season, number, *mapped)
+        return (*mapped, tvdb_id, True)
+    log.warning("WeTrakr anime episode mapping unavailable: TMDB=%s TVDB=%s S%sE%s; using source numbering.",
+                tmdb_id, tvdb_id, season, number)
+    return season, number, tvdb_id, False
+
+
 async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, started_ids, episode_end=None):
     """Render a journal change without touching SIMKL history or shared XP."""
     action = change["action"]
@@ -1447,6 +1480,9 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
     ids = change.get("ids") or {}
     poster = image = logo = None
     episode_title = None
+    parent = {}
+    details = {}
+    end_details = {}
     season, number = change.get("season"), change.get("episode")
     end_season, end_number = None, None
     media_type = change["media_type"]
@@ -1457,8 +1493,8 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
             title = parent.get("title") or title
             ids = parent.get("ids") or {}
             episode_title = details.get("title") or change.get("title")
-            # The journal may carry anime's absolute numbering. Episode detail
-            # describes the actual season and position within that season.
+            # This is WeTrakr's numbering; anime needs a separate TVDB/TVMaze
+            # mapping before it becomes the displayed season/episode.
             detail_season = details.get("season") or {}
             season = detail_season.get("number", details.get("season_number", season)) if isinstance(detail_season, dict) else details.get("season_number", season)
             number = details.get("number", number)
@@ -1484,13 +1520,42 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
             log.warning("WeTrakr title metadata lookup failed for %s.", change.get("wetrakr_id"), exc_info=True)
     t = "movies" if media_type == "movie" else "shows"
     tmdb_id = ids.get("tmdb")
+    mapped_anime = False
+    tvdb_id = None
+    if t == "shows":
+        try:
+            if await is_wetrakr_anime(parent if media_type == "episode" else details, tmdb_id):
+                t = "anime"
+                if tmdb_id:
+                    title = await tmdb.get_tv_title(tmdb_id, prefer_english=True) or title
+                if media_type == "episode":
+                    anime_season, anime_number, tvdb_id, mapped_anime = await wetrakr_anime_coordinates(
+                        tmdb_id, ids, details, season, number)
+                    if episode_end:
+                        anime_end_season, anime_end_number, _, end_mapped = await wetrakr_anime_coordinates(
+                            tmdb_id, ids, end_details, end_season, end_number)
+                        mapped_anime = mapped_anime and end_mapped
+                        if mapped_anime:
+                            end_season, end_number = anime_end_season, anime_end_number
+                    if mapped_anime:
+                        season, number = anime_season, anime_number
+        except Exception:
+            log.warning("WeTrakr anime classification/mapping failed for TMDB=%s.", tmdb_id, exc_info=True)
     if tmdb_id and status is None:
         try:
             if t == "movies":
                 image = await tmdb.get_movie_backdrop(tmdb_id)
                 logo = await tmdb.get_movie_logo(tmdb_id)
             elif season is not None and number is not None:
-                image = await tmdb.get_episode_still(tmdb_id, season, number)
+                if t == "anime" and mapped_anime:
+                    resolved = await tmdb.find_anime_episode(tmdb_id, tvdb_id, [season], number,
+                                                            episode_title=episode_title)
+                    image = (resolved or {}).get("still_url")
+                    if not image and resolved:
+                        image = await tmdb.get_episode_still(resolved["series_id"],
+                                                             resolved["season_number"], resolved["episode_number"])
+                else:
+                    image = await tmdb.get_episode_still(tmdb_id, season, number)
                 logo = await tmdb.get_tv_logo(tmdb_id)
         except Exception:
             log.warning("TMDB WeTrakr artwork lookup failed for %s.", title, exc_info=True)
@@ -1536,8 +1601,11 @@ async def poll_wetrakr_all(g=None):
     if not wetrakr_sync:
         return 0
     async with wetrakr_poll_lock:
+        started_at = time.monotonic()
+        requests_before = wetrakr.request_counts.copy()
         targets = await storage.get_provider_targets("wetrakr", g, active_only=True)
         posted = 0
+        checked = 0
         for target in targets:
             gid, uid = target["guild_id"], target["discord_user_id"]
             channel_id = target["channel_id"]
@@ -1548,6 +1616,7 @@ async def poll_wetrakr_all(g=None):
                 member, name = await resolve_member(gid, uid)
                 if not member:
                     continue
+                checked += 1
                 started_ids = set()
                 async def deliver(change, row):
                     return await deliver_wetrakr_change(ch, gid, uid, name, member, change, row, started_ids)
@@ -1559,6 +1628,11 @@ async def poll_wetrakr_all(g=None):
                 posted += await wetrakr_sync.poll(target, deliver, deliver_group)
             except Exception:
                 log.exception("WeTrakr polling failed for user %s in guild %s.", uid, gid)
+        request_delta = wetrakr.request_counts - requests_before
+        log.info("WeTrakr polling complete: %d target(s), %d checked, %d activity item(s), %.2fs; "
+                 "API requests: last_activities=%d, journal=%d, episodes=%d, shows=%d, movies=%d, history=%d.",
+                 len(targets), checked, posted, time.monotonic() - started_at,
+                 *(request_delta[k] for k in ("last_activities", "journal", "episodes", "shows", "movies", "tracking")))
         return posted
 
 
