@@ -932,7 +932,44 @@ class Storage:
             user = self._user(str(discord_user_id))
             if not user:
                 return []
-            return copy.deepcopy(list(user["progression"].get("wetrakr_plays", {}).values()))
+            return [{**copy.deepcopy(play), "source_event_id": play_id}
+                    for play_id, play in user["progression"].get("wetrakr_plays", {}).items()]
+
+    async def classify_wetrakr_movie(self, discord_user_id: str, movie_id, anime: bool) -> None:
+        """Correct previously imported movies without awarding XP a second time."""
+        uid = str(discord_user_id)
+        async with _lock:
+            user = self._user(uid)
+            if not user:
+                return
+            progression = user["progression"]
+            changed = False
+            for play_id, play in progression["wetrakr_plays"].items():
+                if play.get("media_type") not in {"movie", "anime_movie"}:
+                    continue
+                if str(play.get("item_key") or "").split(":")[-1] != str(movie_id):
+                    continue
+                kind = "anime_movie" if anime else "movie"
+                if play.get("media_type") != kind or not play.get("anime_classified"):
+                    play["media_type"] = kind
+                    play["anime_classified"] = True
+                    for event in progression["xp_events"]:
+                        if event.get("event_key") == play.get("xp_key"):
+                            event["media_type"] = kind
+                    for guild in self._data["guilds"].values():
+                        guild_user = (guild.get("users") or {}).get(uid)
+                        if not guild_user:
+                            continue
+                        events = (guild_user.get("statistics") or {}).get("watch_events")
+                        if isinstance(events, dict) and "wetrakr:" + play_id in events:
+                            events["wetrakr:" + play_id]["media_type"] = kind
+                            guild_user["statistics"] = _rebuild_watch_statistics(
+                                events, guild.get("timezone"))
+                    changed = True
+            if changed:
+                self._dirty = True
+        if changed:
+            await self.flush()
 
     async def has_wetrakr_show_history(self, discord_user_id: str, show_id=None, ids=None) -> bool:
         """Return whether WeTrakr already has an episode play for this parent show."""
@@ -1246,7 +1283,7 @@ class Storage:
         await self.flush()
 
     async def reset_user_tracking(self, guild_id: str | int, discord_user_id: str, start_time_iso: str) -> bool:
-        """Reset one user's server-local tracking state while preserving their SIMKL link and preferences."""
+        """Reset server-local state, preserving linked accounts and global progression."""
         async with _lock:
             self._migrate_legacy_guild_locked(str(guild_id))
             guild = self._guild(guild_id)
@@ -1254,7 +1291,7 @@ class Storage:
                 return False
             prior = guild["users"][str(discord_user_id)]
             replacement = _default_guild_user(start_time_iso)
-            for key in ("simkl_linked", "wetrakr_linked", "activity_provider", "wetrakr_sync"):
+            for key in ("simkl_linked", "wetrakr_linked", "activity_provider"):
                 replacement[key] = copy.deepcopy(prior.get(key, replacement[key]))
             guild["users"][str(discord_user_id)] = replacement
             self._dirty = True

@@ -553,6 +553,31 @@ class TmdbClient:
                     return 1, absolute
         return season, number
 
+    async def map_anime_calendar_episode(self, tvdb_id, season, number):
+        """Resolve TVMaze calendar-year seasons to a continuous first season."""
+        try:
+            tvdb_id, season, number = int(tvdb_id), int(season), int(number)
+        except (TypeError, ValueError):
+            return None
+        if not 1900 <= season <= 2100:
+            return None
+        if tvdb_id not in self._tvmaze_episode_lists:
+            show = await self.find_tvmaze_show_by_tvdb(tvdb_id)
+            if not show or show.get("id") is None:
+                return None
+            episodes = await self._get_tvmaze_json(f"/shows/{show['id']}/episodes")
+            if not isinstance(episodes, list):
+                return None
+            self._tvmaze_episode_lists[tvdb_id] = episodes
+        regular = [e for e in self._tvmaze_episode_lists[tvdb_id]
+                   if e.get("season") is not None and e.get("number") is not None
+                   and 1900 <= int(e["season"]) <= 2100]
+        regular.sort(key=lambda e: (int(e["season"]), int(e["number"])))
+        for absolute, episode in enumerate(regular, 1):
+            if int(episode["season"]) == season and int(episode["number"]) == number:
+                return 1, absolute
+        return None
+
     # ------------------------------------------------------------------
     # Anime-aware episode lookup
     # ------------------------------------------------------------------
@@ -1151,6 +1176,13 @@ class TmdbClient:
     # ------------------------------------------------------------------
     # Movie title
     # ------------------------------------------------------------------
+
+    async def get_movie_details(self, movie_id) -> dict | None:
+        try:
+            movie_id = int(movie_id)
+        except (TypeError, ValueError):
+            return None
+        return await self._get_json(f"{API_BASE}/movie/{movie_id}")
 
     async def get_movie_title(
         self,

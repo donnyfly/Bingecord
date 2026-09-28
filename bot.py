@@ -1459,6 +1459,21 @@ async def is_wetrakr_anime(parent, tmdb_id):
                 and "JP" in (series.get("origin_country") or []))
 
 
+async def is_wetrakr_anime_movie(movie, tmdb_id):
+    """Identify anime films independently of WeTrakr's generic movie type."""
+    ids = movie.get("ids") or {}
+    if ids.get("mal") or movie.get("is_anime") or movie.get("anime_type") == "movie":
+        return True
+    if any(str(g.get("name") if isinstance(g, dict) else g).casefold() == "anime"
+           for g in movie.get("genres") or []):
+        return True
+    if not tmdb_id:
+        return False
+    details = await tmdb.get_movie_details(tmdb_id)
+    return bool(details and details.get("original_language") == "ja"
+                and any(g.get("id") == 16 for g in details.get("genres") or []))
+
+
 async def wetrakr_anime_coordinates(tmdb_id, ids, details, season, number):
     tvdb_id = ids.get("tvdb") or ids.get("thetvdb")
     if not tvdb_id and tmdb_id:
@@ -1567,6 +1582,11 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
                         season, number = anime_season, anime_number
         except Exception:
             log.warning("WeTrakr anime classification/mapping failed for TMDB=%s.", tmdb_id, exc_info=True)
+    elif t == "movies":
+        try:
+            anime_item = await is_wetrakr_anime_movie(details, tmdb_id)
+        except Exception:
+            log.warning("WeTrakr movie classification failed for TMDB=%s.", tmdb_id, exc_info=True)
     if tmdb_id and status is None:
         try:
             if t == "movies":
@@ -1641,7 +1661,7 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
         if anime_item and p.get("show_mal", True) and ratings.get("mal") is not None:
             desc += f"\n🌸 MAL {float(ratings['mal']):.2f}/10"
     title_url = wetrakr_title_url("movie" if media_type == "movie" else "show", tmdb_id)
-    embed_type = "anime" if anime_item and media_type == "episode" else t
+    embed_type = "anime" if anime_item else t
     embed = build_embed(embed_type, desc, stamp, name, member, image, profile_url, title,
                         title_url=title_url, poster=poster, logo=logo, preferences=p,
                         status_activity=bool(status), provider="WeTrakr")
@@ -1679,6 +1699,20 @@ async def poll_wetrakr_all(g=None):
                 checked += 1
                 started_ids = set()
                 metadata_cache = {}
+                # Older WeTrakr imports stored every film as a generic movie.
+                # Repair those records once, including their server statistics.
+                pending_movies = {str(play.get("item_key") or "").split(":")[-1]
+                                  for play in await storage.get_wetrakr_plays(uid)
+                                  if play.get("media_type") in {"movie", "anime_movie"}
+                                  and not play.get("anime_classified")
+                                  and str(play.get("item_key") or "").startswith("wetrakr:movie:")}
+                for movie_id in pending_movies:
+                    try:
+                        movie = await wetrakr.title("movie", movie_id)
+                        anime = await is_wetrakr_anime_movie(movie, (movie.get("ids") or {}).get("tmdb"))
+                        await storage.classify_wetrakr_movie(uid, movie_id, anime)
+                    except Exception:
+                        log.warning("Could not reclassify WeTrakr movie %s for user %s.",movie_id,uid,exc_info=True)
                 async def resolve_play(play):
                     """Fetch one title per show/movie for compact history and journal plays."""
                     result = dict(play)
@@ -1691,14 +1725,23 @@ async def poll_wetrakr_all(g=None):
                         metadata = await wetrakr.title(
                             "movie" if kind == "movie" else "show", title_id)
                         anime = (await is_wetrakr_anime(metadata, (metadata.get("ids") or {}).get("tmdb"))
-                                 if kind == "episode" else bool(metadata.get("is_anime") or
-                                 metadata.get("type") == "anime"))
+                                 if kind == "episode" else await is_wetrakr_anime_movie(
+                                     metadata, (metadata.get("ids") or {}).get("tmdb")))
                         metadata_cache[cache_key] = (metadata, anime)
                     metadata, anime = metadata_cache[cache_key]
                     result["title"] = metadata.get("title") or result.get("title") or "Untitled"
                     result["ids"] = metadata.get("ids") or result.get("ids") or {}
                     result["genres"] = metadata.get("genres") or []
                     result["media_type"] = ("anime_movie" if kind == "movie" else "anime_episode") if anime else kind
+                    if anime and kind == "episode":
+                        ids = result["ids"]
+                        tvdb_id = ids.get("tvdb") or ids.get("thetvdb")
+                        if not tvdb_id and ids.get("tmdb"):
+                            tvdb_id = await tmdb.get_tvdb_id_for_tmdb(ids["tmdb"])
+                        mapped = (await tmdb.map_anime_calendar_episode(
+                            tvdb_id, result.get("season"), result.get("episode")) if tvdb_id else None)
+                        if mapped:
+                            result["season"], result["episode"] = mapped
                     result["item_key"] = (f"wetrakr:movie:{title_id}" if kind == "movie" else
                                           f"wetrakr:episode:{title_id}:{result.get('season')}:{result.get('episode')}")
                     return result
@@ -2468,18 +2511,21 @@ async def simkl_user_reset(i, confirm: bool = False):
 
     uid=str(i.user.id)
     user=await storage.get_user(uid)
-    if not user or not user.get("simkl_token"):
+    provider=await storage.get_activity_provider(g,uid)
+    linked=bool(user and (user.get("wetrakr") if provider=="wetrakr" else user.get("simkl_token")))
+    if not linked:
         await i.response.send_message(
-            "You don't have a linked SIMKL account. Use /tracker-link first.",
+            "You don't have a linked account for your selected source. Use /tracker-link first.",
             ephemeral=True,
         )
         return
 
     if not confirm:
         await i.response.send_message(
-            "This resets your SIMKL tracking history for this server, including watch statistics, "
-            "watched-state tracking, polling history, and achievements. Your SIMKL link and personal "
-            "style settings will be kept. If you want to continue, run /tracker-user-reset with confirm set to True.",
+            f"This resets your {provider.upper() if provider=='simkl' else 'WeTrakr'} server tracking state "
+            "and achievements. Your linked accounts, shared XP and personal style stay intact. "
+            "The selected account's history will be imported again without old activity posts. "
+            "Run /tracker-user-reset with confirm set to True to continue.",
             ephemeral=True,
         )
         return
@@ -2493,8 +2539,8 @@ async def simkl_user_reset(i, confirm: bool = False):
         return
 
     await i.response.send_message(
-        "Your SIMKL tracking data for this server has been reset. "
-        "Your SIMKL account remains linked, and tracking will now start fresh.",
+        "Your selected tracker state for this server has been reset. "
+        "Your account remains linked; its history will be imported silently at the next poll.",
         ephemeral=True,
     )
 
@@ -3099,13 +3145,14 @@ async def simkl_watching(i,type: app_commands.Choice[str] | None = None):
         await i.response.defer(ephemeral=True)
         try:
             media_filter=type.value if type else "all"
-            targets=("movies",) if media_filter=="movies" else ("shows", "movies") if media_filter=="all" else ("shows",)
+            targets=("movies",) if media_filter=="movies" else ("shows",) if media_filter=="shows" else ("shows", "movies")
             rows=await wetrakr_tracking_rows(uid,"watching",targets)
             display_rows=[]
             for target,row in rows:
                 media=(row.get("movie") if target=="movies" else row.get("show")) or row
                 ids=media.get("ids") or {}
-                anime=target=="shows" and await is_wetrakr_anime(media,ids.get("tmdb"))
+                anime=(await is_wetrakr_anime_movie(media,ids.get("tmdb")) if target=="movies"
+                       else await is_wetrakr_anime(media,ids.get("tmdb")))
                 if media_filter=="anime" and not anime:
                     continue
                 if media_filter=="shows" and anime:
@@ -3119,7 +3166,7 @@ async def simkl_watching(i,type: app_commands.Choice[str] | None = None):
             display_rows.sort(key=lambda row:row[2].casefold())
             lines=[]
             for target,anime,title,url in display_rows[:15]:
-                emoji="🎬" if target=="movies" else "🌸" if anime else "📺"
+                emoji="🌸" if anime else "🎬" if target=="movies" else "📺"
                 title_text=f"[{title}]({url})" if url else f"**{title}**"
                 lines.append(f"{emoji} {title_text}")
             if len(display_rows)>15:
@@ -3598,13 +3645,14 @@ async def simkl_random(
         try:
             media_filter=type.value if type else "all"
             genre_filter=genre.value if genre else ""
-            targets=("movies",) if media_filter=="movies" else ("shows", "movies") if media_filter=="all" else ("shows",)
+            targets=("movies",) if media_filter=="movies" else ("shows",) if media_filter=="shows" else ("shows", "movies")
             rows=await wetrakr_tracking_rows(uid,"planning",targets)
             candidates=[]
             for target,row in rows:
                 media=(row.get("movie") if target=="movies" else row.get("show")) or row
                 ids=media.get("ids") or {}
-                anime=target=="shows" and await is_wetrakr_anime(media,ids.get("tmdb"))
+                anime=(await is_wetrakr_anime_movie(media,ids.get("tmdb")) if target=="movies"
+                       else await is_wetrakr_anime(media,ids.get("tmdb")))
                 if media_filter=="anime" and not anime:
                     continue
                 if media_filter=="shows" and anime:
@@ -3622,7 +3670,7 @@ async def simkl_random(
             ids=media.get("ids") or {}
             tmdb_id=ids.get("tmdb")
             url=wetrakr_title_url("movie" if target=="movies" else "show",tmdb_id)
-            kind_label="Movie" if target=="movies" else "Anime" if anime else "Series"
+            kind_label="Anime Movie" if target=="movies" and anime else "Movie" if target=="movies" else "Anime" if anime else "Series"
             embed=discord.Embed(title=title,url=url,
                                 description=f"Picked from your WeTrakr Plan To Watch · {kind_label}",
                                 color=0x5865F2)

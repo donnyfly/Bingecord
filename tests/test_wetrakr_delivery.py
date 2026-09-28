@@ -231,3 +231,28 @@ def test_wetrakr_movie_has_imdb_rating(monkeypatch):
         assert embed.url == "https://wetrakr.com/tmdb/movie/99"
         assert embed.author.url == "https://wetrakr.com/movie-user"
     asyncio.run(run())
+
+
+def test_wetrakr_anime_movie_uses_anime_card_and_mal(monkeypatch):
+    async def run():
+        monkeypatch.setattr(bot, "wetrakr", SimpleNamespace(title=AsyncMock(return_value={
+            "title": "Animated Film", "ids": {"tmdb": 91}})))
+        monkeypatch.setattr(bot.tmdb, "get_movie_details", AsyncMock(return_value={
+            "original_language": "ja", "genres": [{"id": 16, "name": "Animation"}]}))
+        monkeypatch.setattr(bot.tmdb, "get_movie_backdrop", AsyncMock(return_value=None))
+        monkeypatch.setattr(bot.tmdb, "get_movie_logo", AsyncMock(return_value=None))
+        monkeypatch.setattr(bot, "get_movie_ratings", AsyncMock(return_value={"imdb": 8.1, "mal": 8.75}))
+        monkeypatch.setattr(bot, "prefs", AsyncMock(return_value={
+            "style": "rich", "artwork": "backdrop", "activity_text": "detailed",
+            "show_imdb": True, "show_mal": True}))
+        monkeypatch.setattr(bot, "send_embed", AsyncMock(return_value=True))
+        member = SimpleNamespace(display_avatar=SimpleNamespace(url="https://example.com/avatar.png"))
+        change = {"action": "added", "media_type": "movie", "wetrakr_id": 10,
+                  "watched_at": "2026-09-28T03:00:00Z"}
+        assert await bot.deliver_wetrakr_change(SimpleNamespace(), "123", "42", "Viewer",
+                                                member, change, {}, set())
+        embed = bot.send_embed.await_args.args[1]
+        assert "🌸 MAL 8.75/10" in embed.description
+        assert "⭐ IMDb 8.1/10" in embed.description
+        assert "Anime · WeTrakr" in embed.footer.text
+    asyncio.run(run())

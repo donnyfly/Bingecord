@@ -59,3 +59,42 @@ def test_different_episode_of_same_show_keeps_its_xp(tmp_path, monkeypatch):
             "item_key": "wetrakr:episode:70:1:1", "watched_at": "2026-09-28T02:00:00Z"}])
         assert second["xp"] == 0
     asyncio.run(run())
+
+
+def test_existing_wetrakr_movie_reclassifies_without_extra_xp(tmp_path, monkeypatch):
+    async def run():
+        monkeypatch.setattr(storage_module, "DATA_PATH", str(tmp_path / "store.json"))
+        store = storage_module.Storage()
+        await store.link_wetrakr("1", "2", {"access_token": "a", "refresh_token": "r"}, {"id": 7})
+        await store.reconcile_wetrakr_plays("1", "2", [{
+            "source_event_id": "p1", "media_type": "movie", "title": "Anime Film",
+            "item_key": "wetrakr:movie:70", "ids": {"tmdb": 90},
+            "watched_at": "2026-09-28T01:00:00Z"}])
+        before = (await store.get_progression("2"))["lifetime_xp"]
+        await store.classify_wetrakr_movie("2", 70, True)
+        stats = await store.get_statistics("1", "2")
+        assert stats["movies_watched"] == 1
+        assert stats["anime_movies_watched"] == 1
+        assert (await store.get_progression("2"))["lifetime_xp"] == before
+        await store.classify_wetrakr_movie("2", 70, True)
+        assert (await store.get_statistics("1", "2"))["anime_movies_watched"] == 1
+    asyncio.run(run())
+
+
+def test_selected_wetrakr_reset_reimports_without_clearing_shared_xp(tmp_path, monkeypatch):
+    async def run():
+        monkeypatch.setattr(storage_module, "DATA_PATH", str(tmp_path / "store.json"))
+        store = storage_module.Storage()
+        await store.link_wetrakr("1", "2", {"access_token": "a", "refresh_token": "r"}, {"id": 7})
+        play = {"source_event_id": "p1", "media_type": "movie", "title": "Film",
+                "item_key": "wetrakr:movie:70", "watched_at": "2026-09-28T01:00:00Z"}
+        await store.reconcile_wetrakr_plays("1", "2", [play])
+        before = (await store.get_progression("2"))["lifetime_xp"]
+        assert await store.reset_user_tracking("1", "2", "2026-09-29T00:00:00Z")
+        target = (await store.get_provider_targets("wetrakr", "1", active_only=True))[0]
+        assert not target["guild_user_data"]["wetrakr_sync"]["seeded"]
+        assert (await store.get_progression("2"))["lifetime_xp"] == before
+        await store.reconcile_wetrakr_plays("1", "2", [play], complete=True)
+        assert (await store.get_statistics("1", "2"))["movies_watched"] == 1
+        assert (await store.get_progression("2"))["lifetime_xp"] == before
+    asyncio.run(run())

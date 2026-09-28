@@ -32,4 +32,5 @@ def test_calendar_year_seasons_use_continuous_episode_numbers():
         ])
         assert await client.map_anime_episode_to_tvmaze(1, title="First") == (1, 1)
         assert await client.map_anime_episode_to_tvmaze(1, title="Third") == (1, 3)
+        assert await client.map_anime_calendar_episode(1, 2000, 1) == (1, 3)
     asyncio.run(run())
