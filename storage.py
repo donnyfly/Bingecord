@@ -135,6 +135,41 @@ def _watch_base(event: dict) -> str:
     return f"{event['media_type']}:{event['item_key']}:"
 
 
+def _cross_provider_identity(media_type, title, item_key, watched_at):
+    title=str(title or "").strip().casefold()
+    if not title or not watched_at:
+        return None
+    if media_type in {"movie","anime_movie"}:
+        try:
+            stamp=datetime.fromisoformat(str(watched_at).replace("Z","+00:00"))
+            if stamp.tzinfo is None:
+                stamp=stamp.replace(tzinfo=timezone.utc)
+            return media_type,title,int(stamp.timestamp())//300
+        except (TypeError,ValueError):
+            return None
+    if media_type not in {"episode","anime_episode"}:
+        return None
+    parts=str(item_key or "").split(":")
+    try:
+        return media_type,title,int(parts[-2]),int(parts[-1])
+    except (IndexError,TypeError,ValueError):
+        return None
+
+
+def _simkl_xp_identity(event):
+    key=str(event.get("event_key") or "")
+    stamp=str(event.get("at") or "")
+    if not stamp or not key.endswith(":"+stamp):
+        return None
+    return _cross_provider_identity(event.get("media_type"),event.get("title"),
+                                    key[:-(len(stamp)+1)],stamp)
+
+
+def _wetrakr_play_identity(play):
+    return _cross_provider_identity(play.get("media_type"),play.get("title"),
+                                    play.get("item_key"),play.get("watched_at"))
+
+
 def _genre_names(genres) -> list[str]:
     values=[genres] if isinstance(genres,(str,dict)) else (genres or [])
     names=[]
@@ -264,8 +299,7 @@ def _add_watch_xp_events(progression: dict, events: list[dict]) -> tuple[int,lis
         if not str(key).startswith("wetrakr:"):
             for play in progression.get("wetrakr_plays", {}).values():
                 prior=play.get("xp_key")
-                if (prior and play.get("media_type")==event["media_type"]
-                        and str(play.get("title") or "").casefold()==str(event.get("title") or "").casefold()):
+                if prior and _wetrakr_play_identity(play) is not None and _wetrakr_play_identity(play)==_simkl_xp_identity(event):
                     matching=next((old for old in progression["xp_events"] if old.get("event_key")==prior),None)
                     if matching:
                         matching["event_key"]=key
@@ -943,10 +977,14 @@ class Storage:
             paired_counts = defaultdict(int)
             for event in progression["xp_events"]:
                 if not str(event.get("event_key", "")).startswith("wetrakr:"):
-                    simkl_counts[(event.get("media_type"), str(event.get("title") or "").casefold())] += 1
+                    identity=_simkl_xp_identity(event)
+                    if identity:
+                        simkl_counts[identity]+=1
             for old in ledger.values():
                 if not old.get("xp_key"):
-                    paired_counts[(old.get("media_type"), str(old.get("title") or "").casefold())] += 1
+                    identity=_wetrakr_play_identity(old)
+                    if identity:
+                        paired_counts[identity]+=1
             observed = set()
             added = removed = xp_delta = 0
             revised = False
@@ -969,7 +1007,9 @@ class Storage:
                 if previous:
                     revised = True
                     if not previous.get("xp_key"):
-                        paired_counts[(previous.get("media_type"), str(previous.get("title") or "").casefold())] -= 1
+                        identity=_wetrakr_play_identity(previous)
+                        if identity:
+                            paired_counts[identity]-=1
                     previous_key = previous.get("xp_key")
                     if previous_key:
                         xp_delta -= self._remove_wetrakr_xp_locked(progression, previous_key)
@@ -992,8 +1032,9 @@ class Storage:
                 # Existing SIMKL awards have different source IDs. Match only
                 # the exact title and watch instant; uncertain matches are
                 # left untouched for a later identity reconciliation.
-                identity = (kind, title.casefold())
-                duplicate = paired_counts[identity] < simkl_counts[identity]
+                identity=_wetrakr_play_identity({"media_type":kind,"title":title,
+                                                 "item_key":item_key,"watched_at":stamp})
+                duplicate=bool(identity and paired_counts[identity]<simkl_counts[identity])
                 if duplicate:
                     paired_counts[identity] += 1
                 if not duplicate:
@@ -1418,7 +1459,9 @@ class Storage:
             available_plays = defaultdict(list)
             for play_id, play in progression.get("wetrakr_plays", {}).items():
                 if not play.get("xp_key"):
-                    available_plays[(play.get("media_type"), str(play.get("title") or "").casefold())].append((play_id, play))
+                    identity=_wetrakr_play_identity(play)
+                    if identity:
+                        available_plays[identity].append((play_id,play))
             for event in xp_events:
                 media_type = event.get("media_type")
                 event_key = event.get("event_key")
@@ -1429,7 +1472,7 @@ class Storage:
                 if base is None or base in active_watch_bases:
                     kept_events.append(event)
                     continue
-                match = available_plays[(media_type, str(event.get("title") or "").casefold())]
+                match = available_plays[_simkl_xp_identity(event)]
                 if match:
                     play_id, play = match.pop()
                     replacement = f"wetrakr:{play_id}:{play['watched_at']}"
@@ -1989,12 +2032,24 @@ class Storage:
             def counts_for(record):
                 period_start=datetime.fromisoformat(record["start"])
                 period_end=datetime.fromisoformat(record["end"])
-                return watch_contributions(self._data["users"],record.get("members") or [],period_start,period_end,record.get("kind","episodes"))
+                providers=record.get("providers") or {}
+                selected={uid:_statistics_for_provider(member,providers.get(uid,member.get("activity_provider","simkl")),
+                                                       guild.get("timezone")).get("watch_events",{})
+                          for uid,member in guild.get("users",{}).items()
+                          if providers.get(uid,member.get("activity_provider"))=="wetrakr" or
+                          (member.get("statistics") or {}).get("watch_events")}
+                return watch_contributions(self._data["users"],record.get("members") or [],
+                                           period_start,period_end,record.get("kind","episodes"),
+                                           selected_events=selected)
 
             for key,record in records.items():
                 period_end=datetime.fromisoformat(record["end"])
                 if now < period_end:
                     continue
+                if "providers" not in record:
+                    record["providers"]={uid:member.get("activity_provider","simkl")
+                                         for uid,member in guild.get("users",{}).items()}
+                    self._dirty=True
                 if not isinstance(record.get("notified_awards"),dict):
                     # Existing paid weeks predate these notifications.
                     record["notified_awards"]=copy.deepcopy(record.get("awards") or {})

@@ -1326,7 +1326,7 @@ async def poll_one(ch,g,uid,u,gu,request_cache=None,force_reconcile=False,batch=
             if not await send_prestige_notification(ch.send,f"<@{uid}>",number,progression_after_poll.get("lifetime_xp",0)):
                 await storage.retry_prestige_notification(uid,number)
                 break
-        await notify_level_up(g,uid,progression_before_poll,progression_after_poll,ch)
+        await notify_level_up(g,uid,progression_before_poll,progression_after_poll,ch,source_label="SIMKL")
         await storage.flush()
     if batch is None:
         await finalize()
@@ -1709,8 +1709,21 @@ async def poll_wetrakr_all(g=None):
                     first, last = ordered[0], ordered[-1]
                     return await deliver_wetrakr_change(ch, gid, uid, name, member,
                                                         first[0], first[1], started_ids, last[0])
+                was_seeded=bool(target["guild_user_data"]["wetrakr_sync"].get("seeded"))
+                before_progression=await storage.get_progression(uid) if was_seeded else None
                 posted += await wetrakr_sync.poll(target, deliver, deliver_group, resolve_play)
                 await evaluate_achievements(gid, uid)
+                if was_seeded:
+                    after_progression=await storage.get_progression(uid)
+                    await notify_challenge_rewards(gid,uid,ch)
+                    if await feature_enabled(gid,"progression"):
+                        for number in await storage.claim_prestige_notifications(uid):
+                            if not await send_prestige_notification(ch.send,f"<@{uid}>",number,
+                                                                 after_progression.get("lifetime_xp",0)):
+                                await storage.retry_prestige_notification(uid,number)
+                                break
+                    await notify_level_up(gid,uid,before_progression,after_progression,ch,
+                                          source_label="WeTrakr")
             except Exception:
                 log.exception("WeTrakr polling failed for user %s in guild %s.", uid, gid)
         request_delta = wetrakr.request_counts - requests_before
@@ -1868,7 +1881,7 @@ def achievement_notification_embed(mention, achievement_id):
         value=f'{achievement["description"]}\n**Reward:** +{int(achievement.get("xp", 0)):,} XP',
         inline=False,
     )
-    embed.set_footer(text="SIMKL Tracker · Achievements")
+    embed.set_footer(text="Tracker · Achievements")
     return embed
 
 
@@ -1904,7 +1917,7 @@ async def send_prestige_notification(send, mention, prestige, lifetime_xp, *, pr
                      f"your lifetime **{int(lifetime_xp):,} XP** is preserved."),
         color=discord.Color.from_rgb(*accent),
     )
-    embed.set_footer(text="SIMKL Tracker · Prestige")
+    embed.set_footer(text="Tracker · Prestige")
     options={"allowed_mentions": discord.AllowedMentions(users=not preview, roles=False, everyone=False)}
     if preview:
         options["ephemeral"]=True
@@ -1924,7 +1937,8 @@ async def send_prestige_notification(send, mention, prestige, lifetime_xp, *, pr
             return False
 
 
-async def notify_level_up(guild_id_value, uid, before_progression, after_progression, channel, *, preview_interaction=None):
+async def notify_level_up(guild_id_value, uid, before_progression, after_progression, channel,
+                          *, preview_interaction=None, source_label=None):
     if preview_interaction is None and not await feature_enabled(guild_id_value,"progression"):
         return False
     if channel is None:
@@ -1969,13 +1983,15 @@ async def notify_level_up(guild_id_value, uid, before_progression, after_progres
         description += f" · Prestige **{after_prestige}**"
     if rank_up:
         description += f"\n\n*New rank unlocked from {before_rank}.*"
+    if source_label:
+        description += f"\nVia **{source_label}**"
 
     embed = discord.Embed(
         title=title,
         description=description,
         color=discord.Color.from_rgb(*accent_for_tier(after_level,after_prestige)),
     )
-    embed.set_footer(text="SIMKL Tracker · Progression")
+    embed.set_footer(text="Tracker · Progression")
     send = preview_interaction.followup.send if preview_interaction else channel.send
     options = {"allowed_mentions": discord.AllowedMentions(users=preview_interaction is None, roles=False, everyone=False)}
     if preview_interaction:
@@ -1989,6 +2005,7 @@ async def notify_level_up(guild_id_value, uid, before_progression, after_progres
             previous_level=before_level,
             previous_rank=before_rank,
             prestige=after_prestige,
+            source_label=source_label,
         )
         file = discord.File(animation, filename="level-up.gif")
         embed.set_image(url="attachment://level-up.gif")
@@ -2064,7 +2081,7 @@ async def notify_challenge_rewards(guild_id_value,uid,channel):
         description=f"<@{uid}> earned **+{total:,} XP**\n\n"+"\n".join(rows),
         color=0x5865F2,
     )
-    embed.set_footer(text="SIMKL Tracker · Daily and weekly challenges")
+    embed.set_footer(text="Tracker · Daily and weekly challenges")
     try:
         await channel.send(embed=embed,allowed_mentions=discord.AllowedMentions(users=True,roles=False,everyone=False))
     except Exception:
@@ -2100,7 +2117,7 @@ async def notify_community_rewards(guild_id_value,channel,notification):
             ),
             color=0xC9DCF0,
         )
-        embed.set_footer(text="SIMKL Tracker · Community challenge")
+        embed.set_footer(text="Tracker · Community challenge")
         try:
             await channel.send(embed=embed,allowed_mentions=discord.AllowedMentions(users=True,roles=False,everyone=False))
         except Exception:
@@ -2131,7 +2148,8 @@ async def refresh_community_state(guild_id_value):
                 if not await send_prestige_notification(channel.send,f"<@{change['uid']}>",number,progression.get("lifetime_xp",0)):
                     await storage.retry_prestige_notification(change["uid"],number)
                     break
-            await notify_level_up(guild_id_value,change["uid"],{"xp":change["before"]},{"xp":change["after"]},channel)
+            await notify_level_up(guild_id_value,change["uid"],{"xp":change["before"]},{"xp":change["after"]},channel,
+                                  source_label="Community reward")
             await storage.flush()
     return state
 

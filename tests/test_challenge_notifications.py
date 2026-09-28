@@ -114,7 +114,7 @@ def test_community_notification_precedes_level_up(monkeypatch):
         monkeypatch.setattr(bot.storage,"claim_prestige_notifications",AsyncMock(return_value=[]))
         monkeypatch.setattr(bot.storage,"flush",AsyncMock())
         async def announce(*args): calls.append("community")
-        async def level(*args): calls.append("level")
+        async def level(*args, **kwargs): calls.append("level")
         monkeypatch.setattr(bot,"notify_community_rewards",announce)
         monkeypatch.setattr(bot,"notify_level_up",level)
         await bot.refresh_community_state("123")
