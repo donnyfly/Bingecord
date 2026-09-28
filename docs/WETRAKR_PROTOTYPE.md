@@ -2,7 +2,7 @@
 
 This branch starts from `test` and keeps the existing SIMKL bot behavior. The
 first slice contains an isolated WeTrakr client, normalized watch changes,
-and independent `/wetrakr-link` and `/wetrakr-unlink` commands. An opt-in
+and `/tracker-link` and `/tracker-unlink` provider choices. An opt-in
 read-only activity poller now posts new WeTrakr watches and selected statuses.
 
 ## Configuration
@@ -34,13 +34,13 @@ The app key alone cannot read someone's watch history.
 
 ## Trying activity on experimental
 
-1. Link WeTrakr with `/wetrakr-link` and choose **WeTrakr** with
+1. Link WeTrakr with `/tracker-link` provider **WeTrakr** and choose **WeTrakr** with
    `/tracker-source` in the server. A user with both links defaults to SIMKL
    until they make this choice.
-2. Run `/wetrakr-checknow` (admin) once to seed the history baseline. This
+2. Run `/tracker-checknow` (admin) once to seed the history baseline. This
    reads compact history but does not post past watches.
 3. Mark a *new* movie or episode watched, or change a planning/dropped/paused
-   status in WeTrakr. Run `/wetrakr-checknow` again or await the poll interval.
+   status in WeTrakr. Run `/tracker-checknow` again or await the poll interval.
    The journal may lag by several seconds, so retry on the next cycle if needed.
 4. Switch back with `/tracker-source` → SIMKL. The inactive tracker does not
    post activity. Switching resets its activity baseline without removing
@@ -57,7 +57,7 @@ do not create extra status posts.
 ## Account isolation
 
 The application key identifies this bot, not its owner's WeTrakr account.
-Each `/wetrakr-link` creates its own device-code request. WeTrakr releases an
+Each WeTrakr choice in `/tracker-link` creates its own device-code request. WeTrakr releases an
 account token only after the person who is signed in approves that request.
 Tokens are stored under the Discord user's ID, and each server has its own
 link flag. A different user's link does not inherit the app owner's token.

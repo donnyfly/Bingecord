@@ -33,11 +33,11 @@ def test_feature_defaults_isolation_and_restart(tmp_path,monkeypatch):
 def test_disabled_commands_and_core_commands(monkeypatch):
     async def scenario():
         monkeypatch.setattr(bot.storage,'get_features',AsyncMock(return_value=dict.fromkeys(storage_module.DEFAULT_FEATURES,False)))
-        i=SimpleNamespace(guild_id=1,data={'name':'simkl-leaderboard'},type=discord.InteractionType.application_command,
+        i=SimpleNamespace(guild_id=1,data={'name':'tracker-leaderboard'},type=discord.InteractionType.application_command,
                           response=SimpleNamespace(send_message=AsyncMock()))
         assert not await bot.bot.tree.interaction_check(i)
         i.response.send_message.assert_awaited_once()
-        for name in ('simkl-link','simkl-checknow','simkl-features','simkl-debug'):
+        for name in ('tracker-link','tracker-checknow','tracker-features','tracker-debug'):
             i.data={'name':name}
             assert await bot.bot.tree.interaction_check(i)
     asyncio.run(scenario())

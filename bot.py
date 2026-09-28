@@ -49,7 +49,7 @@ except ZoneInfoNotFoundError:
     DEFAULT_TIMEZONE_NAME = "UTC"
 POLL_CONCURRENCY=positive_int_env("POLL_CONCURRENCY", 5)
 # After this many consecutive failed polls, the automatic background poll stops
-# calling SIMKL for that guild-user until a manual /simkl-checknow succeeds or
+# calling SIMKL for that guild-user until a manual /tracker-checknow succeeds or
 # the user relinks. This avoids burning an API call every cycle on a revoked token.
 MAX_CONSECUTIVE_FAILURES=positive_int_env("MAX_CONSECUTIVE_FAILURES", 5)
 HISTORY_BACKFILL_CONCURRENCY=positive_int_env("HISTORY_BACKFILL_CONCURRENCY", 2)
@@ -65,8 +65,8 @@ STATUS_TEXT={"watching":"Started watching","plantowatch":"Planned to watch","com
 MEDIA_STYLES={"shows":(0x3498DB,"📺 TV"),"anime":(0xE91E63,"🌸 Anime"),"movies":(0xF1C40F,"🎬 Movie")}
 HISTORY_FETCH_TIMEOUT_SECONDS=120; CHECKNOW_COOLDOWN_SECONDS=30
 poll_lock=asyncio.Lock(); last_checknow_at=0.0; linking_users=set(); profile_lookup_attempted=set()
-wetrakr_poll_lock=asyncio.Lock(); last_wetrakr_checknow_at=0.0
-logging.basicConfig(level=logging.INFO,format="%(asctime)s [%(levelname)s] %(message)s"); log=logging.getLogger("simkl-bot")
+wetrakr_poll_lock=asyncio.Lock()
+logging.basicConfig(level=logging.INFO,format="%(asctime)s [%(levelname)s] %(message)s"); log=logging.getLogger("tracker-bot")
 if DEFAULT_TIMEZONE_NAME == "UTC" and os.getenv("SIMKL_DEFAULT_TIMEZONE"):
     log.warning("Invalid SIMKL_DEFAULT_TIMEZONE=%r; falling back to UTC.", os.getenv("SIMKL_DEFAULT_TIMEZONE"))
 simkl=SimklClient(SIMKL_CLIENT_ID); tmdb=TmdbClient(TMDB_API_KEY); mdblist=MdbListClient(MDBLIST_API_KEY) if MDBLIST_API_KEY else None; imdb=ImdbClient()
@@ -81,11 +81,11 @@ FEATURE_LABELS={"watched_together":"Watched Together", "progression":"Levels, ra
                 "challenges":"Daily and weekly challenges", "community":"Community challenges",
                 "weekly_recaps":"Weekly recaps", "leaderboards":"Leaderboards",
                 "statistics":"Statistics cards", "discovery":"Watching, random picks and recommendations"}
-COMMAND_FEATURES={"simkl-challenges":"challenges","simkl-community":"community",
-                  "simkl-achievements":"achievements","simkl-weekly-recap":"weekly_recaps",
-                  "simkl-leaderboard":"leaderboards","simkl-stats":"statistics",
-                  "simkl-server-stats":"statistics","simkl-watching":"discovery",
-                  "simkl-random":"discovery","simkl-recommend":"discovery"}
+COMMAND_FEATURES={"tracker-challenges":"challenges","tracker-community":"community",
+                  "tracker-achievements":"achievements","tracker-weekly-recap":"weekly_recaps",
+                  "tracker-leaderboard":"leaderboards","tracker-stats":"statistics",
+                  "tracker-server-stats":"statistics","tracker-watching":"discovery",
+                  "tracker-random":"discovery","tracker-recommend":"discovery"}
 
 async def feature_enabled(g, feature):
     features=await storage.get_features(g)
@@ -100,7 +100,7 @@ class FeatureCommandTree(app_commands.CommandTree):
                 await interaction.response.autocomplete([])
                 return False
             await interaction.response.send_message(
-                "This feature is disabled in this server. An admin can enable it with `/simkl-features`.",ephemeral=True)
+                "This feature is disabled in this server. An admin can enable it with `/tracker-features`.",ephemeral=True)
             return False
         return True
 
@@ -401,8 +401,8 @@ def build_embed(t,desc,ts,name,member,image,profile,title=None,title_url=None,po
     color,label=MEDIA_STYLES[t]; p={"style":"rich","artwork":"auto","activity_text":"short","show_imdb":True,"show_mal":True}; p.update(preferences or {})
     e=discord.Embed(title=title,url=title_url,description=desc,color=color,timestamp=ts)
     e.set_author(name=f"{name}'s Activity",url=profile,icon_url=member.display_avatar.url if member else None)
-    # Status activities always use the title poster. /simkl-style and
-    # /simkl-style-server only control watch activities.
+    # Status activities always use the title poster. /tracker-style and
+    # /tracker-style-server only control watch activities.
     if status_activity:
         selected=poster
     elif p["artwork"]=="poster":
@@ -862,7 +862,7 @@ async def notify_poll_failures_exceeded(g,uid,guild_user):
         f"{MAX_CONSECUTIVE_FAILURES} times in a row, so automatic tracking there is paused.\n"
         f"Last error: `{str(last_error)[:300]}`\n\n"
         "Your SIMKL link probably needs attention (for example, access was revoked). "
-        "Run `/simkl-link` in that server to reconnect; tracking resumes automatically after a successful check."
+        "Run `/tracker-link` in that server to reconnect; tracking resumes automatically after a successful check."
     )
     try:
         user=bot.get_user(int(uid)) or await bot.fetch_user(int(uid))
@@ -1323,7 +1323,7 @@ async def poll_all(g=None, force_reconcile=False, ignore_failure_threshold=False
     """Poll linked users.
 
     The automatic background poll skips guild-users that have reached
-    MAX_CONSECUTIVE_FAILURES. Manual checks (/simkl-checknow) pass
+    MAX_CONSECUTIVE_FAILURES. Manual checks (/tracker-checknow) pass
     ignore_failure_threshold=True so they always attempt every target.
     """
     started = time.monotonic()
@@ -1408,7 +1408,7 @@ async def poll_all(g=None, force_reconcile=False, ignore_failure_threshold=False
         for channel_id,(gid,error) in channel_errors.items():
             log.warning("Couldn't access channel %s for guild %s: %s",channel_id,gid,error)
         if skipped:
-            log.info("Skipped %d target(s) with %d+ consecutive poll failures; use /simkl-checknow to retry.",
+            log.info("Skipped %d target(s) with %d+ consecutive poll failures; use /tracker-checknow to retry.",
                      len(skipped),MAX_CONSECUTIVE_FAILURES)
         # Queued counts only become successful after Discord delivery.
         posted=sum(results) if not batch.activities else (
@@ -2076,7 +2076,7 @@ RATING_CHOICES=[app_commands.Choice(name="Show",value="true"),app_commands.Choic
 
 NOT_ADMIN_MESSAGE="You need the Manage Server permission to do that."
 
-@bot.tree.command(name="simkl-features",description="(Admin) Configure optional features or use activity-only mode.")
+@bot.tree.command(name="tracker-features",description="(Admin) Configure optional features or use activity-only mode.")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.choices(
     preset=[app_commands.Choice(name="Activity only",value="classic"),app_commands.Choice(name="All features",value="all")],
@@ -2102,7 +2102,7 @@ async def simkl_features(i, preset: app_commands.Choice[str] | None = None,
         "\n\nActivity tracking stays available. Challenges and community goals also require progression. "
         "Disabled commands may still appear in Discord's menu. Existing history and global XP are retained and watch XP continues syncing so shared accounts stay consistent.",ephemeral=True)
 
-@bot.tree.command(name="simkl-timezone",description="(Admin) Set or view the server timezone.")
+@bot.tree.command(name="tracker-timezone",description="(Admin) Set or view the server timezone.")
 @app_commands.describe(timezone="IANA timezone such as Asia/Singapore, or 'reset' to use the environment default")
 async def simkl_timezone(i, timezone: str | None = None):
     g=guild_id(i)
@@ -2151,7 +2151,7 @@ WEEKLY_PERIOD_CHOICES=[
     app_commands.Choice(name="Previous week",value="previous"),
 ]
 
-@bot.tree.command(name="simkl-weekly-recap",description="(Admin) Post a weekly SIMKL watch recap.")
+@bot.tree.command(name="tracker-weekly-recap",description="(Admin) Post a weekly SIMKL watch recap.")
 @app_commands.choices(period=WEEKLY_PERIOD_CHOICES)
 @app_commands.describe(period="Choose the week to generate; use this to test without waiting for the weekly schedule")
 async def simkl_weekly_recap(i, period: app_commands.Choice[str] | None = None):
@@ -2163,7 +2163,7 @@ async def simkl_weekly_recap(i, period: app_commands.Choice[str] | None = None):
         return
     channel_id=await storage.get_channel(g)
     if channel_id is None:
-        await i.response.send_message("No posting channel is configured for this server. Use `/simkl-setchannel` first.",ephemeral=True)
+        await i.response.send_message("No posting channel is configured for this server. Use `/tracker-setchannel` first.",ephemeral=True)
         return
     channel=bot.get_channel(int(channel_id))
     if channel is None:
@@ -2186,7 +2186,7 @@ async def achievement_autocomplete(i, current: str):
 
 
 
-@bot.tree.command(name="simkl-challenges", description="View your current daily and weekly watch challenges.")
+@bot.tree.command(name="tracker-challenges", description="View your current daily and weekly watch challenges.")
 async def simkl_challenges(i):
     uid = str(i.user.id)
     today = datetime.now(timezone.utc).date()
@@ -2220,7 +2220,7 @@ async def simkl_challenges(i):
     await i.response.send_message(embed=e)
 
 
-@bot.tree.command(name="simkl-community", description="View this server's rotating weekly watch challenge.")
+@bot.tree.command(name="tracker-community", description="View this server's rotating weekly watch challenge.")
 async def simkl_community(i):
     g=guild_id(i)
     if not g:
@@ -2253,7 +2253,7 @@ async def simkl_community(i):
     e.set_footer(text="Server-local weekly goal · bonus XP is added to normal watch XP")
     await i.followup.send(embed=e,allowed_mentions=discord.AllowedMentions.none())
 
-@bot.tree.command(name="simkl-user-reset",description="Reset your SIMKL tracking history for this server.")
+@bot.tree.command(name="tracker-user-reset",description="Reset your SIMKL tracking history for this server.")
 @app_commands.describe(confirm="Confirm that you want to reset your server-local tracking state")
 async def simkl_user_reset(i, confirm: bool = False):
     g=guild_id(i)
@@ -2265,7 +2265,7 @@ async def simkl_user_reset(i, confirm: bool = False):
     user=await storage.get_user(uid)
     if not user or not user.get("simkl_token"):
         await i.response.send_message(
-            "You don't have a linked SIMKL account. Use /simkl-link first.",
+            "You don't have a linked SIMKL account. Use /tracker-link first.",
             ephemeral=True,
         )
         return
@@ -2274,7 +2274,7 @@ async def simkl_user_reset(i, confirm: bool = False):
         await i.response.send_message(
             "This resets your SIMKL tracking history for this server, including watch statistics, "
             "watched-state tracking, polling history, and achievements. Your SIMKL link and personal "
-            "style settings will be kept. If you want to continue, run /simkl-user-reset with confirm set to True.",
+            "style settings will be kept. If you want to continue, run /tracker-user-reset with confirm set to True.",
             ephemeral=True,
         )
         return
@@ -2294,7 +2294,7 @@ async def simkl_user_reset(i, confirm: bool = False):
     )
 
 
-@bot.tree.command(name="simkl-achievements",description="Show your SIMKL achievements.")
+@bot.tree.command(name="tracker-achievements",description="Show your SIMKL achievements.")
 @app_commands.describe(user="Optional server member to view")
 async def simkl_achievements(i,user: discord.Member | None = None):
     g=guild_id(i)
@@ -2350,7 +2350,7 @@ async def simkl_achievements(i,user: discord.Member | None = None):
     await i.response.send_message(embeds=embeds)
 
 
-@bot.tree.command(name="simkl-debug",description="(Admin) Privately preview progression notifications without changing XP.")
+@bot.tree.command(name="tracker-debug",description="(Admin) Privately preview progression notifications without changing XP.")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.choices(
     feature=[
@@ -2481,7 +2481,7 @@ async def show_profile(i,user):
         await i.followup.send(embed=embed)
 
 
-@bot.tree.command(name="simkl-stats",description="Show a visual SIMKL profile with watches, XP, and achievements.")
+@bot.tree.command(name="tracker-stats",description="Show a visual SIMKL profile with watches, XP, and achievements.")
 @app_commands.describe(user="Optional server member to view")
 async def simkl_stats(i,user: discord.Member | None = None):
     await show_profile(i,user)
@@ -2497,7 +2497,7 @@ LEADERBOARD_CHOICES=[
     app_commands.Choice(name="Prestige",value="prestige"),
 ]
 
-@bot.tree.command(name="simkl-leaderboard",description="Show the server's SIMKL watch leaderboard.")
+@bot.tree.command(name="tracker-leaderboard",description="Show the server's SIMKL watch leaderboard.")
 @app_commands.choices(category=LEADERBOARD_CHOICES)
 async def simkl_leaderboard(i,category: app_commands.Choice[str] | None = None):
     g=guild_id(i)
@@ -2662,7 +2662,7 @@ def build_server_stats(rows, guild_name, *, with_visual=False):
     return embed
 
 
-@bot.tree.command(name="simkl-server-stats",description="Show this server's combined SIMKL watch statistics.")
+@bot.tree.command(name="tracker-server-stats",description="Show this server's combined SIMKL watch statistics.")
 async def simkl_server_stats(i):
     g=guild_id(i)
     if not g:
@@ -2863,7 +2863,7 @@ async def _currently_watching_items(uid,user,token,media_types):
 
 
 @bot.tree.command(
-    name="simkl-watching",
+    name="tracker-watching",
     description="Show what you're currently watching on SIMKL.",
 )
 @app_commands.choices(type=WATCHING_TYPE_CHOICES)
@@ -2878,7 +2878,7 @@ async def simkl_watching(i,type: app_commands.Choice[str] | None = None):
     user=await storage.get_user(uid)
     if not user or not user.get("simkl_token"):
         await i.response.send_message(
-            "You don't have a linked SIMKL account in this server. Use /simkl-link first.",
+            "You don't have a linked SIMKL account in this server. Use /tracker-link first.",
             ephemeral=True,
         )
         return
@@ -2928,7 +2928,7 @@ async def simkl_watching(i,type: app_commands.Choice[str] | None = None):
 
     except SimklAuthError:
         await i.followup.send(
-            "Your SIMKL authentication is no longer valid. Please use /simkl-link again.",
+            "Your SIMKL authentication is no longer valid. Please use /tracker-link again.",
             ephemeral=True,
         )
     except Exception as exc:
@@ -3136,7 +3136,7 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
 
 
 @bot.tree.command(
-    name="simkl-recommend",
+    name="tracker-recommend",
     description="Get personalized recommendations based on your SIMKL history.",
 )
 @app_commands.choices(type=[
@@ -3155,7 +3155,7 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
     user=await storage.get_user(uid)
     if not user or not user.get("simkl_token"):
         await i.response.send_message(
-            "You don't have a linked SIMKL account in this server. Use /simkl-link first.",
+            "You don't have a linked SIMKL account in this server. Use /tracker-link first.",
             ephemeral=True,
         )
         return
@@ -3280,7 +3280,7 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
 
     except SimklAuthError:
         await i.followup.send(
-            "Your SIMKL authentication is no longer valid. Please use /simkl-link again.",
+            "Your SIMKL authentication is no longer valid. Please use /tracker-link again.",
             ephemeral=True,
         )
     except Exception as exc:
@@ -3294,7 +3294,7 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
         )
 
 
-@bot.tree.command(name="simkl-random",description="Pick something random from your SIMKL Plan To Watch list.")
+@bot.tree.command(name="tracker-random",description="Pick something random from your SIMKL Plan To Watch list.")
 @app_commands.choices(type=RANDOM_TYPE_CHOICES,genre=RANDOM_GENRE_CHOICES)
 @app_commands.describe(
     type="Choose what kind of title to pick.",
@@ -3314,7 +3314,7 @@ async def simkl_random(
     user=await storage.get_user(uid)
     if not user or not user.get("simkl_token"):
         await i.response.send_message(
-            "You don't have a linked SIMKL account in this server. Use /simkl-link first.",
+            "You don't have a linked SIMKL account in this server. Use /tracker-link first.",
             ephemeral=True,
         )
         return
@@ -3399,7 +3399,7 @@ async def simkl_random(
 
     except SimklAuthError:
         await i.followup.send(
-            "Your SIMKL authentication is no longer valid. Please use /simkl-link again.",
+            "Your SIMKL authentication is no longer valid. Please use /tracker-link again.",
             ephemeral=True,
         )
     except Exception as exc:
@@ -3412,7 +3412,6 @@ async def simkl_random(
             ephemeral=True,
         )
 
-@bot.tree.command(name="simkl-link",description="Link your SIMKL account in this server.")
 async def simkl_link(i):
     g=guild_id(i)
     if not g: await i.response.send_message("This command must be used in a server.",ephemeral=True); return
@@ -3430,7 +3429,7 @@ async def simkl_link(i):
             except SimklAuthError: break
             except Exception: log.warning("PIN poll failed.",exc_info=True); continue
             if tokens: break
-        if not tokens: await i.followup.send("The SIMKL linking code expired or was cancelled. Run /simkl-link again.",ephemeral=True); return
+        if not tokens: await i.followup.send("The SIMKL linking code expired or was cancelled. Run /tracker-link again.",ephemeral=True); return
         access=tokens["access_token"]; refresh=tokens.get("refresh_token"); exp=calculate_token_expiry(tokens.get("expires_in")); aid=None
         try:
             settings=await simkl.get_user_settings(access); aid=account_id_from_settings(settings); username=settings.get("user",{}).get("name") or settings.get("account",{}).get("id") or "SIMKL user"
@@ -3448,25 +3447,23 @@ async def simkl_link(i):
             total=int(stats.get("episodes_watched",0))+int(stats.get("movies_watched",0))
             level=level_progress(int(progression.get("xp",0)))[0]
             await i.followup.send(
-                f"History import complete: **{total:,} watches**, **{int(progression.get('xp',0)):,} XP**, Level **{level}**. View `/simkl-stats` for details.",
+                f"History import complete: **{total:,} watches**, **{int(progression.get('xp',0)):,} XP**, Level **{level}**. View `/tracker-stats` for details.",
                 ephemeral=True,
             )
         except Exception:
             log.exception("Initial history import failed for user %s in guild %s; polling will retry.",uid,g)
             await i.followup.send(
-                "Your SIMKL account is linked, but the history import did not finish. The bot will retry automatically; an admin can also run `/simkl-checknow`.",
+                "Your SIMKL account is linked, but the history import did not finish. The bot will retry automatically; an admin can also run `/tracker-checknow`.",
                 ephemeral=True,
             )
     finally: linking_users.discard(key)
 
-@bot.tree.command(name="simkl-unlink",description="Unlink your SIMKL account from this server.")
 async def simkl_unlink(i):
     g=guild_id(i)
     if not g: await i.response.send_message("This command must be used in a server.",ephemeral=True); return
     ok=await storage.unlink_user(g,str(i.user.id)); await i.response.send_message("Your SIMKL account has been unlinked from this server." if ok else "You don't have a linked SIMKL account in this server.",ephemeral=True)
 
 
-@bot.tree.command(name="wetrakr-link", description="Privately link your WeTrakr account for the experimental integration.")
 async def wetrakr_link(i):
     g=guild_id(i)
     if not g:
@@ -3508,7 +3505,7 @@ async def wetrakr_link(i):
                     break
                 raise
         if not tokens:
-            await i.followup.send("WeTrakr approval expired or was cancelled. Run `/wetrakr-link` again.",ephemeral=True)
+            await i.followup.send("WeTrakr approval expired or was cancelled. Run `/tracker-link` with provider WeTrakr again.",ephemeral=True)
             return
         account=await wetrakr.account(tokens["access_token"])
         if not isinstance(account,dict) or not account.get("id"):
@@ -3528,7 +3525,6 @@ async def wetrakr_link(i):
         linking_users.discard(key)
 
 
-@bot.tree.command(name="wetrakr-unlink", description="Unlink your WeTrakr account from this server.")
 async def wetrakr_unlink(i):
     g=guild_id(i)
     if not g:
@@ -3538,11 +3534,32 @@ async def wetrakr_unlink(i):
     await i.response.send_message("WeTrakr has been unlinked from this server." if linked else "You don't have a WeTrakr link in this server.",ephemeral=True)
 
 
-@bot.tree.command(name="tracker-source", description="Choose which linked tracker posts your activity in this server.")
-@app_commands.choices(provider=[
+TRACKER_CHOICES=[
     app_commands.Choice(name="SIMKL", value="simkl"),
     app_commands.Choice(name="WeTrakr", value="wetrakr"),
-])
+]
+
+
+@bot.tree.command(name="tracker-link", description="Link your SIMKL or WeTrakr account in this server.")
+@app_commands.choices(provider=TRACKER_CHOICES)
+async def tracker_link(i, provider: app_commands.Choice[str]):
+    if provider.value == "simkl":
+        await simkl_link(i)
+    else:
+        await wetrakr_link(i)
+
+
+@bot.tree.command(name="tracker-unlink", description="Unlink a tracker account from this server.")
+@app_commands.choices(provider=TRACKER_CHOICES)
+async def tracker_unlink(i, provider: app_commands.Choice[str]):
+    if provider.value == "simkl":
+        await simkl_unlink(i)
+    else:
+        await wetrakr_unlink(i)
+
+
+@bot.tree.command(name="tracker-source", description="Choose which linked tracker posts your activity in this server.")
+@app_commands.choices(provider=TRACKER_CHOICES)
 async def tracker_source(i, provider: app_commands.Choice[str] | None = None):
     g=guild_id(i)
     if not g:
@@ -3572,26 +3589,7 @@ async def tracker_source(i, provider: app_commands.Choice[str] | None = None):
     await i.response.send_message(f"Activity source set to **{provider.name}**. {detail}",ephemeral=True)
 
 
-@bot.tree.command(name="wetrakr-checknow", description="(Admin) Check this server's selected WeTrakr activity.")
-async def wetrakr_checknow(i):
-    global last_wetrakr_checknow_at
-    g=guild_id(i)
-    if not g or not is_admin(i):
-        await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True)
-        return
-    if time.monotonic()-last_wetrakr_checknow_at<CHECKNOW_COOLDOWN_SECONDS:
-        await i.response.send_message("Please wait before checking WeTrakr again.",ephemeral=True)
-        return
-    if wetrakr_poll_lock.locked():
-        await i.response.send_message("A WeTrakr activity check is already running.",ephemeral=True)
-        return
-    last_wetrakr_checknow_at=time.monotonic()
-    await i.response.defer(ephemeral=True)
-    posted=await poll_wetrakr_all(g)
-    await i.followup.send(f"WeTrakr check complete. Posted **{posted}** activity item(s). "
-                          "The first check only seeds history and posts nothing.",ephemeral=True)
-
-@bot.tree.command(name="simkl-style",description="Choose your personal style for episode and movie watch activities.")
+@bot.tree.command(name="tracker-style",description="Choose your personal style for episode and movie watch activities.")
 @app_commands.choices(style=STYLE_CHOICES,artwork=ARTWORK_CHOICES,activity_text=TEXT_CHOICES,episode_format=EPISODE_FORMAT_CHOICES,show_imdb=RATING_CHOICES,show_mal=RATING_CHOICES)
 @app_commands.describe(reset="Reset your personal choices and follow the server default")
 async def simkl_style(i,style: app_commands.Choice[str] | None = None,artwork: app_commands.Choice[str] | None = None,activity_text: app_commands.Choice[str] | None = None,episode_format: app_commands.Choice[str] | None = None,show_imdb: app_commands.Choice[str] | None = None,show_mal: app_commands.Choice[str] | None = None,reset: bool | None = None):
@@ -3639,7 +3637,7 @@ async def simkl_style(i,style: app_commands.Choice[str] | None = None,artwork: a
         ephemeral=True,
     )
 
-@bot.tree.command(name="simkl-style-server",description="(Admin) Set the default style for episode and movie watch activities.")
+@bot.tree.command(name="tracker-style-server",description="(Admin) Set the default style for episode and movie watch activities.")
 @app_commands.choices(style=STYLE_CHOICES,artwork=ARTWORK_CHOICES,activity_text=TEXT_CHOICES,episode_format=EPISODE_FORMAT_CHOICES,show_imdb=RATING_CHOICES,show_mal=RATING_CHOICES)
 @app_commands.describe(reset="Reset all server style options to the default settings",force_override="Force everyone to use the server settings, ignoring personal choices")
 async def simkl_style_server(i,style: app_commands.Choice[str] | None = None,artwork: app_commands.Choice[str] | None = None,activity_text: app_commands.Choice[str] | None = None,episode_format: app_commands.Choice[str] | None = None,show_imdb: app_commands.Choice[str] | None = None,show_mal: app_commands.Choice[str] | None = None,force_override: bool | None = None,reset: bool | None = None):
@@ -3689,13 +3687,13 @@ async def simkl_style_server(i,style: app_commands.Choice[str] | None = None,art
     forced=await storage.get_server_embed_force_override(g)
     await i.response.send_message(settings_text(p,"Server default updated:",forced),ephemeral=True)
 
-@bot.tree.command(name="simkl-setchannel",description="(Admin) Set the channel where this server's watch activity is posted.")
+@bot.tree.command(name="tracker-setchannel",description="(Admin) Set the channel where this server's watch activity is posted.")
 async def simkl_setchannel(i,channel:discord.TextChannel=None):
     g=guild_id(i)
     if not g or not is_admin(i): await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True); return
     target=channel or i.channel; await storage.set_channel(g,target.id); await i.response.send_message(f"Watch activity for this server will now be posted in {target.mention}.",ephemeral=True)
 
-@bot.tree.command(name="simkl-status",description="(Admin) Show this server's configuration and linked accounts.")
+@bot.tree.command(name="tracker-status",description="(Admin) Show this server's configuration and linked accounts.")
 async def simkl_status(i):
     g=guild_id(i)
     if not g or not is_admin(i): await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True); return
@@ -3739,7 +3737,7 @@ async def simkl_status(i):
         last_error=gu.get("last_error")
         failures=max(int(gu.get("consecutive_failures",0) or 0),0)
         if failures>=MAX_CONSECUTIVE_FAILURES:
-            health_state=f"paused · {failures} consecutive failure(s); automatic polling skipped until `/simkl-checknow` succeeds or the user relinks"
+            health_state=f"paused · {failures} consecutive failure(s); automatic polling skipped until `/tracker-checknow` succeeds or the user relinks"
         elif failures:
             health_state=f"degraded · {failures} consecutive failure(s)"
         elif last_success:
@@ -3767,18 +3765,24 @@ async def simkl_status(i):
         ephemeral=True,
     )
 
-@bot.tree.command(name="simkl-checknow",description="(Admin) Immediately check this server's SIMKL activity.")
-async def simkl_checknow(i):
+@bot.tree.command(name="tracker-checknow",description="(Admin) Check selected tracker activity in this server.")
+async def tracker_checknow(i):
     global last_checknow_at
     g=guild_id(i)
     if not g or not is_admin(i): await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True); return
     if time.monotonic()-last_checknow_at<CHECKNOW_COOLDOWN_SECONDS:
-        await i.response.send_message("Please wait before using /simkl-checknow again.",ephemeral=True); return
-    if poll_lock.locked(): await i.response.send_message("A SIMKL activity check is already running.",ephemeral=True); return
+        await i.response.send_message("Please wait before using /tracker-checknow again.",ephemeral=True); return
+    if poll_lock.locked() or wetrakr_poll_lock.locked():
+        await i.response.send_message("An activity check is already running.",ephemeral=True); return
     last_checknow_at=time.monotonic()
-    await i.response.send_message("Checking this server's SIMKL activity now...",ephemeral=True)
-    posted=await poll_all(g,force_reconcile=True,ignore_failure_threshold=True)
-    await i.followup.send(f"Done. Posted **{posted}** new activity item(s). Check the bot logs if this says 0.",ephemeral=True)
+    await i.response.send_message("Checking this server's selected tracker activity now...",ephemeral=True)
+    simkl_posted=await poll_all(g,force_reconcile=True,ignore_failure_threshold=True)
+    wetrakr_posted=await poll_wetrakr_all(g)
+    await i.followup.send(
+        f"Done. Posted **{simkl_posted + wetrakr_posted}** new activity item(s) "
+        f"(SIMKL {simkl_posted}, WeTrakr {wetrakr_posted}). "
+        "A WeTrakr user's first check seeds history without posting older watches.",
+        ephemeral=True)
 
 POLL_RETRY_DELAY_SECONDS=60
 POLL_MAX_RETRY_DELAY_SECONDS=600
@@ -3790,7 +3794,7 @@ async def on_ready():
         await storage.ensure_guild(g.id)
     poll_task = getattr(bot, "_poll_task", None)
     if poll_task is None or poll_task.done():
-        bot._poll_task = bot.loop.create_task(polling_loop(), name="simkl-polling")
+        bot._poll_task = bot.loop.create_task(polling_loop(), name="tracker-polling")
 
 async def polling_loop():
     await bot.wait_until_ready()

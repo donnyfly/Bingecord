@@ -35,50 +35,58 @@ It supports automatic SIMKL syncing, episode grouping, artwork and ratings, pers
 
 ## Commands
 
-The experimental branch also supports `/wetrakr-link`, `/wetrakr-unlink`,
-`/tracker-source` (choose SIMKL or WeTrakr activity per user and server), and
-the admin command `/wetrakr-checknow`. See
+On the experimental branch, link either service with `/tracker-link` and
+select its provider option. `/tracker-source` chooses SIMKL or WeTrakr
+activity per user and server. `/tracker-checknow` checks both selected
+sources. See
 [`docs/WETRAKR_PROTOTYPE.md`](docs/WETRAKR_PROTOTYPE.md) for setup, the
 silent first sync, and current progression limits.
 
 | Command | Who can use it | Purpose |
 | --- | --- | --- |
-| `/simkl-link` | Everyone | Link your SIMKL account |
-| `/simkl-unlink` | Everyone | Unlink your SIMKL account |
-| `/simkl-stats` | Everyone | View your watch/progression profile |
-| `/simkl-achievements` | Everyone | View achievements and XP rewards |
-| `/simkl-challenges` | Everyone | View daily and weekly challenges |
-| `/simkl-leaderboard` | Everyone | View server leaderboards |
-| `/simkl-server-stats` | Everyone | View server watch statistics |
-| `/simkl-community` | Everyone | View the rotating weekly cooperative watch goal |
-| `/simkl-style` | Everyone | Change personal activity-post preferences |
-| `/simkl-user-reset` | Everyone | Reset your tracking history for the current server |
-| `/simkl-setchannel` | Manage Server | Choose the activity channel |
-| `/simkl-style-server` | Manage Server | Set server-wide style defaults |
-| `/simkl-features` | Manage Server | Enable or disable optional feature groups |
-| `/simkl-timezone` | Manage Server | Set the server timezone |
-| `/simkl-weekly-recap` | Manage Server | Post/test a weekly recap |
-| `/simkl-status` | Manage Server | View configuration and sync health |
-| `/simkl-checknow` | Manage Server | Check SIMKL immediately |
-| `/simkl-debug` | Manage Server | Preview progression notifications without changing XP |
+| `/tracker-link` | Everyone | Link your SIMKL or WeTrakr account (choose provider) |
+| `/tracker-unlink` | Everyone | Unlink one provider (choose provider) |
+| `/tracker-source` | Everyone | Choose the activity source for this server |
+| `/tracker-stats` | Everyone | View your watch/progression profile |
+| `/tracker-achievements` | Everyone | View achievements and XP rewards |
+| `/tracker-challenges` | Everyone | View daily and weekly challenges |
+| `/tracker-leaderboard` | Everyone | View server leaderboards |
+| `/tracker-server-stats` | Everyone | View server watch statistics |
+| `/tracker-community` | Everyone | View the rotating weekly cooperative watch goal |
+| `/tracker-watching` | Everyone | View your SIMKL watching list |
+| `/tracker-random` | Everyone | Pick from your SIMKL plan-to-watch list |
+| `/tracker-recommend` | Everyone | Get recommendations based on SIMKL history |
+| `/tracker-style` | Everyone | Change personal activity-post preferences |
+| `/tracker-user-reset` | Everyone | Reset your tracking history for the current server |
+| `/tracker-setchannel` | Manage Server | Choose the activity channel |
+| `/tracker-style-server` | Manage Server | Set server-wide style defaults |
+| `/tracker-features` | Manage Server | Enable or disable optional feature groups |
+| `/tracker-timezone` | Manage Server | Set the server timezone |
+| `/tracker-weekly-recap` | Manage Server | Post/test a weekly recap |
+| `/tracker-status` | Manage Server | View configuration and sync health |
+| `/tracker-checknow` | Manage Server | Check selected SIMKL and WeTrakr accounts immediately |
+| `/tracker-debug` | Manage Server | Preview progression notifications without changing XP |
+
+WeTrakr currently supplies activity posts when selected. XP, statistics,
+challenges, and the discovery commands still use SIMKL data.
 
 ### Prefer the simple tracker experience?
 
 Admins can use:
 
 ```text
-/simkl-features preset: Activity only
+/tracker-features preset: Activity only
 ```
 
 This keeps the core SIMKL activity tracker while disabling optional progression, achievements, challenges, recaps, community goals, leaderboards, and similar extras.
 
-**Watched Together:** matching movies, episodes, or identical episode ranges in the same channel combine when each watch timestamp is within 30 minutes of the others. Mentions do not ping. Everyone keeps their own XP and history. Admins can toggle it with `/simkl-features feature: Watched Together enabled: False`. First watches include “🆕 Started watching this series.” inside the watch post; standalone Started Watching posts are omitted.
+**Watched Together:** matching movies, episodes, or identical episode ranges in the same channel combine when each watch timestamp is within 30 minutes of the others. Mentions do not ping. Everyone keeps their own XP and history. Admins can toggle it with `/tracker-features feature: Watched Together enabled: False`. First watches include “🆕 Started watching this series.” inside the watch post; standalone Started Watching posts are omitted.
 
 
 Use:
 
 ```text
-/simkl-features preset: All features
+/tracker-features preset: All features
 ```
 
 to restore the full experience.
@@ -114,7 +122,7 @@ The bot needs permission to send messages and read message history in the channe
 
 Create an application in the SIMKL developer settings and copy its **Client ID**.
 
-Individual Discord users will connect their own SIMKL accounts later with `/simkl-link`.
+Individual Discord users will connect their own SIMKL accounts later with `/tracker-link`.
 
 ### 3. Get a TMDB API key
 
@@ -125,8 +133,8 @@ MDBList is optional and is used for additional IMDb/MyAnimeList ratings.
 ### 4. Create the Docker setup
 
 ```bash
-mkdir -p ~/simkl-discord-bot
-cd ~/simkl-discord-bot
+mkdir -p ~/tracker-discord-bot
+cd ~/tracker-discord-bot
 ```
 
 Create `docker-compose.yml`:
@@ -171,8 +179,8 @@ docker compose logs -f
 
 Once the bot is online:
 
-1. Run `/simkl-setchannel` to choose where activity should be posted.
-2. Run `/simkl-link` to connect your SIMKL account.
+1. Run `/tracker-setchannel` to choose where activity should be posted.
+2. Run `/tracker-link` to connect your SIMKL account.
 3. Watch something and let the bot handle the rest.
 
 ---
@@ -231,18 +239,18 @@ The main settings live in `.env`.
 | `HISTORY_BACKFILL_CONCURRENCY` | No | `2` | Limits simultaneous first-time history imports |
 | `SIMKL_DEFAULT_TIMEZONE` | No | `Asia/Singapore` | Default timezone for statistics and streaks |
 
-Server admins can override the timezone with `/simkl-timezone`.
+Server admins can override the timezone with `/tracker-timezone`.
 
 ## Activity customization
 
-Users can run `/simkl-style` to choose:
+Users can run `/tracker-style` to choose:
 
 - **Rich** or **Minimal** embeds
 - Automatic, poster, or backdrop artwork
 - Short or detailed activity text
 - Rating visibility
 
-Server admins can set defaults with `/simkl-style-server`. Personal settings override server defaults.
+Server admins can set defaults with `/tracker-style-server`. Personal settings override server defaults.
 
 ---
 
@@ -254,8 +262,8 @@ When enabled, the bot adds a progression layer on top of normal SIMKL tracking.
 - Movies award watch XP
 - Achievements and challenges can award bonus XP
 - Users progress through levels, ranks, and prestige tiers
-- `/simkl-stats` shows watch history, XP, streaks, achievements, recent activity, and more
-- `/simkl-leaderboard` compares server members across watch/progression categories
+- `/tracker-stats` shows watch history, XP, streaks, achievements, recent activity, and more
+- `/tracker-leaderboard` compares server members across watch/progression categories
 - Weekly recaps summarize recent server activity
 
 These systems are optional. Servers that only want SIMKL activity posts can use the **Activity only** feature preset.
@@ -267,7 +275,7 @@ These systems are optional. Servers that only want SIMKL activity posts can use 
 ## Docker Compose
 
 ```bash
-cd ~/simkl-discord-bot
+cd ~/tracker-discord-bot
 docker compose pull
 docker compose up -d
 ```
@@ -305,12 +313,12 @@ The IMDb ratings database can be rebuilt automatically and does not normally nee
 
 Check that:
 
-1. You linked your account with `/simkl-link`.
-2. An activity channel is configured with `/simkl-setchannel`.
+1. You linked your account with `/tracker-link`.
+2. An activity channel is configured with `/tracker-setchannel`.
 3. The bot can send messages in that channel.
 4. The bot has detected new SIMKL activity.
 
-Admins can run `/simkl-checknow` and `/simkl-status` for an immediate check.
+Admins can run `/tracker-checknow` and `/tracker-status` for an immediate check.
 
 ### Slash commands are missing
 
