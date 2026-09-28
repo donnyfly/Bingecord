@@ -1057,7 +1057,7 @@ class Storage:
                     removed += 1
             if challenge_events:
                 before = progression["lifetime_xp"]
-                _complete_watch_challenges(progression, challenge_events)
+                _complete_watch_challenges(progression, challenge_events, notify=not complete)
                 xp_delta += progression["lifetime_xp"] - before
             if removed or revised:
                 xp_delta -= _revoke_unmet_watch_challenges(progression)

@@ -1712,7 +1712,7 @@ async def poll_wetrakr_all(g=None):
                 was_seeded=bool(target["guild_user_data"]["wetrakr_sync"].get("seeded"))
                 before_progression=await storage.get_progression(uid) if was_seeded else None
                 posted += await wetrakr_sync.poll(target, deliver, deliver_group, resolve_play)
-                await evaluate_achievements(gid, uid)
+                await evaluate_achievements(gid, uid, notify_channel=ch if was_seeded else None)
                 if was_seeded:
                     after_progression=await storage.get_progression(uid)
                     await notify_challenge_rewards(gid,uid,ch)

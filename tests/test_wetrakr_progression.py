@@ -88,6 +88,22 @@ def test_existing_simkl_watch_is_not_credited_twice(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
+def test_journal_challenge_queues_notification_but_baseline_does_not(tmp_path, monkeypatch):
+    async def run():
+        monkeypatch.setattr(storage_module, "DATA_PATH", str(tmp_path / "store.json"))
+        store = storage_module.Storage()
+        await store.link_wetrakr("123", "42", {"access_token": "a", "refresh_token": "r"}, {"id": 19})
+        from datetime import datetime, timezone
+        stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        for n in range(1, 4):
+            await store.reconcile_wetrakr_plays("123", "42", [{"source_event_id": f"we-{n}",
+                "media_type": "movie", "title": f"Film {n}", "watched_at": stamp}], complete=n == 1)
+        progress = await store.get_progression("42")
+        assert progress["challenge_completions"]
+        assert progress["pending_challenge_notifications"]
+    asyncio.run(run())
+
+
 def test_simkl_deletion_preserves_confirmed_wetrakr_award(tmp_path, monkeypatch):
     async def run():
         monkeypatch.setattr(storage_module, "DATA_PATH", str(tmp_path / "store.json"))

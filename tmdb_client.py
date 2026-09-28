@@ -539,7 +539,19 @@ class TmdbClient:
             match = by_name[0] if len(by_name) == 1 else None
         if not match or match.get("season") is None or match.get("number") is None:
             return None
-        return int(match["season"]), int(match["number"])
+        season, number = int(match["season"]), int(match["number"])
+        # TVMaze groups some continuously numbered anime (notably One Piece)
+        # into calendar-year seasons. Display the episode's position in the
+        # regular run instead of treating the year as a season number.
+        if 1900 <= season <= 2100:
+            regular = [e for e in episodes if e.get("season") is not None
+                       and e.get("number") is not None and
+                       1900 <= int(e["season"]) <= 2100]
+            regular.sort(key=lambda e: (int(e["season"]), int(e["number"])))
+            for absolute, episode in enumerate(regular, 1):
+                if episode is match:
+                    return 1, absolute
+        return season, number
 
     # ------------------------------------------------------------------
     # Anime-aware episode lookup
