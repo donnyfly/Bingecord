@@ -1,8 +1,9 @@
 # WeTrakr integration prototype
 
 This branch starts from `test` and keeps the existing SIMKL bot behavior. The
-first slice contains an isolated WeTrakr client and normalized watch changes;
-no live WeTrakr account is polled or posted to Discord yet.
+first slice contains an isolated WeTrakr client, normalized watch changes,
+and independent `/wetrakr-link` and `/wetrakr-unlink` commands. Linked accounts
+are not yet polled or posted to Discord.
 
 ## Configuration
 
@@ -12,7 +13,7 @@ key or put it in a Discord command. WeTrakr also requires
 `wetrakr-api-version: 1` and a per-user OAuth bearer token for private data.
 The app key alone cannot read someone's watch history.
 
-## Implemented read-only foundation
+## Implemented foundation
 
 - `wetrakr_client.py`: device-code initiation/polling, refresh-token rotation,
   account lookup, activity timestamps, paginated journal, and compact history
@@ -21,6 +22,8 @@ The app key alone cannot read someone's watch history.
 - `wetrakr_events.py`: source-aware play identities based on `play_id`,
   preserving rewatches and date edits; show and season roll-up rows cannot
   become additional episode XP. Status rows are separate from watched plays.
+- `storage.py` and `bot.py`: OAuth device approval and separate linked-account
+  state. A WeTrakr-only user is never accidentally polled as a SIMKL user.
 
 The API is currently beta (1.0.3, 2026-09-27). Check the breaking changelog
 before wiring live traffic. Documentation:
@@ -33,11 +36,11 @@ before wiring live traffic. Documentation:
 
 ## Next implementation gates
 
-1. Add `/wetrakr-link` and `/wetrakr-unlink` as a distinct OAuth device flow.
-   Only create a link after approval and `GET /account/settings` succeeds.
-   Store access and **rotated** refresh tokens atomically. Respect the returned
-   device polling interval and expiry. Keep SIMKL links untouched.
-2. Add per-source account state and a per-guild WeTrakr sync checkpoint. On
+1. Smoke-test account linking with a real development key. Device approval and
+   `GET /account/settings` should complete while SIMKL continues working. Add
+   scheduled refresh of the **rotated** refresh token before the 7-day access
+   token expires; the link command currently stores the initial tokens only.
+2. Add a per-guild WeTrakr sync checkpoint. On
    first link, walk compact movie and episode history with `after`, and seed
    records without announcing historical watches. Store a baseline timestamp
    from `/sync/last_activities` and account-specific identity.

@@ -325,6 +325,8 @@ def _default_activity_state() -> dict:
 def _default_guild_user(start_time_iso: str | None = None) -> dict:
     start = start_time_iso or EPOCH_ISO
     return {
+        "simkl_linked": True,
+        "wetrakr_linked": False,
         "history_seeded": False,
         "history_stats_repaired": False,
         "last_checked": {
@@ -346,6 +348,7 @@ def _default_guild_user(start_time_iso: str | None = None) -> dict:
 
 def _normalise_user(user: dict) -> None:
     user.setdefault("simkl_token", None)
+    user.setdefault("wetrakr", None)
     user.setdefault("refresh_token", None)
     user.setdefault("token_expires_at", None)
     user.setdefault("simkl_username", "unknown")
@@ -399,6 +402,8 @@ def _normalise_user(user: dict) -> None:
 
 def _normalise_guild_user(user: dict) -> None:
     defaults = _default_guild_user()
+    user.setdefault("simkl_linked", True)
+    user.setdefault("wetrakr_linked", False)
     user.setdefault("history_seeded", defaults["history_seeded"])
     user.setdefault("history_stats_repaired", False)
     user.setdefault("last_checked", copy.deepcopy(defaults["last_checked"]))
@@ -488,6 +493,51 @@ def _normalise_guild(guild: dict) -> None:
 
 
 class Storage:
+    async def link_wetrakr(self, guild_id: str | int, discord_user_id: str,
+                           tokens: dict, account: dict) -> None:
+        """Add an independent WeTrakr link without resetting SIMKL or XP."""
+        gid, uid = str(guild_id), str(discord_user_id)
+        async with _lock:
+            self._migrate_legacy_guild_locked(gid)
+            guild = self._guild(gid, create=True)
+            user = self._data["users"].get(uid)
+            if not user:
+                user = {}
+                _normalise_user(user)
+                self._data["users"][uid] = user
+            user["wetrakr"] = {
+                "access_token": tokens["access_token"],
+                "refresh_token": tokens["refresh_token"],
+                "expires_at": tokens.get("expires_at"),
+                "account_id": account.get("id"),
+                "username": account.get("username") or (account.get("info") or {}).get("username") or "WeTrakr user",
+            }
+            if uid not in guild["users"]:
+                guild["users"][uid] = _default_guild_user()
+                guild["users"][uid]["simkl_linked"] = False
+            guild["users"][uid]["wetrakr_linked"] = True
+            self._dirty = True
+        await self.flush()
+
+    async def unlink_wetrakr(self, guild_id: str | int, discord_user_id: str) -> bool:
+        gid, uid = str(guild_id), str(discord_user_id)
+        async with _lock:
+            user = self._user(uid)
+            guild = self._guild(gid)
+            if not user or not user.get("wetrakr") or not guild or uid not in guild["users"] or not guild["users"][uid].get("wetrakr_linked"):
+                return False
+            guild["users"][uid]["wetrakr_linked"] = False
+            # Keep the guild membership while the SIMKL link still uses it.
+            if not guild["users"][uid].get("simkl_linked", True):
+                guild["users"].pop(uid, None)
+            if not any((other.get("users") or {}).get(uid, {}).get("wetrakr_linked") for other in self._data["guilds"].values()):
+                user["wetrakr"] = None
+                if not any(uid in (other.get("users") or {}) for other in self._data["guilds"].values()):
+                    self._data["users"].pop(uid, None)
+            self._dirty = True
+        await self.flush()
+        return True
+
     async def get_features(self, guild_id: str | int) -> dict:
         async with _lock:
             guild = self._guild(str(guild_id))
@@ -667,7 +717,7 @@ class Storage:
                     continue
                 for uid in guild["users"].keys():
                     user = self._user(uid)
-                    if not user or not user.get("simkl_token"):
+                    if not user or not user.get("simkl_token") or not guild["users"][uid].get("simkl_linked", True):
                         continue
                     guild_user = self._guild_user(gid, uid)
                     if not guild_user:
@@ -1423,6 +1473,7 @@ class Storage:
             existing = self._user(discord_user_id)
             if existing:
                 personal = {
+                    "wetrakr": copy.deepcopy(existing.get("wetrakr")),
                     "embed_preferences": copy.deepcopy(existing.get("embed_preferences", DEFAULT_EMBED_PREFERENCES)),
                     "embed_preferences_custom": existing.get("embed_preferences_custom", False),
                     "progression": copy.deepcopy(existing.get("progression", {"xp": 0, "lifetime_xp": 0, "prestige": 0, "watch_xp_keys": {}, "xp_events": [], "challenge_completions": {}, "achievement_xp_awarded": {}})),
@@ -1440,7 +1491,11 @@ class Storage:
                 "simkl_account_id": simkl_account_id,
                 **personal,
             }
-            self._data["guilds"][str(guild_id)]["users"][discord_user_id] = _default_guild_user(start_time_iso)
+            prior_guild_user=self._data["guilds"][str(guild_id)]["users"].get(discord_user_id)
+            if prior_guild_user and prior_guild_user.get("wetrakr_linked"):
+                prior_guild_user["simkl_linked"] = True
+            else:
+                self._data["guilds"][str(guild_id)]["users"][discord_user_id] = _default_guild_user(start_time_iso)
             self._dirty = True
         await self.flush()
 
@@ -1450,15 +1505,27 @@ class Storage:
             guild = self._guild(guild_id)
             if not guild or discord_user_id not in guild["users"]:
                 return False
-            del guild["users"][discord_user_id]
+            guild_user = guild["users"][discord_user_id]
+            if not guild_user.get("simkl_linked", True):
+                return False
+            guild_user["simkl_linked"] = False
+            if not guild_user.get("wetrakr_linked"):
+                del guild["users"][discord_user_id]
 
             # Authentication is global and can be reused in other servers.
             still_linked = any(
-                isinstance(g, dict) and discord_user_id in (g.get("users") or {})
+                isinstance(g, dict) and (g.get("users") or {}).get(discord_user_id, {}).get("simkl_linked", True)
+                and discord_user_id in (g.get("users") or {})
                 for g in self._data["guilds"].values()
             )
             if not still_linked:
-                self._data["users"].pop(discord_user_id, None)
+                if any((g.get("users") or {}).get(discord_user_id, {}).get("wetrakr_linked") for g in self._data["guilds"].values()):
+                    user = self._user(discord_user_id)
+                    user["simkl_token"] = None
+                    user["refresh_token"] = None
+                    user["token_expires_at"] = None
+                else:
+                    self._data["users"].pop(discord_user_id, None)
 
             self._dirty = True
         await self.flush()

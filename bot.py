@@ -7,6 +7,7 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 from simkl_client import SimklAuthError, SimklClient, SimklSlowDown
+from wetrakr_client import WeTrakrClient, WeTrakrError
 from storage import DEFAULT_FEATURES, EPOCH_ISO, storage
 from watch_delivery import WatchActivity, WatchBatch
 from achievements import ACHIEVEMENTS, all_achievements
@@ -34,6 +35,7 @@ def positive_int_env(name, default, minimum=1):
 
 DISCORD_BOT_TOKEN=os.getenv("DISCORD_BOT_TOKEN")
 SIMKL_CLIENT_ID=os.getenv("SIMKL_CLIENT_ID")
+WETRAKR_API_KEY=os.getenv("WETRAKR_API_KEY", "").strip()
 TMDB_API_KEY=os.getenv("TMDB_API_KEY")
 MDBLIST_API_KEY=os.getenv("MDBLIST_API_KEY")
 POLL_INTERVAL_MINUTES=positive_int_env("POLL_INTERVAL_MINUTES", 60)
@@ -65,6 +67,7 @@ logging.basicConfig(level=logging.INFO,format="%(asctime)s [%(levelname)s] %(mes
 if DEFAULT_TIMEZONE_NAME == "UTC" and os.getenv("SIMKL_DEFAULT_TIMEZONE"):
     log.warning("Invalid SIMKL_DEFAULT_TIMEZONE=%r; falling back to UTC.", os.getenv("SIMKL_DEFAULT_TIMEZONE"))
 simkl=SimklClient(SIMKL_CLIENT_ID); tmdb=TmdbClient(TMDB_API_KEY); mdblist=MdbListClient(MDBLIST_API_KEY) if MDBLIST_API_KEY else None; imdb=ImdbClient()
+wetrakr=WeTrakrClient(WETRAKR_API_KEY) if WETRAKR_API_KEY else None
 if mdblist is not None:
     log.info("MDBList IMDb ratings enabled.")
 else:
@@ -132,7 +135,9 @@ class SimklBot(discord.Client):
         except Exception:
             log.exception("Failed to flush persistent storage during shutdown.")
 
-        for client in (simkl,tmdb,mdblist,imdb):
+        for client in (simkl,wetrakr,tmdb,mdblist,imdb):
+            if client is None:
+                continue
             try:
                 await client.close()
             except Exception:
@@ -3351,6 +3356,74 @@ async def simkl_unlink(i):
     g=guild_id(i)
     if not g: await i.response.send_message("This command must be used in a server.",ephemeral=True); return
     ok=await storage.unlink_user(g,str(i.user.id)); await i.response.send_message("Your SIMKL account has been unlinked from this server." if ok else "You don't have a linked SIMKL account in this server.",ephemeral=True)
+
+
+@bot.tree.command(name="wetrakr-link", description="Privately link your WeTrakr account for the experimental integration.")
+async def wetrakr_link(i):
+    g=guild_id(i)
+    if not g:
+        await i.response.send_message("This command must be used in a server.",ephemeral=True)
+        return
+    if not wetrakr:
+        await i.response.send_message("WeTrakr is not configured on this bot instance yet.",ephemeral=True)
+        return
+    uid=str(i.user.id)
+    key=f"wetrakr:{uid}"
+    if key in linking_users:
+        await i.response.send_message("A WeTrakr linking code is already waiting for you.",ephemeral=True)
+        return
+    linking_users.add(key)
+    await i.response.defer(ephemeral=True)
+    try:
+        pin=await wetrakr.device_code()
+        device=pin["device_code"]
+        interval=max(1,int(pin.get("interval",5)))
+        expires=max(interval,int(pin.get("expires_in",900)))
+        url=pin.get("verification_url") or "https://wetrakr.com/activate"
+        if not url.startswith("https://wetrakr.com/activate"):
+            raise ValueError("Unexpected WeTrakr activation URL")
+        await i.followup.send(f"Open {url} and enter `{pin['user_code']}`. This code expires in about {expires//60} minutes.",ephemeral=True)
+        deadline=time.monotonic()+expires
+        tokens=None
+        while time.monotonic()+interval<deadline:
+            await asyncio.sleep(interval)
+            try:
+                tokens=await wetrakr.device_token(device)
+                break
+            except WeTrakrError as exc:
+                if exc.status == 400 and exc.code == "authorization_pending":
+                    continue
+                if exc.status == 429:
+                    interval+=5
+                    continue
+                if exc.status in {404,409,410,418}:
+                    break
+                raise
+        if not tokens:
+            await i.followup.send("WeTrakr approval expired or was cancelled. Run `/wetrakr-link` again.",ephemeral=True)
+            return
+        account=await wetrakr.account(tokens["access_token"])
+        if not isinstance(account,dict) or not account.get("id"):
+            raise ValueError("WeTrakr account lookup did not return an account ID")
+        tokens["expires_at"]=(datetime.now(timezone.utc)+timedelta(seconds=int(tokens.get("expires_in",604800)))).isoformat()
+        await storage.link_wetrakr(g,uid,tokens,account)
+        name=account.get("username") or (account.get("info") or {}).get("username") or "WeTrakr user"
+        await i.followup.send(f"Linked WeTrakr as **{discord.utils.escape_markdown(str(name))}**. Activity import is being built on the experimental branch; this link does not post WeTrakr watches yet.",ephemeral=True)
+    except Exception as exc:
+        log.error("WeTrakr linking failed for user %s in guild %s: %s",uid,g,type(exc).__name__)
+        await i.followup.send("WeTrakr linking failed. Check the app key and try again; no WeTrakr watch history was imported.",ephemeral=True)
+    finally:
+        linking_users.discard(key)
+
+
+@bot.tree.command(name="wetrakr-unlink", description="Unlink your WeTrakr account from this server.")
+async def wetrakr_unlink(i):
+    g=guild_id(i)
+    if not g:
+        await i.response.send_message("This command must be used in a server.",ephemeral=True)
+        return
+    linked=await storage.unlink_wetrakr(g,str(i.user.id))
+    await i.response.send_message("WeTrakr has been unlinked from this server." if linked else "You don't have a WeTrakr link in this server.",ephemeral=True)
 
 @bot.tree.command(name="simkl-style",description="Choose your personal style for episode and movie watch activities.")
 @app_commands.choices(style=STYLE_CHOICES,artwork=ARTWORK_CHOICES,activity_text=TEXT_CHOICES,episode_format=EPISODE_FORMAT_CHOICES,show_imdb=RATING_CHOICES,show_mal=RATING_CHOICES)
