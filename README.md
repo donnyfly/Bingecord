@@ -40,7 +40,7 @@ select its provider option. `/tracker-source` chooses SIMKL or WeTrakr
 activity per user and server. `/tracker-checknow` checks both selected
 sources. See
 [`docs/WETRAKR_PROTOTYPE.md`](docs/WETRAKR_PROTOTYPE.md) for setup, the
-silent first sync, and current progression limits.
+silent first sync, and cross-provider matching limits.
 
 | Command | Who can use it | Purpose |
 | --- | --- | --- |
@@ -53,9 +53,9 @@ silent first sync, and current progression limits.
 | `/tracker-leaderboard` | Everyone | View server leaderboards |
 | `/tracker-server-stats` | Everyone | View server watch statistics |
 | `/tracker-community` | Everyone | View the rotating weekly cooperative watch goal |
-| `/tracker-watching` | Everyone | View your SIMKL watching list |
-| `/tracker-random` | Everyone | Pick from your SIMKL plan-to-watch list |
-| `/tracker-recommend` | Everyone | Get recommendations based on SIMKL history |
+| `/tracker-watching` | Everyone | View your active tracker's watching list |
+| `/tracker-random` | Everyone | Pick from your active tracker's plan-to-watch list |
+| `/tracker-recommend` | Everyone | Get recommendations based on your active tracker's history |
 | `/tracker-style` | Everyone | Change personal activity-post preferences |
 | `/tracker-user-reset` | Everyone | Reset your tracking history for the current server |
 | `/tracker-setchannel` | Manage Server | Choose the activity channel |
@@ -67,8 +67,12 @@ silent first sync, and current progression limits.
 | `/tracker-checknow` | Manage Server | Check selected SIMKL and WeTrakr accounts immediately |
 | `/tracker-debug` | Manage Server | Preview progression notifications without changing XP |
 
-WeTrakr currently supplies activity posts when selected. XP, statistics,
-challenges, and the discovery commands still use SIMKL data.
+WeTrakr compact history now seeds watches and progression without sending old
+activity posts. Journal additions, date edits and removals update statistics
+and XP. Challenges, achievements, recaps and leaderboards use the shared
+progression state. The discovery commands read the selected provider.
+Cross-provider matching currently compares title and play counts; see the
+prototype document for limits with mismatched catalog titles and rewatches.
 
 ### Prefer the simple tracker experience?
 

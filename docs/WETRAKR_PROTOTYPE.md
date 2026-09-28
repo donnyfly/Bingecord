@@ -29,8 +29,9 @@ The app key alone cannot read someone's watch history.
 - `wetrakr_auth.py`: an isolated, rotation-safe access token refresh helper,
   invoked by WeTrakr polling.
 - `wetrakr_sync.py`: a compact-history baseline and an incremental journal
-  poller. It acknowledges each successfully delivered entry and re-reads with
-  overlap so equal timestamps cannot lose watches.
+  poller. It imports play IDs into the shared statistics and XP store, applies
+  edits and removals, acknowledges each successfully delivered entry, and
+  re-reads with overlap so equal timestamps cannot lose watches.
 
 ## Trying activity on experimental
 
@@ -38,21 +39,25 @@ The app key alone cannot read someone's watch history.
    `/tracker-source` in the server. A user with both links defaults to SIMKL
    until they make this choice.
 2. Run `/tracker-checknow` (admin) once to seed the history baseline. This
-   reads compact history but does not post past watches.
+   reads compact history, seeds XP, statistics, challenges and achievements,
+   but does not post past watch activity.
 3. Mark a *new* movie or episode watched, or change a planning/dropped/paused
    status in WeTrakr. Run `/tracker-checknow` again or await the poll interval.
    The journal may lag by several seconds, so retry on the next cycle if needed.
 4. Switch back with `/tracker-source` → SIMKL. The inactive tracker does not
    post activity. Switching resets its activity baseline without removing
-   either link or the existing SIMKL progression.
+   either link or the existing progression.
 
-WeTrakr events currently post without awarding XP, updating stats, challenges,
-or achievements. WeTrakr watches are not yet combined into Watched Together
-embeds. This protects existing SIMKL progression while cross-provider play
-provenance is designed and verified with real accounts. API calls and payloads
-have been tested with fakes; an end-to-end run requires a linked development
-account. Statuses are source-specific; automatic watching/waiting transitions
-do not create extra status posts.
+WeTrakr watch plays award XP and update statistics, challenges, achievements,
+recaps and leaderboards. `/tracker-watching`, `/tracker-random`, and
+`/tracker-recommend` use the selected source. Its watches are not yet combined
+into Watched Together embeds. Cross-provider matches currently use the same
+title, media category and number of plays. Catalog title differences and
+partially overlapping episode histories can still result in inaccurate
+matching. Verify profiles on a development copy of the data before promoting
+this branch. API calls and payloads have been tested with fakes; an end-to-end
+run requires a linked development account. Statuses are source-specific;
+automatic watching/waiting transitions do not create extra status posts.
 
 ## Account isolation
 
@@ -101,14 +106,14 @@ before wiring live traffic. Documentation:
    rotating token with a live account before unattended polling.
 2. Validate journal and metadata shapes with live movie, episode, rewatch,
    status, edit and removal changes; refine artwork and anime classification.
-3. Add per-play XP provenance and statistics with cross-provider deduplication.
-   An edit or removal must update the same `play_id` while respecting SIMKL's
-   reconciliation. Then wire challenges and achievements.
+3. Improve cross-provider identity matching with shared catalog IDs and
+   episode coordinates. Title and play-count matching is provisional when
+   the two trackers have different names or only partially overlap.
 4. Reuse Watched Together grouping for both providers. Group episodes as
    before while keeping status cards separate; verify show/season cascades.
-5. Dual-source mode needs cross-provider title matching and a provenance set for every
-   canonical watch so duplicate SIMKL/WeTrakr plays do not award XP twice,
-   and removing one provider's record cannot remove the other provider's XP.
+5. A future dual-source posting mode needs a canonical per-play provenance set.
+   The current source choice is per server and cross-source XP transfers
+   only when media category and title agree.
 6. Measure calls and quota headers during a private pilot. A quiet 10-minute
    poll means 144 last-activities GETs per day per user. WeTrakr's beta limits
    are per user for authenticated calls: free 1,000/day and 200 GET/minute;

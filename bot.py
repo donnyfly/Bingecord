@@ -1618,6 +1618,30 @@ async def poll_wetrakr_all(g=None):
                     continue
                 checked += 1
                 started_ids = set()
+                metadata_cache = {}
+                async def resolve_play(play):
+                    """Fetch one title per show/movie for compact history and journal plays."""
+                    result = dict(play)
+                    kind = result.get("media_type")
+                    title_id = result.get("wetrakr_id") if kind == "movie" else result.get("show_id")
+                    if kind not in {"movie", "episode"} or not title_id:
+                        return result
+                    cache_key = (kind, str(title_id))
+                    if cache_key not in metadata_cache:
+                        metadata = await wetrakr.title(
+                            "movie" if kind == "movie" else "show", title_id)
+                        anime = (await is_wetrakr_anime(metadata, (metadata.get("ids") or {}).get("tmdb"))
+                                 if kind == "episode" else bool(metadata.get("is_anime") or
+                                 metadata.get("type") == "anime"))
+                        metadata_cache[cache_key] = (metadata, anime)
+                    metadata, anime = metadata_cache[cache_key]
+                    result["title"] = metadata.get("title") or result.get("title") or "Untitled"
+                    result["ids"] = metadata.get("ids") or result.get("ids") or {}
+                    result["genres"] = metadata.get("genres") or []
+                    result["media_type"] = ("anime_movie" if kind == "movie" else "anime_episode") if anime else kind
+                    result["item_key"] = (f"wetrakr:movie:{title_id}" if kind == "movie" else
+                                          f"wetrakr:episode:{title_id}:{result.get('season')}:{result.get('episode')}")
+                    return result
                 async def deliver(change, row):
                     return await deliver_wetrakr_change(ch, gid, uid, name, member, change, row, started_ids)
                 async def deliver_group(batch):
@@ -1625,7 +1649,8 @@ async def poll_wetrakr_all(g=None):
                     first, last = ordered[0], ordered[-1]
                     return await deliver_wetrakr_change(ch, gid, uid, name, member,
                                                         first[0], first[1], started_ids, last[0])
-                posted += await wetrakr_sync.poll(target, deliver, deliver_group)
+                posted += await wetrakr_sync.poll(target, deliver, deliver_group, resolve_play)
+                await evaluate_achievements(gid, uid)
             except Exception:
                 log.exception("WeTrakr polling failed for user %s in guild %s.", uid, gid)
         request_delta = wetrakr.request_counts - requests_before
@@ -2545,8 +2570,10 @@ async def show_profile(i,user):
     await i.response.defer()
     await evaluate_achievements(g,str(target.id))
     stats=await storage.get_statistics(g,str(target.id))
+    active_wetrakr = await storage.get_activity_provider(g, str(target.id)) == "wetrakr"
+    source_label = "WeTrakr" if active_wetrakr else "SIMKL"
     history=await storage.get_history_import_state(g,str(target.id))
-    if history["linked"] and not history["complete"] and not (int(stats.get("episodes_watched",0))+int(stats.get("movies_watched",0))):
+    if not active_wetrakr and history["linked"] and not history["complete"] and not (int(stats.get("episodes_watched",0))+int(stats.get("movies_watched",0))):
         await i.followup.send("This SIMKL history import is still pending. Watch totals will appear here when it finishes; the bot retries automatically.",ephemeral=True)
         return
     progression=await storage.get_progression(str(target.id))
@@ -2555,7 +2582,7 @@ async def show_profile(i,user):
     current,longest=calculate_streaks(stats.get("watch_dates"),timezone_info["name"])
     features=await storage.get_features(g)
     if not features["progression"]:
-        embed=discord.Embed(title=f"{target.display_name}'s SIMKL Statistics",color=0x5865F2)
+        embed=discord.Embed(title=f"{target.display_name}'s {source_label} Statistics",color=0x5865F2)
         embed.add_field(name="Watch history",value=f"{stats.get('episodes_watched',0):,} episodes · {stats.get('movies_watched',0):,} movies",inline=False)
         embed.add_field(name="Anime (included above)",value=f"{stats.get('anime_episodes_watched',0):,} episodes · {stats.get('anime_movies_watched',0):,} movies",inline=False)
         embed.add_field(name="Streak",value=f"{current} current · {longest} longest",inline=False)
@@ -2563,9 +2590,10 @@ async def show_profile(i,user):
         return
     today=datetime.now(ZoneInfo(timezone_info["name"])).date()
     data=profile_snapshot(stats,progression,unlocked_achievements,current,longest,today=today)
+    data["provider_label"] = source_label
     data["achievements_enabled"]=features["achievements"]
     embed=discord.Embed(
-        title=f"{target.display_name}'s SIMKL Profile",
+        title=f"{target.display_name}'s {source_label} Profile",
         description=(f"Level **{data['level']}** · **{data['rank']}** · Prestige **{data['prestige']}**\n"
                      f"**{data['xp']:,} XP** · **{data['total']:,} watches** · "
                      + (f"**{data['achievements']}/{data['achievement_total']} achievements**" if features["achievements"] else "Achievements disabled")),
@@ -2583,7 +2611,7 @@ async def show_profile(i,user):
         await i.followup.send(embed=embed)
 
 
-@bot.tree.command(name="tracker-stats",description="Show a visual SIMKL profile with watches, XP, and achievements.")
+@bot.tree.command(name="tracker-stats",description="Show a visual tracker profile with watches, XP, and achievements.")
 @app_commands.describe(user="Optional server member to view")
 async def simkl_stats(i,user: discord.Member | None = None):
     await show_profile(i,user)
@@ -2964,9 +2992,21 @@ async def _currently_watching_items(uid,user,token,media_types):
     return results,token
 
 
+async def wetrakr_tracking_rows(uid, status, targets):
+    token = await wetrakr_sync.auth.access_token(uid)
+    rows = []
+    for target in targets:
+        async for page in wetrakr.tracking(token, status, target):
+            values = page if isinstance(page, list) else next(
+                (page[key] for key in ("items", "tracking", "results", "data")
+                 if isinstance(page.get(key), list)), [])
+            rows.extend((target, row) for row in values if isinstance(row, dict))
+    return rows
+
+
 @bot.tree.command(
     name="tracker-watching",
-    description="Show what you're currently watching on SIMKL.",
+    description="Show what you're currently watching on your active tracker.",
 )
 @app_commands.choices(type=WATCHING_TYPE_CHOICES)
 @app_commands.describe(type="Optionally limit the list to TV, anime, or movies.")
@@ -2977,6 +3017,29 @@ async def simkl_watching(i,type: app_commands.Choice[str] | None = None):
         return
 
     uid=str(i.user.id)
+    if await storage.get_activity_provider(g, uid) == "wetrakr":
+        await i.response.defer(ephemeral=True)
+        try:
+            media_filter=type.value if type else "all"
+            targets=("movies",) if media_filter=="movies" else ("shows", "movies") if media_filter=="all" else ("shows",)
+            rows=await wetrakr_tracking_rows(uid,"watching",targets)
+            if not rows:
+                await i.followup.send("You're not currently watching anything on WeTrakr.",ephemeral=True)
+                return
+            lines=[]
+            for target,row in rows[:15]:
+                title=row.get("title") or (row.get("show") or row.get("movie") or {}).get("title") or "Untitled"
+                lines.append(f"{'🎬' if target=='movies' else '📺'} **{title}**")
+            if len(rows)>15:
+                lines.append(f"…and **{len(rows)-15}** more.")
+            embed=discord.Embed(title=f"👀 {i.user.display_name} · Currently Watching",
+                                description="\n".join(lines),color=0x5865F2)
+            embed.set_footer(text="Live from WeTrakr · Currently watching")
+            await i.followup.send(embed=embed,ephemeral=True)
+        except Exception:
+            log.exception("WeTrakr watching lookup failed for user %s.",uid)
+            await i.followup.send("I couldn't load your WeTrakr watching list right now.",ephemeral=True)
+        return
     user=await storage.get_user(uid)
     if not user or not user.get("simkl_token"):
         await i.response.send_message(
@@ -3239,7 +3302,7 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
 
 @bot.tree.command(
     name="tracker-recommend",
-    description="Get personalized recommendations based on your SIMKL history.",
+    description="Get personalized recommendations based on your active tracker history.",
 )
 @app_commands.choices(type=[
     app_commands.Choice(name="Everything",value="all"),
@@ -3254,10 +3317,11 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
         return
 
     uid=str(i.user.id)
+    active_provider=await storage.get_activity_provider(g,uid)
     user=await storage.get_user(uid)
-    if not user or not user.get("simkl_token"):
+    if not user or (active_provider=="wetrakr" and not user.get("wetrakr")) or (active_provider!="wetrakr" and not user.get("simkl_token")):
         await i.response.send_message(
-            "You don't have a linked SIMKL account in this server. Use /tracker-link first.",
+            "Link your selected tracker in this server with /tracker-link first.",
             ephemeral=True,
         )
         return
@@ -3266,12 +3330,32 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
     media_filter=type.value if type else "all"
 
     try:
-        token=await valid_token(uid,user)
-        sources,excluded,token=await _recommendation_sources(uid,user,token,media_filter)
+        if active_provider=="wetrakr":
+            plays=await storage.get_wetrakr_plays(uid)
+            sources=[]
+            excluded=set()
+            for play in plays:
+                kind="movie" if "movie" in play.get("media_type","") else "tv"
+                if media_filter=="movies" and kind!="movie" or media_filter=="shows" and kind!="tv":
+                    continue
+                if media_filter=="anime" and play.get("media_type") not in {"anime_episode","anime_movie"}:
+                    continue
+                try:
+                    tmdb_id=int((play.get("ids") or {}).get("tmdb"))
+                except (ValueError,TypeError):
+                    continue
+                excluded.add((kind,tmdb_id))
+                sources.append({"kind":kind,"tmdb_id":tmdb_id,"title":play.get("title") or "Untitled",
+                                "watched_at":play.get("watched_at") or "", "anime":play.get("media_type","").startswith("anime"),
+                                "media_type":play.get("media_type"),"rating":None,"genres":play.get("genres") or []})
+            sources=select_sources(sources)
+        else:
+            token=await valid_token(uid,user)
+            sources,excluded,token=await _recommendation_sources(uid,user,token,media_filter)
 
         if not sources:
             await i.followup.send(
-                "I need some watched history before I can make recommendations. Watch a few titles on SIMKL and try again.",
+                "I need some watched history with matched TMDB titles before I can make recommendations.",
                 ephemeral=True,
             )
             return
@@ -3312,6 +3396,8 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
         async def destination(result):
             kind=result["_recommendation_kind"]
             page=f"https://www.themoviedb.org/{'movie' if kind=='movie' else 'tv'}/{int(result['id'])}"
+            if active_provider=="wetrakr":
+                return page, True
             try:
                 resolved=await simkl.resolve_title_url(result["id"],kind)
             except Exception:
@@ -3372,7 +3458,7 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
             poster=result.get("poster_path")
             if poster and poster.startswith("/"):
                 embed.set_thumbnail(url=f"https://image.tmdb.org/t/p/w500{poster}")
-            embed.set_footer(text=f"{index} of {total} · Based on your SIMKL watch history")
+            embed.set_footer(text=f"{index} of {total} · Based on your {'WeTrakr' if active_provider=='wetrakr' else 'SIMKL'} watch history")
             return embed
 
         view=RecommendationView(i.user.id,selected,recommendations,render_pick)
@@ -3396,7 +3482,7 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
         )
 
 
-@bot.tree.command(name="tracker-random",description="Pick something random from your SIMKL Plan To Watch list.")
+@bot.tree.command(name="tracker-random",description="Pick something random from your active tracker's plan to watch list.")
 @app_commands.choices(type=RANDOM_TYPE_CHOICES,genre=RANDOM_GENRE_CHOICES)
 @app_commands.describe(
     type="Choose what kind of title to pick.",
@@ -3413,6 +3499,42 @@ async def simkl_random(
         return
 
     uid=str(i.user.id)
+    if await storage.get_activity_provider(g,uid)=="wetrakr":
+        await i.response.defer()
+        try:
+            media_filter=type.value if type else "all"
+            genre_filter=genre.value if genre else ""
+            targets=("movies",) if media_filter=="movies" else ("shows", "movies") if media_filter=="all" else ("shows",)
+            rows=await wetrakr_tracking_rows(uid,"planning",targets)
+            candidates=[]
+            for target,row in rows:
+                media=row.get("movie") if target=="movies" else row.get("show")
+                media=media or row
+                if genre_filter and not any(genre_filter.casefold()==str(
+                        value.get("name") if isinstance(value,dict) else value).casefold()
+                        for value in media.get("genres") or []):
+                    continue
+                candidates.append((target,media))
+            if not candidates:
+                await i.followup.send("I couldn't find a matching title in your WeTrakr planning list.",ephemeral=True)
+                return
+            target,media=random.choice(candidates)
+            title=media.get("title") or "Untitled"
+            ids=media.get("ids") or {}
+            tmdb_id=ids.get("tmdb")
+            url=(f"https://www.themoviedb.org/{'movie' if target=='movies' else 'tv'}/{tmdb_id}"
+                 if tmdb_id else None)
+            embed=discord.Embed(title=title,url=url,
+                                description=f"Picked from your WeTrakr Plan To Watch · {'Movie' if target=='movies' else 'Series'}",
+                                color=0x5865F2)
+            poster=media.get("poster_path")
+            if poster and str(poster).startswith("/"):
+                embed.set_thumbnail(url=f"https://image.tmdb.org/t/p/w500{poster}")
+            await i.followup.send(embed=embed)
+        except Exception:
+            log.exception("WeTrakr random lookup failed for user %s.",uid)
+            await i.followup.send("I couldn't pick from your WeTrakr list right now.",ephemeral=True)
+        return
     user=await storage.get_user(uid)
     if not user or not user.get("simkl_token"):
         await i.response.send_message(
@@ -3684,8 +3806,8 @@ async def tracker_source(i, provider: app_commands.Choice[str] | None = None):
     if not changed:
         await i.response.send_message(f"Link your {provider.name} account in this server first.",ephemeral=True)
         return
-    detail=("The first check seeds your WeTrakr baseline without posting older watches. "
-            "New WeTrakr activity posts afterward; XP and stats are not yet awarded from WeTrakr."
+    detail=("The next check imports WeTrakr watch history, XP and statistics without posting old activity. "
+            "Later watches post normally; switching back preserves your progression."
             if provider.value=="wetrakr" else
             "SIMKL activity resumes from now; its existing XP and statistics remain in place.")
     await i.response.send_message(f"Activity source set to **{provider.name}**. {detail}",ephemeral=True)

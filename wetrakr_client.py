@@ -153,3 +153,24 @@ class WeTrakrClient:
             if next_cursor == after:
                 raise RuntimeError("WeTrakr returned the same history cursor twice")
             after = next_cursor
+
+    async def tracking(self, token: str, status: str, target: str, *, limit: int = 5000):
+        """Yield cursor-paginated tracking list pages for discovery commands."""
+        if status not in {"watching", "waiting", "planning", "dropped", "paused", "watched"}:
+            raise ValueError("Unknown WeTrakr tracking status")
+        if target not in {"movies", "shows"}:
+            raise ValueError("WeTrakr tracking target must be movies or shows")
+        after = None
+        while True:
+            params = {"compact": "true", "limit": min(limit, 5000)}
+            if after:
+                params["after"] = after
+            data, headers = await self._request(
+                "GET", f"/sync/tracking/{status}/{target}", token, params=params)
+            yield data
+            next_cursor = headers.get("X-Pagination-Next")
+            if not next_cursor:
+                return
+            if next_cursor == after:
+                raise RuntimeError("WeTrakr returned the same tracking cursor twice")
+            after = next_cursor

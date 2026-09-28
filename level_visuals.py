@@ -319,7 +319,7 @@ def render_level_up_gif(
         if rank_up:
             draw.text((x + 4, rank_y + 32), "NEW RANK", font=small_font, fill=accent)
         else:
-            draw.text((x + 4, rank_y + 32), "SIMKL TRACKER", font=small_font, fill=_MUTED)
+            draw.text((x + 4, rank_y + 32), "TRACKER", font=small_font, fill=_MUTED)
 
         frames.append(image)
 
@@ -386,7 +386,7 @@ def render_achievement_gif(name: str, xp: int) -> BytesIO:
         draw.text((x, 58), "ACHIEVEMENT UNLOCKED", font=title_font, fill=gold)
         draw.text((x, 93), name, font=name_font, fill=_mix(_MUTED, _TEXT, reveal))
         draw.text((x + 4, 175), f"+{xp:,} XP", font=xp_font, fill=gold)
-        draw.text((x + 4, 213), "SIMKL TRACKER", font=small_font, fill=_MUTED)
+        draw.text((x + 4, 213), "TRACKER", font=small_font, fill=_MUTED)
         frames.append(image)
 
     output = BytesIO()

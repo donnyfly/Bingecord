@@ -102,7 +102,7 @@ def render_profile_png(name, data):
         ImageDraw.Draw(mask).rounded_rectangle((0,0,983,107),radius=20,fill=255)
         image.paste(header,(48,24),mask)
         draw=ImageDraw.Draw(image)
-    draw.text((48,36),"SIMKL / PROFILE",font=_font(19),fill=accent)
+    draw.text((48,36),f"{data.get('provider_label', 'TRACKER').upper()} / PROFILE",font=_font(19),fill=accent)
     badge_left=933 if prestige else 960
     name_width=badge_left-48-28
     draw.text((48,67),_short(draw,name,_font(37),name_width),font=_font(37),fill=WHITE)
@@ -171,7 +171,7 @@ def render_leaderboard_png(guild_name, category, rows):
     image=Image.new("RGB",(1080,845),BG)
     draw=ImageDraw.Draw(image)
     accent=(239,190,105)
-    draw.text((48,35),"SIMKL / LEADERBOARD",font=_font(19),fill=accent)
+    draw.text((48,35),"TRACKER / LEADERBOARD",font=_font(19),fill=accent)
     draw.text((48,67),_short(draw,guild_name,_font(35),830),font=_font(35),fill=WHITE)
     draw.text((48,112),category.upper(),font=_font(17),fill=MUTED)
     draw.rounded_rectangle((48,149,1032,154),radius=2,fill=accent)
@@ -197,7 +197,7 @@ def render_summary_png(guild_name, heading, subtitle, metrics, leaders):
     image=Image.new("RGB",(1080,735),BG)
     draw=ImageDraw.Draw(image)
     accent=(239,190,105)
-    draw.text((48,35),f"SIMKL / {heading.upper()}",font=_font(19),fill=accent)
+    draw.text((48,35),f"TRACKER / {heading.upper()}",font=_font(19),fill=accent)
     draw.text((48,67),_short(draw,guild_name,_font(35),830),font=_font(35),fill=WHITE)
     draw.text((48,112),_short(draw,subtitle,_font(17),940),font=_font(17),fill=MUTED)
     draw.rounded_rectangle((48,149,1032,154),radius=2,fill=accent)
