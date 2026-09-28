@@ -801,7 +801,7 @@ class Storage:
 
     async def save_wetrakr_sync(self, guild_id: str | int, discord_user_id: str,
                                 account_id: str | int, *, seeded=None, checkpoint=None,
-                                last_activity=None, entry_id=None) -> bool:
+                                last_activity=None, entry_id=None, entry_ids=None) -> bool:
         async with _lock:
             guild_user = self._guild_user(str(guild_id), str(discord_user_id))
             user = self._user(str(discord_user_id))
@@ -816,10 +816,11 @@ class Storage:
                 sync["checkpoint"] = checkpoint
             if last_activity is not None:
                 sync["last_activity"] = last_activity
-            if entry_id:
+            if entry_id or entry_ids:
                 ids = sync["recent_entry_ids"]
-                if entry_id not in ids:
-                    ids.append(entry_id)
+                for candidate in ([entry_id] if entry_id else []) + list(entry_ids or []):
+                    if candidate not in ids:
+                        ids.append(candidate)
                 del ids[:-2000]
             self._dirty = True
         await self.flush()

@@ -16,7 +16,7 @@ class WeTrakrSync:
     def __init__(self, client, auth, store):
         self.client, self.auth, self.store = client, auth, store
 
-    async def poll(self, target: dict, deliver) -> int:
+    async def poll(self, target: dict, deliver, deliver_group=None) -> int:
         gid, uid = target["guild_id"], target["discord_user_id"]
         link = target["user_data"]["wetrakr"]
         account_id = link["account_id"]
@@ -57,6 +57,7 @@ class WeTrakrSync:
         seen = set(state["recent_entry_ids"])
         checkpoint = state["checkpoint"]
         posted = 0
+        pending = []
         for row in rows:
             entry_id = str(row.get("entry_id") or "")
             action_at = row.get("action_at")
@@ -65,17 +66,53 @@ class WeTrakrSync:
             if entry_id in seen:
                 continue
             change = normalize_journal_entry(row)
-            if change and not await deliver(change, row):
-                # Every preceding entry is acknowledged; retry this one later.
+            pending.append((change, row))
+
+        def episode_pair(item):
+            change = item[0]
+            if not change or change.get("action") != "added" or change.get("media_type") != "episode":
+                return None
+            try:
+                return (str(change["show_id"]), int(change["season"]), int(change["episode"]))
+            except (KeyError, TypeError, ValueError):
+                return None
+
+        index = 0
+        while index < len(pending):
+            batch = [pending[index]]
+            first = episode_pair(batch[0]) if deliver_group else None
+            if first:
+                direction = None
+                while index + len(batch) < len(pending):
+                    candidate = pending[index + len(batch)]
+                    following = episode_pair(candidate)
+                    previous = episode_pair(batch[-1])
+                    if not following or following[:2] != first[:2]:
+                        break
+                    step = following[2] - previous[2]
+                    if abs(step) != 1 or direction is not None and step != direction:
+                        break
+                    direction = step
+                    batch.append(candidate)
+            if len(batch) > 1:
+                accepted = await deliver_group(batch)
+            else:
+                change, row = batch[0]
+                accepted = not change or await deliver(change, row)
+            if not accepted:
+                # Retry the entire batch, including every episode in its embed.
                 return posted
-            checkpoint = max(checkpoint, action_at)
+            checkpoint = max(checkpoint, *(row["action_at"] for _, row in batch))
+            entry_ids = [str(row["entry_id"]) for _, row in batch]
             if not await self.store.save_wetrakr_sync(
-                    gid, uid, account_id, checkpoint=checkpoint, entry_id=entry_id):
+                    gid, uid, account_id, checkpoint=checkpoint, entry_ids=entry_ids):
                 raise ValueError("WeTrakr link changed during journal delivery")
-            seen.add(entry_id)
-            if change and change.get("action") == "added":
-                posted += int(change.get("media_type") in {"movie", "episode"}
-                              or change.get("status") in {"planning", "dropped", "paused", "completed"})
+            seen.update(entry_ids)
+            for change, _ in batch:
+                if change and change.get("action") == "added":
+                    posted += int(change.get("media_type") in {"movie", "episode"}
+                                  or change.get("status") in {"planning", "dropped", "paused", "completed"})
+            index += len(batch)
         if not await self.store.save_wetrakr_sync(
                 gid, uid, account_id, checkpoint=checkpoint, last_activity=current):
             raise ValueError("WeTrakr link changed during journal sync")

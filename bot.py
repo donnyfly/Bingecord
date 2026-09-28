@@ -1430,7 +1430,7 @@ async def poll_all(g=None, force_reconcile=False, ignore_failure_threshold=False
         return posted
 
 
-async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, started_ids):
+async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, started_ids, episode_end=None):
     """Render a journal change without touching SIMKL history or shared XP."""
     action = change["action"]
     status = change.get("status")
@@ -1448,6 +1448,7 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
     poster = image = logo = None
     episode_title = None
     season, number = change.get("season"), change.get("episode")
+    end_season, end_number = None, None
     media_type = change["media_type"]
     if media_type == "episode":
         try:
@@ -1456,8 +1457,16 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
             title = parent.get("title") or title
             ids = parent.get("ids") or {}
             episode_title = details.get("title") or change.get("title")
-            season = season if season is not None else details.get("season_number")
-            number = number if number is not None else details.get("number")
+            # The journal may carry anime's absolute numbering. Episode detail
+            # describes the actual season and position within that season.
+            detail_season = details.get("season") or {}
+            season = detail_season.get("number", details.get("season_number", season)) if isinstance(detail_season, dict) else details.get("season_number", season)
+            number = details.get("number", number)
+            if episode_end:
+                end_details = await wetrakr.episode(episode_end["wetrakr_id"])
+                end_season_data = end_details.get("season") or {}
+                end_season = end_season_data.get("number", end_details.get("season_number", episode_end.get("season"))) if isinstance(end_season_data, dict) else end_details.get("season_number", episode_end.get("season"))
+                end_number = end_details.get("number", episode_end.get("episode"))
             poster_path = parent.get("poster_path")
             if poster_path:
                 poster = f"https://image.tmdb.org/t/p/w500{poster_path}"
@@ -1496,17 +1505,31 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
         if season is None or number is None:
             # Cannot safely identify an episode from a partial journal row.
             raise ValueError("WeTrakr episode lacks season or episode number")
-        label = format_episode_display(int(season), int(number), int(number), p.get("episode_code", False))
+        if episode_end:
+            end_season = end_season if end_season is not None else episode_end.get("season")
+            end_number = end_number if end_number is not None else episode_end.get("episode")
+            if end_season is None or end_number is None:
+                raise ValueError("WeTrakr episode range lacks an endpoint")
+            if int(season) == int(end_season):
+                label = format_episode_display(int(season), int(number), int(end_number), p.get("episode_code", False))
+            else:
+                span = f"S{season}E{int(number):02d}–S{end_season}E{int(end_number):02d}"
+                label = f"`{span}`" if p.get("episode_code", False) else f"**{span}**"
+        else:
+            label = format_episode_display(int(season), int(number), int(number), p.get("episode_code", False))
         desc = f"Watched {label} of **{title}**" if p["activity_text"] == "detailed" else f"Watched {label}"
-        if episode_title and episode_title != title:
+        if not episode_end and episode_title and episode_title != title:
             desc += f"\n*{episode_title}*"
-        if str(change.get("show_id")) in started_ids:
+        started_id = str(change.get("show_id"))
+        if started_id in started_ids:
             desc += "\n\n🆕 Started watching this series."
-            started_ids.discard(str(change.get("show_id")))
     embed = build_embed(t, desc, stamp, name, member, image, None, title,
                         poster=poster, logo=logo, preferences=p,
                         status_activity=bool(status), provider="WeTrakr")
-    return await send_embed(ch, embed, "WeTrakr activity")
+    sent = await send_embed(ch, embed, "WeTrakr activity")
+    if sent and media_type == "episode":
+        started_ids.discard(str(change.get("show_id")))
+    return sent
 
 
 async def poll_wetrakr_all(g=None):
@@ -1528,7 +1551,12 @@ async def poll_wetrakr_all(g=None):
                 started_ids = set()
                 async def deliver(change, row):
                     return await deliver_wetrakr_change(ch, gid, uid, name, member, change, row, started_ids)
-                posted += await wetrakr_sync.poll(target, deliver)
+                async def deliver_group(batch):
+                    ordered = sorted(batch, key=lambda item: int(item[0]["episode"]))
+                    first, last = ordered[0], ordered[-1]
+                    return await deliver_wetrakr_change(ch, gid, uid, name, member,
+                                                        first[0], first[1], started_ids, last[0])
+                posted += await wetrakr_sync.poll(target, deliver, deliver_group)
             except Exception:
                 log.exception("WeTrakr polling failed for user %s in guild %s.", uid, gid)
         return posted
@@ -3720,7 +3748,21 @@ async def simkl_status(i):
             continue
         current_count+=1
         u=allu.get(uid) or {}
-        username=u.get("simkl_username","unknown")
+        selected=gu.get("activity_provider", "simkl")
+        simkl_linked=gu.get("simkl_linked", True) and bool(u.get("simkl_token"))
+        wetrakr_linked=gu.get("wetrakr_linked", False) and bool(u.get("wetrakr"))
+        links=[]
+        if simkl_linked:
+            links.append(f"SIMKL: **{u.get('simkl_username') or 'unknown'}**")
+        if wetrakr_linked:
+            links.append(f"WeTrakr: **{u['wetrakr'].get('username') or 'unknown'}**")
+        identity=f"• <@{uid}> — active: **{selected.upper() if selected == 'simkl' else 'WeTrakr'}** · " + (" · ".join(links) or "no linked account")
+        if selected == "wetrakr":
+            sync=gu.get("wetrakr_sync") or {}
+            state="ready" if sync.get("seeded") else "first check will seed history"
+            last=sync.get("last_activity")
+            lines.append(identity+f"\n  WeTrakr sync: **{state}**"+(f" · last activity {last}" if last else ""))
+            continue
         expires=u.get("token_expires_at")
         if expires:
             remaining=parse_iso(expires)-now
@@ -3752,7 +3794,7 @@ async def simkl_status(i):
         stats=gu.get("statistics") or {}
         watches=int(stats.get("episodes_watched",0))+int(stats.get("movies_watched",0))
         import_state="complete" if gu.get("history_seeded") else "pending"
-        lines.append(f"• <@{uid}> — SIMKL: **{username}** · token: **{token_state}**"
+        lines.append(identity+f" · SIMKL token: **{token_state}**"
                      f" · history: **{import_state}** ({watches:,} watches)\n  {health}")
     linked="\n".join(lines) if lines else "No currently linked accounts."
     tracking_total=len(users)
