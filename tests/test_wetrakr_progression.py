@@ -166,6 +166,7 @@ def test_statistics_follow_selected_provider_while_xp_stays_shared(tmp_path, mon
         simkl_stats=await store.get_statistics("123","42")
         assert simkl_stats["movies_watched"] == 1
         assert simkl_stats["episodes_watched"] == 0
+        xp_before_switch=(await store.get_progression("42"))["lifetime_xp"]
 
         assert await store.set_activity_provider("123","42","wetrakr")
         wetrakr_stats=await store.get_statistics("123","42")
@@ -179,5 +180,5 @@ def test_statistics_follow_selected_provider_while_xp_stays_shared(tmp_path, mon
         assert guild_row["simkl_username"] == "we-user"
 
         shared=await store.get_progression("42")
-        assert shared["lifetime_xp"] == 400
+        assert shared["lifetime_xp"] == xp_before_switch
     asyncio.run(run())
