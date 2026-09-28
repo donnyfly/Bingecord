@@ -24,6 +24,40 @@ The app key alone cannot read someone's watch history.
   become additional episode XP. Status rows are separate from watched plays.
 - `storage.py` and `bot.py`: OAuth device approval and separate linked-account
   state. A WeTrakr-only user is never accidentally polled as a SIMKL user.
+- `providers.py`: a source-scoped watch change contract and shared target
+  selection. Existing SIMKL state and polling retain their old behavior.
+- `wetrakr_auth.py`: an isolated, rotation-safe access token refresh helper.
+  Polling will invoke it when WeTrakr activity ingestion is enabled.
+
+## Account isolation
+
+The application key identifies this bot, not its owner's WeTrakr account.
+Each `/wetrakr-link` creates its own device-code request. WeTrakr releases an
+account token only after the person who is signed in approves that request.
+Tokens are stored under the Discord user's ID, and each server has its own
+link flag. A different user's link does not inherit the app owner's token.
+The operator who controls the bot's data file can access stored credentials,
+so protect the persistent volume and back it up securely.
+
+## Shared-provider migration
+
+The long-term shape has three boundaries:
+
+1. **Source adapters** own OAuth, rate limits, cursors, and raw API shapes.
+   SIMKL's current poller can be moved behind this boundary in stages.
+2. **Watch changes** carry provider, account ID, source event ID, media IDs,
+   timestamp, and add/update/remove. Provider names scope IDs. A TMDB/IMDb
+   title match alone cannot prove two episode plays are the same watch.
+3. **Delivery and progression** consume verified watch changes. Per-guild
+   checkpoints and delivery acknowledgements move together. A user chooses
+   one active activity provider per server at first; linking a second account
+   does not automatically double-post or double-award XP. Once title and play
+   matching are measured, dual-source merging can be opt-in.
+
+The `providers.py` contract and WeTrakr sync state are preparatory. Current
+polling still runs SIMKL only. Do not select WeTrakr as an active activity
+provider until history seed, incremental journal delivery, and XP provenance
+are implemented and tested.
 
 The API is currently beta (1.0.3, 2026-09-27). Check the breaking changelog
 before wiring live traffic. Documentation:
@@ -37,9 +71,9 @@ before wiring live traffic. Documentation:
 ## Next implementation gates
 
 1. Smoke-test account linking with a real development key. Device approval and
-   `GET /account/settings` should complete while SIMKL continues working. Add
-   scheduled refresh of the **rotated** refresh token before the 7-day access
-   token expires; the link command currently stores the initial tokens only.
+   `GET /account/settings` should complete while SIMKL continues working.
+   Invoke `WeTrakrAuth.access_token` on upcoming private calls and test the
+   rotating token with a live account before unattended polling.
 2. Add a per-guild WeTrakr sync checkpoint. On
    first link, walk compact movie and episode history with `after`, and seed
    records without announcing historical watches. Store a baseline timestamp

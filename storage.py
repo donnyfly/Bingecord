@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from progression import challenges_for, roll_prestige, xp_for_level
 from community import challenge_for_week, watch_contributions, split_pool
+from providers import provider_linked
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "store.json")
 
@@ -327,6 +328,7 @@ def _default_guild_user(start_time_iso: str | None = None) -> dict:
     return {
         "simkl_linked": True,
         "wetrakr_linked": False,
+        "wetrakr_sync": {"seeded": False, "checkpoint": None, "recent_entry_ids": []},
         "history_seeded": False,
         "history_stats_repaired": False,
         "last_checked": {
@@ -404,6 +406,13 @@ def _normalise_guild_user(user: dict) -> None:
     defaults = _default_guild_user()
     user.setdefault("simkl_linked", True)
     user.setdefault("wetrakr_linked", False)
+    if not isinstance(user.get("wetrakr_sync"), dict):
+        user["wetrakr_sync"] = {"seeded": False, "checkpoint": None, "recent_entry_ids": []}
+    sync = user["wetrakr_sync"]
+    sync.setdefault("seeded", False)
+    sync.setdefault("checkpoint", None)
+    if not isinstance(sync.get("recent_entry_ids"), list):
+        sync["recent_entry_ids"] = []
     user.setdefault("history_seeded", defaults["history_seeded"])
     user.setdefault("history_stats_repaired", False)
     user.setdefault("last_checked", copy.deepcopy(defaults["last_checked"]))
@@ -505,6 +514,11 @@ class Storage:
                 user = {}
                 _normalise_user(user)
                 self._data["users"][uid] = user
+            prior = user.get("wetrakr")
+            if prior and str(prior.get("account_id")) != str(account.get("id")):
+                if any((other.get("users") or {}).get(uid, {}).get("wetrakr_linked")
+                       for other in self._data["guilds"].values()):
+                    raise ValueError("Unlink the existing WeTrakr account in all servers before switching accounts")
             user["wetrakr"] = {
                 "access_token": tokens["access_token"],
                 "refresh_token": tokens["refresh_token"],
@@ -516,8 +530,25 @@ class Storage:
                 guild["users"][uid] = _default_guild_user()
                 guild["users"][uid]["simkl_linked"] = False
             guild["users"][uid]["wetrakr_linked"] = True
+            if not prior or str(prior.get("account_id")) != str(account.get("id")):
+                guild["users"][uid]["wetrakr_sync"] = {"seeded": False, "checkpoint": None, "recent_entry_ids": []}
             self._dirty = True
         await self.flush()
+
+    async def rotate_wetrakr_tokens(self, discord_user_id: str, account_id: str | int,
+                                    old_refresh_token: str, tokens: dict) -> bool:
+        """Persist a rotated refresh token only for the same account and session."""
+        async with _lock:
+            user = self._user(str(discord_user_id))
+            link = user.get("wetrakr") if user else None
+            if not link or str(link.get("account_id")) != str(account_id) or link.get("refresh_token") != old_refresh_token:
+                return False
+            link["access_token"] = tokens["access_token"]
+            link["refresh_token"] = tokens["refresh_token"]
+            link["expires_at"] = tokens["expires_at"]
+            self._dirty = True
+        await self.flush()
+        return True
 
     async def unlink_wetrakr(self, guild_id: str | int, discord_user_id: str) -> bool:
         gid, uid = str(guild_id), str(discord_user_id)
@@ -708,6 +739,11 @@ class Storage:
             return copy.deepcopy(user) if user else None
 
     async def get_poll_targets(self, guild_id: str | None = None) -> list[dict]:
+        return await self.get_provider_targets("simkl", guild_id)
+
+    async def get_provider_targets(self, provider: str, guild_id: str | None = None) -> list[dict]:
+        if provider not in {"simkl", "wetrakr"}:
+            raise ValueError(f"Unknown tracking provider: {provider}")
         async with _lock:
             guild_ids = [str(guild_id)] if guild_id is not None else list(self._data["guilds"].keys())
             targets = []
@@ -717,7 +753,7 @@ class Storage:
                     continue
                 for uid in guild["users"].keys():
                     user = self._user(uid)
-                    if not user or not user.get("simkl_token") or not guild["users"][uid].get("simkl_linked", True):
+                    if not user or not provider_linked(guild["users"][uid], user, provider):
                         continue
                     guild_user = self._guild_user(gid, uid)
                     if not guild_user:
