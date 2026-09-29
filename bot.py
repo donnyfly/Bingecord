@@ -320,7 +320,7 @@ def iter_show_episodes(t,items):
                 en=ep.get("number")
                 if en is None: continue
                 wr=ep.get("watched_at")
-                yield {"show_title":show.get("title","a show"),"genres":show.get("genres") or item.get("genres") or [],"simkl_id":sid,"tmdb_id":ids.get("tmdb"),"tvdb_id":ids.get("tvdb"),"slug":ids.get("slug"),"poster":show.get("poster"),"season_num":sn,"original_season_num":original,"mapped_tvdb_season_num":mapped_season,"episode_number":en,"episode_title":ep.get("title"),"watched_raw":wr,"watched_dt":parse_iso(wr) if wr else None,"key":episode_key(t,sid,sn,en)}
+                yield {"show_title":show.get("title","a show"),"genres":show.get("genres") or item.get("genres") or [],"simkl_id":sid,"tmdb_id":ids.get("tmdb"),"tvdb_id":ids.get("tvdb"),"ids":ids,"slug":ids.get("slug"),"poster":show.get("poster"),"season_num":sn,"original_season_num":original,"mapped_tvdb_season_num":mapped_season,"episode_number":en,"episode_title":ep.get("title"),"watched_raw":wr,"watched_dt":parse_iso(wr) if wr else None,"key":episode_key(t,sid,sn,en)}
 
 def format_episode_range(s,a,b):
     if s is None: return f"E{a:02d}" if a==b else f"E{a:02d}-E{b:02d}"
@@ -505,7 +505,7 @@ async def seed_history(g,uid,u,token,request_cache=None):
                 if x.get("status"): statuses[f"{t}:{sid}"]=x["status"]
                 if wr:
                     watches[k]=wr
-                    seeded_stats.append(("anime_movie" if (m.get("anime_type") == "movie" or m.get("type") == "movie" or (m.get("ids") or {}).get("mal")) else "movie", m.get("title") or "Untitled", k, wr, m.get("genres") or x.get("genres")))
+                    seeded_stats.append(("anime_movie" if (m.get("anime_type") == "movie" or m.get("type") == "movie" or (m.get("ids") or {}).get("mal")) else "movie", m.get("title") or "Untitled", k, wr, m.get("genres") or x.get("genres"),m.get("ids") or {}))
         else:
             episode_items=items
             movie_items=[]
@@ -521,13 +521,13 @@ async def seed_history(g,uid,u,token,request_cache=None):
                 if x.get("status"): statuses[f"movies:{sid}"]=x["status"]
                 if wr:
                     watches[k]=wr
-                    seeded_stats.append(("anime_movie",m.get("title") or "Untitled",k,wr,m.get("genres") or x.get("genres")))
+                    seeded_stats.append(("anime_movie",m.get("title") or "Untitled",k,wr,m.get("genres") or x.get("genres"),m.get("ids") or {}))
             for e in iter_show_episodes(t,episode_items):
                 if initial_seed or e["watched_dt"] is None or e["watched_dt"]<=since:
                     keys.append(e["key"])
                     if e.get("watched_raw"):
                         watches[e["key"]]=e["watched_raw"]
-                        seeded_stats.append(("anime_episode" if t == "anime" else "episode",e.get("show_title") or "Untitled",f"series:{t}:{e['simkl_id']}:{e['season_num']}:{e['episode_number']}",e["watched_raw"],e.get("genres")))
+                        seeded_stats.append(("anime_episode" if t == "anime" else "episode",e.get("show_title") or "Untitled",f"series:{t}:{e['simkl_id']}:{e['season_num']}:{e['episode_number']}",e["watched_raw"],e.get("genres"),e.get("ids") or {}))
     awarded=await storage.seed_guild_history(g,uid,keys,statuses,watches,seeded_stats)
     log.info("Seeded %d historical watches for user %s in guild %s (+%d watch XP) in %.2fs.",
              len(seeded_stats),uid,g,awarded,time.monotonic()-started)
@@ -626,6 +626,7 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
                 "item_key":f"series:{t}:{sid}:{watched['season_num']}:{watched['episode_number']}",
                 "watched_at":watched["watched_raw"],
                 "genres":watched.get("genres"),
+                "ids":watched.get("ids") or {},
                 "amount":xp_for_watch("anime_episode" if t=="anime" else "episode",
                                        runtime_by_key.get(watched["key"])),
             } for watched in grp]
@@ -741,7 +742,7 @@ async def process_movies(ch,g,uid,name,member,items,since,profile,batch=None,sco
         e=build_embed("movies",desc,dt,name,member,image,profile,title,activity_url,poster,logo,p)
         media_type="anime_movie" if anime_movie else "movie"
         record={"media_type":media_type,"title":title,"item_key":k,"watched_at":wr,
-                "genres":m.get("genres") or x.get("genres"),"amount":xp_for_watch(media_type)}
+                "genres":m.get("genres") or x.get("genres"),"ids":ids,"amount":xp_for_watch(media_type)}
         async def commit(k=k, wr=wr, record=record):
             await storage.record_activity_batch(g,uid,[k],{k:wr},[record])
         if batch is not None:
@@ -956,6 +957,7 @@ async def reconcile_watch_progression(g, uid, u, token, changed_types, request_c
                 if full_statistics_snapshot:
                     baseline_entries.append({"media_type":media_type,"item_key":f"movies:{sid}",
                                              "title":movie.get("title") or "Untitled","watched_at":item["last_watched_at"],
+                                             "ids":movie.get("ids") or {},
                                              "genres":movie.get("genres") or item.get("genres") or []})
                 media_types.add(media_type)
             continue
@@ -976,6 +978,7 @@ async def reconcile_watch_progression(g, uid, u, token, changed_types, request_c
             if full_statistics_snapshot:
                 baseline_entries.append({"media_type":"anime_movie","item_key":f"movies:{sid}",
                                          "title":movie.get("title") or "Untitled","watched_at":item["last_watched_at"],
+                                         "ids":movie.get("ids") or {},
                                          "genres":movie.get("genres") or item.get("genres") or []})
             media_types.add("anime_movie")
 
@@ -993,6 +996,7 @@ async def reconcile_watch_progression(g, uid, u, token, changed_types, request_c
                 baseline_entries.append({"media_type":media_type,
                                          "item_key":f"series:{t}:{episode['simkl_id']}:{episode['season_num']}:{episode['episode_number']}",
                                          "title":episode.get("show_title") or "Untitled",
+                                         "ids":episode.get("ids") or {},
                                          "watched_at":episode["watched_raw"],"genres":episode.get("genres") or []})
 
     result=await storage.reconcile_watch_xp(uid, active_watch_bases, media_types)
@@ -1039,7 +1043,7 @@ async def seed_progression_history(uid, u, token, request_cache=None):
                 media_type = "anime_movie" if anime_movie else "movie"
                 event_key = f"{media_type}:movies:{sid}:{watched_at}"
                 events.append({"event_key":event_key,"media_type":media_type,"title":movie.get("title") or "Untitled",
-                               "at":watched_at,"amount":xp_for_watch(media_type)})
+                               "at":watched_at,"amount":xp_for_watch(media_type),"ids":ids})
             continue
         episode_items = items or []
         movie_items = []
@@ -1054,7 +1058,7 @@ async def seed_progression_history(uid, u, token, request_cache=None):
                 continue
             event_key = f"anime_movie:movies:{sid}:{watched_at}"
             events.append({"event_key":event_key,"media_type":"anime_movie","title":movie.get("title") or "Untitled",
-                           "at":watched_at,"amount":xp_for_watch("anime_movie")})
+                           "at":watched_at,"amount":xp_for_watch("anime_movie"),"ids":ids})
         for episode in iter_show_episodes(t, episode_items):
             watched_at = episode.get("watched_raw")
             if not watched_at:
@@ -1062,7 +1066,7 @@ async def seed_progression_history(uid, u, token, request_cache=None):
             media_type = "anime_episode" if t == "anime" else "episode"
             event_key = f"{media_type}:series:{t}:{episode['simkl_id']}:{episode['season_num']}:{episode['episode_number']}:{watched_at}"
             events.append({"event_key":event_key,"media_type":media_type,"title":episode.get("show_title") or "Untitled",
-                           "at":watched_at,"amount":xp_for_watch(media_type)})
+                           "at":watched_at,"amount":xp_for_watch(media_type),"ids":episode.get("ids") or {}})
     seeded=await storage.seed_progression_batch(uid,events)
     log.info("Historical progression backfill completed for user %s: %d events, +%d XP in %.2fs.",
              uid,len(events),seeded,time.monotonic()-started)
@@ -1562,6 +1566,7 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
                for g in details.get("genres") or [])
     )
     tvdb_id = None
+    resolved_episode = None
     if t == "shows":
         try:
             if await is_wetrakr_anime(parent if media_type == "episode" else details, tmdb_id):
@@ -1594,19 +1599,19 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
                 logo = await tmdb.get_movie_logo(tmdb_id)
             elif season is not None and number is not None:
                 if t == "anime" and mapped_anime:
-                    resolved = await tmdb.find_anime_episode(tmdb_id, tvdb_id, [season], number,
-                                                            episode_title=episode_title)
-                    image = (resolved or {}).get("still_url")
-                    if not image and resolved:
-                        image = await tmdb.get_episode_still(resolved["series_id"],
-                                                             resolved["season_number"], resolved["episode_number"])
+                    resolved_episode = await tmdb.find_anime_episode(tmdb_id, tvdb_id, [season], number,
+                                                                     episode_title=episode_title)
+                    image = (resolved_episode or {}).get("still_url")
+                    if not image and resolved_episode and resolved_episode.get("series_id"):
+                        image = await tmdb.get_episode_still(resolved_episode["series_id"],
+                                                             resolved_episode["season_number"], resolved_episode["episode_number"])
                 else:
                     image = await tmdb.get_episode_still(tmdb_id, season, number)
                 logo = await tmdb.get_tv_logo(tmdb_id)
         except Exception:
             log.warning("TMDB WeTrakr artwork lookup failed for %s.", title, exc_info=True)
     ratings = {}
-    if tmdb_id and (p.get("show_imdb", True) or p.get("show_mal", True)):
+    if tmdb_id and (status or media_type == "movie") and (p.get("show_imdb", True) or p.get("show_mal", True)):
         try:
             ratings = await (get_movie_ratings(tmdb_id) if media_type == "movie"
                              else get_show_ratings(tmdb_id))
@@ -1614,6 +1619,26 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
             anime_item = anime_item or ratings.get("mal") is not None
         except Exception:
             log.warning("WeTrakr rating lookup failed for TMDB=%s.", tmdb_id, exc_info=True)
+
+    episode_rating = None
+    if media_type == "episode" and status is None and not episode_end and p.get("show_imdb", True):
+        try:
+            episode_ids = details.get("ids") or {}
+            imdb_id = ((details.get("external_ids") or {}).get("imdb_id")
+                       or episode_ids.get("imdb") or details.get("imdb_id"))
+            if not imdb_id and resolved_episode:
+                imdb_id = (((resolved_episode.get("episode") or {}).get("external_ids") or {})
+                           .get("imdb_id"))
+            if not imdb_id and tmdb_id and season is not None and number is not None:
+                episode_details = await tmdb.get_episode_details(tmdb_id,
+                    source_season if t == "anime" and mapped_anime else season,
+                    source_number if t == "anime" and mapped_anime else number)
+                imdb_id = ((episode_details or {}).get("external_ids") or {}).get("imdb_id")
+            if imdb_id:
+                episode_rating = await imdb.get_rating(imdb_id)
+        except Exception:
+            log.warning("WeTrakr episode IMDb lookup failed for %s S%sE%s.",
+                        title, season, number, exc_info=True)
 
     stamp = parse_iso(change.get("watched_at") or change.get("action_at"))
     if status:
@@ -1649,10 +1674,8 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
         started = False
         if is_first_episode(source_season, source_number) or is_first_episode(season, number):
             started = not await storage.has_wetrakr_show_history(uid, change.get("show_id"), ids)
-        if p.get("show_imdb", True) and ratings.get("imdb") is not None:
-            desc += f"\n⭐ IMDb {float(ratings['imdb']):.1f}/10"
-        if anime_item and p.get("show_mal", True) and ratings.get("mal") is not None:
-            desc += f"\n🌸 MAL {float(ratings['mal']):.2f}/10"
+        if episode_rating is not None:
+            desc += f"\n⭐ IMDb {float(episode_rating):.1f}/10"
         if started:
             desc += "\n\n🆕 Started watching this series."
     if status or t == "movies":

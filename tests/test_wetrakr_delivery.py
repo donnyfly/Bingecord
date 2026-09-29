@@ -180,17 +180,21 @@ def test_wetrakr_s1e1_range_marks_series_start(monkeypatch):
     asyncio.run(run())
 
 
-def test_wetrakr_tv_and_anime_ratings(monkeypatch):
+def test_wetrakr_episode_uses_its_imdb_rating_without_series_or_mal(monkeypatch):
     async def run():
         monkeypatch.setattr(bot, "wetrakr", SimpleNamespace(episode=AsyncMock(return_value={
             "title":"Episode 2","season_number":1,"number":2,
+            "external_ids":{"imdb_id":"tt-episode-2"},
             "media":{"title":"Anime Show","ids":{"tmdb":90,"tvdb":900},"is_anime":True},
         })))
         monkeypatch.setattr(bot, "prefs", AsyncMock(return_value={
             "style":"rich","artwork":"backdrop","activity_text":"detailed",
             "episode_code":False,"show_imdb":True,"show_mal":True}))
         monkeypatch.setattr(bot.storage, "get_user", AsyncMock(return_value={"wetrakr":{"username":"anime-user"}}))
-        monkeypatch.setattr(bot, "get_show_ratings", AsyncMock(return_value={"imdb":8.4,"mal":9.12}))
+        series_ratings=AsyncMock(return_value={"imdb":8.4,"mal":9.12})
+        monkeypatch.setattr(bot, "get_show_ratings", series_ratings)
+        episode_rating=AsyncMock(return_value=7.3)
+        monkeypatch.setattr(bot.imdb, "get_rating", episode_rating)
         monkeypatch.setattr(bot.tmdb, "get_tv_title", AsyncMock(return_value="Anime Show"))
         monkeypatch.setattr(bot, "wetrakr_anime_coordinates", AsyncMock(return_value=(1,2,900,False)))
         monkeypatch.setattr(bot.tmdb, "get_episode_still", AsyncMock(return_value=None))
@@ -203,8 +207,58 @@ def test_wetrakr_tv_and_anime_ratings(monkeypatch):
         assert await bot.deliver_wetrakr_change(SimpleNamespace(),"123","42","Viewer",member,
                                                 change,{},set())
         desc=send.await_args.args[1].description
-        assert "⭐ IMDb 8.4/10" in desc
-        assert "🌸 MAL 9.12/10" in desc
+        assert "⭐ IMDb 7.3/10" in desc
+        assert "🌸 MAL" not in desc
+        series_ratings.assert_not_awaited()
+        episode_rating.assert_awaited_once_with("tt-episode-2")
+    asyncio.run(run())
+
+
+def test_wetrakr_tv_episode_resolves_imdb_id_from_tmdb(monkeypatch):
+    async def run():
+        monkeypatch.setattr(bot, "wetrakr", SimpleNamespace(episode=AsyncMock(return_value={
+            "title": "Pilot", "season_number": 1, "number": 1,
+            "media": {"title": "TV Series", "ids": {"tmdb": 90}}})))
+        monkeypatch.setattr(bot, "prefs", AsyncMock(return_value={
+            "style": "rich", "artwork": "auto", "activity_text": "detailed",
+            "show_imdb": True, "show_mal": True}))
+        monkeypatch.setattr(bot.tmdb, "_get_series_details", AsyncMock(return_value={
+            "original_language": "en", "genres": []}))
+        monkeypatch.setattr(bot.tmdb, "get_episode_still", AsyncMock(return_value=None))
+        monkeypatch.setattr(bot.tmdb, "get_tv_logo", AsyncMock(return_value=None))
+        details = AsyncMock(return_value={"external_ids": {"imdb_id": "tt-pilot"}})
+        monkeypatch.setattr(bot.tmdb, "get_episode_details", details)
+        monkeypatch.setattr(bot.imdb, "get_rating", AsyncMock(return_value=6.7))
+        monkeypatch.setattr(bot, "get_show_ratings", AsyncMock(return_value={"imdb": 9.9, "mal": 9.9}))
+        monkeypatch.setattr(bot.storage, "has_wetrakr_show_history", AsyncMock(return_value=True))
+        monkeypatch.setattr(bot, "send_embed", AsyncMock(return_value=True))
+        member = SimpleNamespace(display_avatar=SimpleNamespace(url="https://example.com/avatar.png"))
+        change = {"action": "added", "media_type": "episode", "wetrakr_id": 1,
+                  "show_id": 5, "season": 1, "episode": 1,
+                  "watched_at": "2026-09-28T03:00:00Z"}
+        await bot.deliver_wetrakr_change(SimpleNamespace(), "123", "42", "Viewer", member, change, {}, set())
+        desc = bot.send_embed.await_args.args[1].description
+        assert "⭐ IMDb 6.7/10" in desc and "9.9" not in desc and "🌸 MAL" not in desc
+        details.assert_awaited_once_with(90, 1, 1)
+    asyncio.run(run())
+
+
+def test_wetrakr_anime_status_keeps_series_ratings(monkeypatch):
+    async def run():
+        monkeypatch.setattr(bot, "wetrakr", SimpleNamespace(title=AsyncMock(return_value={
+            "title": "Anime Series", "ids": {"tmdb": 90}, "is_anime": True})))
+        monkeypatch.setattr(bot, "prefs", AsyncMock(return_value={
+            "style": "rich", "artwork": "auto", "activity_text": "detailed",
+            "show_imdb": True, "show_mal": True}))
+        monkeypatch.setattr(bot.tmdb, "get_tv_title", AsyncMock(return_value="Anime Series"))
+        monkeypatch.setattr(bot, "get_show_ratings", AsyncMock(return_value={"imdb": 8.1, "mal": 9.2}))
+        monkeypatch.setattr(bot, "send_embed", AsyncMock(return_value=True))
+        member = SimpleNamespace(display_avatar=SimpleNamespace(url="https://example.com/avatar.png"))
+        change = {"action": "added", "status": "planning", "media_type": "show",
+                  "wetrakr_id": 1, "action_at": "2026-09-28T03:00:00Z"}
+        await bot.deliver_wetrakr_change(SimpleNamespace(), "123", "42", "Viewer", member, change, {}, set())
+        desc = bot.send_embed.await_args.args[1].description
+        assert "⭐ IMDb 8.1/10" in desc and "🌸 MAL 9.20/10" in desc
     asyncio.run(run())
 
 
