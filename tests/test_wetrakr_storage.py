@@ -56,7 +56,7 @@ def test_different_episode_of_same_show_keeps_its_xp(tmp_path, monkeypatch):
         assert first["xp"] == 100
         second = await store.reconcile_wetrakr_plays("1", "2", [{
             "source_event_id": "p1", "media_type": "episode", "title": "Same Show",
-            "item_key": "wetrakr:episode:70:1:1", "watched_at": "2026-09-28T02:00:00Z"}])
+            "item_key": "wetrakr:episode:70:1:1", "watched_at": "2026-09-28T00:02:00Z"}])
         assert second["xp"] == 0
     asyncio.run(run())
 
