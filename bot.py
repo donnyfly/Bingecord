@@ -580,7 +580,17 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
                 log.warning("TMDB episode lookup failed for %s.", title, exc_info=True)
                 image,ep_title,episode_imdb_id,episode_runtime=None,grp[0].get("episode_title"),None
             label=format_episode_display(sn,grp[0]["episode_number"],grp[-1]["episode_number"],p.get("episode_code", False)); verb=kind.capitalize()
-            rating = await imdb.get_rating(episode_imdb_id) if len(grp) == 1 and p.get("show_imdb", True) else None
+            rating = None
+            if len(grp) == 1 and p.get("show_imdb", True):
+                if episode_imdb_id:
+                    rating = await imdb.get_rating(episode_imdb_id)
+                    if rating is None:
+                        log.info("IMDb has no episode rating for %s S%sE%s (IMDb=%s).",
+                                 title, sn, grp[0]["episode_number"], episode_imdb_id)
+                else:
+                    log.info("No IMDb episode ID resolved for %s S%sE%s (TVDB=%s, TMDB=%s).",
+                             title, sn, grp[0]["episode_number"],
+                             grp[0].get("tvdb_id"), grp[0].get("tmdb_id"))
             desc=f"{verb} {label}"
             if p["activity_text"]=="detailed": desc=f"{verb} {label} of **{title}**"
             if len(grp)==1:
