@@ -58,6 +58,24 @@ def test_started_series_history_ignores_colliding_provider_ids(tmp_path, monkeyp
     asyncio.run(run())
 
 
+def test_started_series_history_excludes_currently_delivered_play(tmp_path, monkeypatch):
+    async def run():
+        monkeypatch.setattr(storage_module, "DATA_PATH", str(tmp_path / "store.json"))
+        store = storage_module.Storage()
+        await store.link_wetrakr("1", "2", {"access_token": "a", "refresh_token": "r"}, {"id": 7})
+        await store.reconcile_wetrakr_plays("1", "2", [{
+            "source_event_id": "current-play", "media_type": "episode", "title": "New Show",
+            "item_key": "wetrakr:episode:25:1:1", "show_id": 25,
+            "show_ids": {"tmdb": 111}, "ids": {"tmdb": 111},
+            "watched_at": "2026-09-28T12:00:00Z"}])
+        # The journal entry can arrive just after the seed import. Its own
+        # baseline row must not count as an earlier episode of the series.
+        assert not await store.has_wetrakr_show_history(
+            "2", 25, {"tmdb": 111}, exclude_event_id="current-play")
+        assert await store.has_wetrakr_show_history("2", 25, {"tmdb": 111})
+    asyncio.run(run())
+
+
 def test_different_episode_of_same_show_keeps_its_xp(tmp_path, monkeypatch):
     async def run():
         monkeypatch.setattr(storage_module, "DATA_PATH", str(tmp_path / "store.json"))

@@ -141,6 +141,7 @@ def test_wetrakr_episode_links_profile_and_marks_direct_s1e1_start(monkeypatch):
         monkeypatch.setattr(bot, "send_embed", send)
         member=SimpleNamespace(display_avatar=SimpleNamespace(url="https://example.com/avatar.png"))
         change={"action":"added","media_type":"episode","wetrakr_id":50,"show_id":25,
+                "source_event_id":"current-play",
                 "season":1,"episode":1,"watched_at":"2026-09-28T03:00:00Z"}
         assert await bot.deliver_wetrakr_change(SimpleNamespace(),"123","42","Viewer",member,
                                                 change,{},set())
@@ -148,7 +149,7 @@ def test_wetrakr_episode_links_profile_and_marks_direct_s1e1_start(monkeypatch):
         assert embed.url == "https://wetrakr.com/tmdb/show/100"
         assert embed.author.url == "https://wetrakr.com/viewer"
         assert "🆕 Started watching this series." in embed.description
-        history.assert_awaited_once()
+        history.assert_awaited_once_with("42",25,{"tmdb":100},exclude_event_id="current-play")
     asyncio.run(run())
 
 

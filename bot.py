@@ -1676,7 +1676,10 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
                 return False
         started = False
         if is_first_episode(source_season, source_number) or is_first_episode(season, number):
-            started = not await storage.has_wetrakr_show_history(uid, change.get("show_id"), ids)
+            started = not await storage.has_wetrakr_show_history(
+                uid, change.get("show_id"), ids,
+                exclude_event_id=change.get("source_event_id"),
+            )
         if episode_rating is not None:
             desc += f"\n⭐ IMDb {float(episode_rating):.1f}/10"
         if started:
