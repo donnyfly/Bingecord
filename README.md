@@ -48,6 +48,7 @@ silent first sync, and cross-provider matching limits.
 | `/tracker-unlink` | Everyone | Unlink one provider (choose provider) |
 | `/tracker-source` | Everyone | Choose the activity source for this server |
 | `/tracker-stats` | Everyone | View your watch/progression profile |
+| `/tracker-mapping` | Everyone | Privately inspect cross-provider watch matches and possible duplicate awards |
 | `/tracker-achievements` | Everyone | View achievements and XP rewards |
 | `/tracker-challenges` | Everyone | View daily and weekly challenges |
 | `/tracker-leaderboard` | Everyone | View server leaderboards |
@@ -71,8 +72,11 @@ WeTrakr compact history now seeds watches and progression without sending old
 activity posts. Journal additions, date edits and removals update statistics
 and XP. Challenges, achievements, recaps and leaderboards use the shared
 progression state. The discovery commands read the selected provider.
-Cross-provider matching currently compares title and play counts; see the
-prototype document for limits with mismatched catalog titles and rewatches.
+Cross-provider matching prefers shared external IDs and episode coordinates;
+older XP records without IDs can still use a title fallback. The mapping
+preview never changes XP. See the [multi-tracker design](docs/multi-tracker-design.md)
+and [provider integration contract](docs/adding-provider.md) for remaining
+limitations and the parity requirements for future services.
 
 ### Prefer the simple tracker experience?
 

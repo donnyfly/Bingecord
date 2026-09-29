@@ -39,6 +39,14 @@ class ProviderManifest:
             raise ValueError("Provider links must use HTTPS")
 
 
+BUILTIN_TRACKERS = (
+    ProviderManifest("simkl", "SIMKL", True, True, True, True, True, True, True,
+                     "https://simkl.com/{id}", "https://simkl.com/{type}/{id}"),
+    ProviderManifest("wetrakr", "WeTrakr", True, True, True, True, True, True, True,
+                     "https://wetrakr.com/{id}", "https://wetrakr.com/tmdb/{type}/{id}"),
+)
+
+
 @dataclass(frozen=True)
 class ProviderAccount:
     provider: str

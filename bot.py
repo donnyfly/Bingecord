@@ -22,6 +22,7 @@ from mdblist_client import MdbListClient
 from imdb_client import ImdbClient
 from recommendation_engine import rating_value, select_sources, source_weight, rank_candidates, recommendation_lineup
 from recommendation_ui import RecommendationView
+from providers import BUILTIN_TRACKERS
 
 load_dotenv()
 
@@ -1424,6 +1425,8 @@ async def poll_all(g=None, force_reconcile=False, ignore_failure_threshold=False
             *(process_user(uid,user_targets) for uid,user_targets in users.items())
         )
         await batch.deliver()
+        for uid in users:
+            await storage.refresh_watch_occurrences(uid)
         for channel_id,(gid,error) in channel_errors.items():
             log.warning("Couldn't access channel %s for guild %s: %s",channel_id,gid,error)
         if skipped:
@@ -1790,6 +1793,7 @@ async def poll_wetrakr_all(g=None):
                                 break
                     await notify_level_up(gid,uid,before_progression,after_progression,ch,
                                           source_label="WeTrakr")
+                await storage.refresh_watch_occurrences(uid)
             except Exception:
                 log.exception("WeTrakr polling failed for user %s in guild %s.", uid, gid)
         request_delta = wetrakr.request_counts - requests_before
@@ -2756,6 +2760,30 @@ async def show_profile(i,user):
         embed.add_field(name="Watching",value=f"{data['episodes']:,} episodes · {data['movies']:,} movies · {data['anime_episodes']:,} anime episodes · {data['anime_movies']:,} anime movies",inline=False)
         embed.add_field(name="Streak",value=f"{current} current · {longest} longest",inline=False)
         await i.followup.send(embed=embed)
+
+
+@bot.tree.command(name="tracker-mapping",description="Privately inspect how your linked trackers match watches and XP.")
+async def tracker_mapping(i):
+    g=guild_id(i)
+    if not g:
+        await i.response.send_message("This command must be used in a server.",ephemeral=True)
+        return
+    uid=str(i.user.id)
+    user=await storage.get_user(uid)
+    if not user:
+        await i.response.send_message("Link a tracking account with /tracker-link first.",ephemeral=True)
+        return
+    audit=await storage.get_mapping_audit(uid)
+    await i.response.send_message(
+        "**Your watch mapping**\n"
+        f"Verified cross-tracker matches: **{audit['verified']:,}**\n"
+        f"Older title-only matches: **{audit['legacy']:,}**\n"
+        f"Unpaired watches: **{audit['unpaired']:,}**\n"
+        f"Needs review: **{audit['review']:,}**\n"
+        f"Possible double XP awards: **{audit['double_awards']:,}**\n\n"
+        "This is a read-only preview. Existing XP is not changed by this command.",
+        ephemeral=True,
+    )
 
 
 @bot.tree.command(name="tracker-stats",description="Show a visual tracker profile with watches, XP, and achievements.")
@@ -3910,7 +3938,7 @@ async def wetrakr_link(i):
         await i.followup.send(
             f"Linked WeTrakr as **{discord.utils.escape_markdown(str(name))}**. "
             "Use `/tracker-source` to choose which service posts activity in this server. "
-            "WeTrakr watches currently post without affecting shared XP or stats.",
+            "Your existing history will import quietly, then new watches can post and earn shared XP.",
             ephemeral=True)
     except Exception as exc:
         log.error("WeTrakr linking failed for user %s in guild %s: %s",uid,g,type(exc).__name__)
@@ -3928,28 +3956,28 @@ async def wetrakr_unlink(i):
     await i.response.send_message("WeTrakr has been unlinked from this server." if linked else "You don't have a WeTrakr link in this server.",ephemeral=True)
 
 
-TRACKER_CHOICES=[
-    app_commands.Choice(name="SIMKL", value="simkl"),
-    app_commands.Choice(name="WeTrakr", value="wetrakr"),
-]
+TRACKER_CHOICES=[app_commands.Choice(name=manifest.display_name,value=manifest.name)
+                 for manifest in BUILTIN_TRACKERS]
 
 
 @bot.tree.command(name="tracker-link", description="Link your SIMKL or WeTrakr account in this server.")
 @app_commands.choices(provider=TRACKER_CHOICES)
 async def tracker_link(i, provider: app_commands.Choice[str]):
-    if provider.value == "simkl":
-        await simkl_link(i)
-    else:
-        await wetrakr_link(i)
+    handler={"simkl":simkl_link,"wetrakr":wetrakr_link}.get(provider.value)
+    if handler is None:
+        await i.response.send_message("That tracking provider is not available on this bot.",ephemeral=True)
+        return
+    await handler(i)
 
 
 @bot.tree.command(name="tracker-unlink", description="Unlink a tracker account from this server.")
 @app_commands.choices(provider=TRACKER_CHOICES)
 async def tracker_unlink(i, provider: app_commands.Choice[str]):
-    if provider.value == "simkl":
-        await simkl_unlink(i)
-    else:
-        await wetrakr_unlink(i)
+    handler={"simkl":simkl_unlink,"wetrakr":wetrakr_unlink}.get(provider.value)
+    if handler is None:
+        await i.response.send_message("That tracking provider is not available on this bot.",ephemeral=True)
+        return
+    await handler(i)
 
 
 @bot.tree.command(name="tracker-source", description="Choose which linked tracker posts your activity in this server.")

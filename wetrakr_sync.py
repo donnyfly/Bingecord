@@ -40,7 +40,8 @@ class WeTrakrSync:
                         play = normalize_compact_play(row)
                         if play:
                             plays.append(await resolve_play(play) if resolve_play else play)
-            result = await self.store.reconcile_wetrakr_plays(gid, uid, plays, complete=True)
+            result = await self.store.reconcile_wetrakr_plays(gid, uid, plays, complete=True,
+                                                             account_id=account_id)
             saved = await self.store.save_wetrakr_sync(
                 gid, uid, account_id, seeded=True, checkpoint=current)
             if not saved:
@@ -66,7 +67,8 @@ class WeTrakrSync:
                         play = normalize_compact_play(row)
                         if play:
                             plays.append(await resolve_play(play) if resolve_play else play)
-            await self.store.reconcile_wetrakr_plays(gid, uid, plays, complete=True)
+            await self.store.reconcile_wetrakr_plays(gid, uid, plays, complete=True,
+                                                    account_id=account_id)
             await self.store.save_wetrakr_sync(
                 gid, uid, account_id, seeded=True, checkpoint=current,
                 last_activity=current)
@@ -134,7 +136,8 @@ class WeTrakrSync:
                             uid, gid, len(batch))
                 return posted
             if plays:
-                result = await self.store.reconcile_wetrakr_plays(gid, uid, plays)
+                result = await self.store.reconcile_wetrakr_plays(gid, uid, plays,
+                                                                account_id=account_id)
                 watch_added += result["added"]
                 watch_removed += result["removed"]
                 xp_delta += result["xp"]

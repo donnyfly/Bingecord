@@ -37,7 +37,7 @@ def test_wetrakr_only_link_is_not_polled_as_simkl(tmp_path, monkeypatch):
                                  {"id":19,"username":"we-user"})
         assert await store.get_poll_targets("123")==[]
         assert await store.unlink_wetrakr("123","42")
-        assert await store.get_user("42") is None
+        assert (await store.get_user("42"))["wetrakr"] is None
     asyncio.run(run())
 
 

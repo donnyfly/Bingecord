@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from progression import challenges_for, roll_prestige, xp_for_level
 from community import challenge_for_week, watch_contributions, split_pool
 from providers import provider_linked
-from tracker_mapping import identity_from_event, identity_from_play, same_watch
+from tracker_mapping import build_occurrence_index, identity_from_event, identity_from_play, same_watch
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "store.json")
 
@@ -221,8 +221,10 @@ def _statistics_for_provider(guild_user: dict, provider: str, timezone_name: str
 
 
 def _record_watch_stats(stats: dict, media_type: str, title: str, item_key: str,
-                        watched_at: str, genres, timezone_name: str | None) -> bool:
+                        watched_at: str, genres, timezone_name: str | None, ids=None) -> bool:
     event={"media_type":media_type,"title":title or "Untitled","item_key":item_key,"watched_at":watched_at}
+    if ids:
+        event["ids"]=copy.deepcopy(ids)
     names=_genre_names(genres)
     if names:
         event["genres"]=names
@@ -460,6 +462,7 @@ def _normalise_user(user: dict) -> None:
     progression.setdefault("prestige_notified", int(progression.get("prestige", 0)))
     progression.setdefault("watch_xp_keys", {})
     progression.setdefault("wetrakr_plays", {})
+    progression.setdefault("watch_occurrences", {})
     progression.setdefault("xp_events", [])
     progression.setdefault("challenge_completions", {})
     progression.setdefault("pending_challenge_notifications", [])
@@ -470,6 +473,11 @@ def _normalise_user(user: dict) -> None:
     progression["history_xp_notification_sent"] = bool(progression.get("history_xp_notification_sent", False))
     if not isinstance(progression["watch_xp_keys"], dict): progression["watch_xp_keys"] = {}
     if not isinstance(progression["wetrakr_plays"], dict): progression["wetrakr_plays"] = {}
+    if not isinstance(progression["watch_occurrences"], dict): progression["watch_occurrences"] = {}
+    current_wetrakr_account=(user.get("wetrakr") or {}).get("account_id")
+    for legacy_play in progression["wetrakr_plays"].values():
+        if isinstance(legacy_play, dict) and current_wetrakr_account is not None:
+            legacy_play.setdefault("account_id", str(current_wetrakr_account))
     if not isinstance(progression["xp_events"], list): progression["xp_events"] = []
     if not isinstance(progression["challenge_completions"], dict): progression["challenge_completions"] = {}
     if not isinstance(progression["pending_challenge_notifications"], list): progression["pending_challenge_notifications"] = []
@@ -669,8 +677,7 @@ class Storage:
                 guild["users"].pop(uid, None)
             if not any((other.get("users") or {}).get(uid, {}).get("wetrakr_linked") for other in self._data["guilds"].values()):
                 user["wetrakr"] = None
-                if not any(uid in (other.get("users") or {}) for other in self._data["guilds"].values()):
-                    self._data["users"].pop(uid, None)
+                # Keep shared XP and historical observations for a later relink.
             self._dirty = True
         await self.flush()
         return True
@@ -907,8 +914,10 @@ class Storage:
             user = self._user(str(discord_user_id))
             if not user:
                 return []
-            return [{**copy.deepcopy(play), "source_event_id": play_id}
-                    for play_id, play in user["progression"].get("wetrakr_plays", {}).items()]
+            account=str((user.get("wetrakr") or {}).get("account_id"))
+            return [{**copy.deepcopy(play), "source_event_id": play.get("source_event_id", play_id)}
+                    for play_id, play in user["progression"].get("wetrakr_plays", {}).items()
+                    if str(play.get("account_id"))==account]
 
     async def classify_wetrakr_movie(self, discord_user_id: str, movie_id, anime: bool) -> None:
         """Correct previously imported movies without awarding XP a second time."""
@@ -918,8 +927,11 @@ class Storage:
             if not user:
                 return
             progression = user["progression"]
+            account=str((user.get("wetrakr") or {}).get("account_id"))
             changed = False
             for play_id, play in progression["wetrakr_plays"].items():
+                if str(play.get("account_id")) != account:
+                    continue
                 if play.get("media_type") not in {"movie", "anime_movie"}:
                     continue
                 if str(play.get("item_key") or "").split(":")[-1] != str(movie_id):
@@ -953,8 +965,11 @@ class Storage:
             if not user:
                 return False
             expected_show=str(show_id) if show_id is not None else None
+            account=str((user.get("wetrakr") or {}).get("account_id"))
             expected_ids={str(k):str(v) for k,v in (ids or {}).items() if v is not None}
             for play in user["progression"].get("wetrakr_plays",{}).values():
+                if str(play.get("account_id")) != account:
+                    continue
                 if play.get("media_type") not in {"episode","anime_episode"}:
                     continue
                 if expected_show is not None and str(play.get("show_id")) == expected_show:
@@ -967,7 +982,8 @@ class Storage:
             return False
 
     async def reconcile_wetrakr_plays(self, guild_id: str | int, discord_user_id: str,
-                                      plays: list[dict], *, complete: bool = False) -> dict:
+                                      plays: list[dict], *, complete: bool = False,
+                                      account_id: str | int | None = None) -> dict:
         """Apply stable WeTrakr play IDs; a full import can revoke deleted plays.
 
         Keep source observations separately from XP so switching sources never
@@ -979,8 +995,18 @@ class Storage:
             global_user = self._user(discord_user_id)
             if not guild_user or not global_user:
                 return {"added": 0, "removed": 0, "xp": 0}
+            current_account=(global_user.get("wetrakr") or {}).get("account_id")
+            if account_id is not None and str(current_account) != str(account_id):
+                raise ValueError("WeTrakr account changed during watch reconciliation")
+            account=str(current_account)
             progression = global_user["progression"]
             ledger = progression["wetrakr_plays"]
+            def scoped_id(source_id):
+                source_id=str(source_id)
+                existing=ledger.get(source_id)
+                if existing is None or str(existing.get("account_id"))==account:
+                    return source_id
+                return f"{account}/{source_id}"
             stats = guild_user["statistics"]
             if not isinstance(stats.get("watch_events"), dict):
                 stats["watch_events"] = {}
@@ -988,8 +1014,10 @@ class Storage:
             simkl_awards = [_simkl_xp_identity(event) for event in progression["xp_events"]
                             if not str(event.get("event_key", "")).startswith("wetrakr:")]
             claimed_awards = set()
-            incoming = {str(play.get("source_event_id")) : play for play in plays}
+            incoming = {scoped_id(play.get("source_event_id")) : play for play in plays}
             for old_id, old in ledger.items():
+                if str(old.get("account_id")) != account:
+                    continue
                 changed = old_id in incoming and (incoming[old_id].get("removed") or
                           incoming[old_id].get("watched_at", old.get("watched_at")) != old.get("watched_at"))
                 if old.get("xp_key") or changed or (complete and old_id not in incoming):
@@ -1003,7 +1031,8 @@ class Storage:
             revised = False
             challenge_events = []
             for play in plays:
-                play_id = str(play.get("source_event_id") or "")
+                source_id = str(play.get("source_event_id") or "")
+                play_id = scoped_id(source_id) if source_id else ""
                 previous = ledger.get(play_id)
                 stamp = play.get("watched_at") or (previous or {}).get("watched_at")
                 if not play_id or not stamp:
@@ -1011,10 +1040,33 @@ class Storage:
                 observed.add(play_id)
                 key = "wetrakr:" + play_id
                 if previous and previous.get("watched_at") == stamp and not play.get("removed"):
+                    # Re-imports can discover a better title ID or corrected
+                    # anime coordinates. Update the observation without
+                    # replaying XP or posting historical activity.
+                    changed_metadata = False
+                    for field in ("item_key", "ids", "title", "media_type", "genres"):
+                        value = play.get(field)
+                        if field == "genres" and value:
+                            value = _genre_names(value)
+                        if value and value != previous.get(field):
+                            previous[field] = copy.deepcopy(value)
+                            changed_metadata = True
+                    if changed_metadata:
+                        for award in progression["xp_events"]:
+                            if award.get("event_key") == previous.get("xp_key"):
+                                award["media_type"] = previous["media_type"]
+                                award["title"] = previous["title"]
+                                award["ids"] = copy.deepcopy(previous.get("ids") or {})
+                        events[key] = {"media_type": previous["media_type"],
+                                       "title": previous["title"], "item_key": previous["item_key"],
+                                       "watched_at": stamp, "ids": previous.get("ids") or {},
+                                       "genres": previous.get("genres") or []}
+                        revised = True
                     if key not in events:
                         events[key] = {"media_type": previous["media_type"],
                                        "title": previous["title"], "item_key": previous["item_key"],
-                                       "watched_at": stamp, "genres": previous.get("genres") or []}
+                                       "watched_at": stamp, "ids": previous.get("ids") or {},
+                                       "genres": previous.get("genres") or []}
                         added += 1
                     continue
                 if previous:
@@ -1036,6 +1088,7 @@ class Storage:
                 item_key = play.get("item_key") or key
                 events[key] = {"media_type": kind, "title": title,
                                "item_key": item_key, "watched_at": stamp,
+                               "ids": copy.deepcopy(play.get("ids") or {}),
                                "genres": _genre_names(play.get("genres"))}
                 xp_key = key + ":" + stamp
                 identity=_wetrakr_play_identity({"media_type":kind,"title":title,
@@ -1054,12 +1107,14 @@ class Storage:
                     xp_delta += amount
                     challenge_events.extend(added_events)
                 ledger[play_id] = {"watched_at": stamp, "xp_key": None if duplicate else xp_key,
+                                   "account_id":account,"source_event_id":source_id,
                                    "media_type": kind, "title": title, "item_key": item_key,
                                    "show_id": play.get("show_id"),
                                    "show_ids": play.get("show_ids") or {},
                                    "ids": play.get("ids") or {}, "genres": _genre_names(play.get("genres"))}
             if complete:
-                for play_id in set(ledger) - observed:
+                for play_id in {key for key, value in ledger.items()
+                                if str(value.get("account_id"))==account} - observed:
                     old = ledger.pop(play_id)
                     if old.get("xp_key"):
                         xp_delta -= self._remove_wetrakr_xp_locked(progression, old["xp_key"])
@@ -1276,6 +1331,65 @@ class Storage:
             user = self._user(discord_user_id)
             return copy.deepcopy(user.get("progression", {})) if user else {}
 
+    def _simkl_observations_locked(self, discord_user_id: str) -> dict[str, dict]:
+        observations = {}
+        uid = str(discord_user_id)
+        for guild in self._data["guilds"].values():
+            guild_user = (guild.get("users") or {}).get(uid) or {}
+            events = ((guild_user.get("statistics") or {}).get("watch_events") or {})
+            for key, event in events.items():
+                if not str(key).startswith("wetrakr:"):
+                    observations[key] = copy.deepcopy(event)
+        return observations
+
+    async def get_mapping_audit(self, discord_user_id: str) -> dict:
+        """Preview the cross-provider occurrence index without changing XP."""
+        async with _lock:
+            user = self._user(discord_user_id)
+            if not user:
+                return {"occurrences": 0, "verified": 0, "legacy": 0,
+                        "unpaired": 0, "review": 0, "double_awards": 0}
+            progression = user["progression"]
+            xp_events = copy.deepcopy(progression["xp_events"])
+            plays = copy.deepcopy(progression["wetrakr_plays"])
+            simkl_observations = self._simkl_observations_locked(discord_user_id)
+        index = build_occurrence_index(xp_events, plays, simkl_observations)
+        return {
+            "occurrences": len(index),
+            "verified": sum(row["match_reason"] == "verified_id" for row in index.values()),
+            "legacy": sum(row["match_reason"] == "legacy_title" for row in index.values()),
+            "unpaired": sum(len(row["observations"]) == 1 for row in index.values()),
+            "review": sum(row["needs_review"] for row in index.values()),
+            "double_awards": sum(len(row["award_keys"]) > 1 for row in index.values()),
+        }
+
+    async def refresh_watch_occurrences(self, discord_user_id: str) -> dict:
+        """Save the derived migration ledger; never alter historical awards."""
+        async with _lock:
+            user = self._user(discord_user_id)
+            if not user:
+                return {}
+            progression = user["progression"]
+            events = copy.deepcopy(progression["xp_events"])
+            plays = copy.deepcopy(progression["wetrakr_plays"])
+            simkl_observations = self._simkl_observations_locked(discord_user_id)
+        index = build_occurrence_index(events, plays, simkl_observations)
+        async with _lock:
+            user = self._user(discord_user_id)
+            if not user:
+                return {}
+            progression = user["progression"]
+            # Another poll may have changed the source data while the index
+            # was built. Keep the previous version and let the next poll retry.
+            if (progression["xp_events"] != events or progression["wetrakr_plays"] != plays
+                    or self._simkl_observations_locked(discord_user_id) != simkl_observations):
+                return {}
+            if progression.get("watch_occurrences") != index:
+                progression["watch_occurrences"] = index
+                self._dirty = True
+        await self.flush()
+        return index
+
     async def seed_progression_batch(self, discord_user_id: str, events: list[dict]) -> int:
         """Backfill global XP and its completion marker in one durable write."""
         async with _lock:
@@ -1403,7 +1517,7 @@ class Storage:
             item_key=record["item_key"]
             watched_at=record["watched_at"]
             _record_watch_stats(guild_user["statistics"],media_type,title,item_key,watched_at,
-                                record.get("genres"),timezone_name)
+                                record.get("genres"),timezone_name,record.get("ids"))
             xp_events.append({"event_key":f"{media_type}:{item_key}:{watched_at}",
                               "media_type":media_type,"title":title,"at":watched_at,
                               "ids":record.get("ids") or {},
@@ -1948,7 +2062,10 @@ class Storage:
                     user["refresh_token"] = None
                     user["token_expires_at"] = None
                 else:
-                    self._data["users"].pop(discord_user_id, None)
+                    user = self._user(discord_user_id)
+                    user["simkl_token"] = None
+                    user["refresh_token"] = None
+                    user["token_expires_at"] = None
 
             self._dirty = True
         await self.flush()

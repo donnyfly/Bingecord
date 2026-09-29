@@ -91,6 +91,7 @@ class TmdbClient:
             dict | None,
         ] = {}
         self._tvmaze_episode_lists: dict[int, list] = {}
+        self._tvmaze_calendar_coordinates: dict[int, dict[tuple[int, int], tuple[int, int]]] = {}
         self._tmdb_tvdb_ids: dict[int, int | None] = {}
 
         # Cache the result of the more expensive anime episode resolver.
@@ -544,13 +545,7 @@ class TmdbClient:
         # into calendar-year seasons. Display the episode's position in the
         # regular run instead of treating the year as a season number.
         if 1900 <= season <= 2100:
-            regular = [e for e in episodes if e.get("season") is not None
-                       and e.get("number") is not None and
-                       1900 <= int(e["season"]) <= 2100]
-            regular.sort(key=lambda e: (int(e["season"]), int(e["number"])))
-            for absolute, episode in enumerate(regular, 1):
-                if episode is match:
-                    return 1, absolute
+            return await self.map_anime_calendar_episode(tvdb_id, season, number) or (season, number)
         return season, number
 
     async def map_anime_calendar_episode(self, tvdb_id, season, number):
@@ -569,14 +564,16 @@ class TmdbClient:
             if not isinstance(episodes, list):
                 return None
             self._tvmaze_episode_lists[tvdb_id] = episodes
-        regular = [e for e in self._tvmaze_episode_lists[tvdb_id]
-                   if e.get("season") is not None and e.get("number") is not None
-                   and 1900 <= int(e["season"]) <= 2100]
-        regular.sort(key=lambda e: (int(e["season"]), int(e["number"])))
-        for absolute, episode in enumerate(regular, 1):
-            if int(episode["season"]) == season and int(episode["number"]) == number:
-                return 1, absolute
-        return None
+        if tvdb_id not in self._tvmaze_calendar_coordinates:
+            regular = [e for e in self._tvmaze_episode_lists[tvdb_id]
+                       if e.get("season") is not None and e.get("number") is not None
+                       and 1900 <= int(e["season"]) <= 2100]
+            regular.sort(key=lambda e: (int(e["season"]), int(e["number"])))
+            self._tvmaze_calendar_coordinates[tvdb_id] = {
+                (int(episode["season"]), int(episode["number"])): (1, absolute)
+                for absolute, episode in enumerate(regular, 1)
+            }
+        return self._tvmaze_calendar_coordinates[tvdb_id].get((season, number))
 
     # ------------------------------------------------------------------
     # Anime-aware episode lookup

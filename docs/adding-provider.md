@@ -21,4 +21,4 @@ The new provider is complete only when the above command and reward tests pass w
 
 ## Current migration state
 
-SIMKL and WeTrakr still have separate ingestion loops and command implementations. The provider contract and ID-aware matcher are the first shared components; adapters, canonical occurrence persistence, full historical ID backfill, and command projections must move to the contract before adding a third watch tracker. Legacy title matches are explicitly marked as such, and existing duplicate XP is not automatically deducted during migration.
+SIMKL and WeTrakr still have separate ingestion loops and command implementations. The provider contract, ID-aware matcher, and derived occurrence index are the first shared components; adapters, authoritative occurrence awards, full historical ID backfill, and command projections must move to the contract before adding a third watch tracker. Legacy title matches are explicitly marked as such, and existing duplicate XP is not automatically deducted during migration.
