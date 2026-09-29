@@ -5,10 +5,10 @@ import tempfile
 
 from PIL import Image, ImageDraw, ImageFont
 
-import storage as storage_module
-from level_visuals import accent_for_level, accent_for_tier, prestige_style, render_prestige_gif
-from profile_visuals import _short, profile_snapshot, render_profile_png, render_leaderboard_png, render_summary_png
-from progression import xp_for_level
+import trackerbot.core.storage as storage_module
+from trackerbot.presentation.level_visuals import accent_for_level, accent_for_tier, prestige_style, render_prestige_gif
+from trackerbot.presentation.profile_visuals import _short, profile_snapshot, render_profile_png, render_leaderboard_png, render_summary_png
+from trackerbot.core.progression import xp_for_level
 
 
 def test_profile_recomputes_watch_and_genre_totals_each_view():

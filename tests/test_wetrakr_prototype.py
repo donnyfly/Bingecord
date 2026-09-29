@@ -1,7 +1,7 @@
 import asyncio
 
-from wetrakr_client import WeTrakrClient, WeTrakrError
-from wetrakr_events import normalize_compact_play, normalize_journal_entry
+from trackerbot.integrations.wetrakr_client import WeTrakrClient, WeTrakrError
+from trackerbot.integrations.wetrakr_events import normalize_compact_play, normalize_journal_entry
 
 
 class Response:

@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
 
-import storage as storage_module
+import trackerbot.core.storage as storage_module
 
 
 def test_community_uses_selected_source_and_preserves_completed_week(tmp_path, monkeypatch):

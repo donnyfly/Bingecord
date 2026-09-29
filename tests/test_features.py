@@ -11,7 +11,7 @@ os.environ.setdefault('DISCORD_BOT_TOKEN','test-token')
 os.environ.setdefault('SIMKL_CLIENT_ID','test-client')
 os.environ.setdefault('TMDB_API_KEY','test-key')
 import bot
-import storage as storage_module
+import trackerbot.core.storage as storage_module
 
 
 def test_feature_defaults_isolation_and_restart(tmp_path,monkeypatch):

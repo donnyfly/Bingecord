@@ -2,9 +2,9 @@ import asyncio
 
 import pytest
 
-import storage as storage_module
-from providers import ProviderAccount, ProviderManifest, ProviderPage, ProviderRegistry, WatchChange
-from tracker_mapping import WatchIdentity, match_reason, same_watch
+import trackerbot.core.storage as storage_module
+from trackerbot.core.providers import ProviderAccount, ProviderManifest, ProviderPage, ProviderRegistry, WatchChange
+from trackerbot.core.tracker_mapping import WatchIdentity, match_reason, same_watch
 
 
 def watch(kind="anime_episode", title="English Title", season=1, episode=892,

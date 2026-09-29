@@ -14,11 +14,11 @@ os.environ.setdefault("SIMKL_CLIENT_ID", "test-client")
 os.environ.setdefault("TMDB_API_KEY", "test-key")
 
 import bot  # noqa: E402
-import storage as storage_module  # noqa: E402
-from achievements import ACHIEVEMENTS  # noqa: E402
-from level_visuals import accent_for_level, accent_for_tier, prestige_style, render_achievement_gif, render_level_up_gif  # noqa: E402
-from progression import RANKS, rank_for_level  # noqa: E402
-from simkl_client import SimklClient  # noqa: E402
+import trackerbot.core.storage as storage_module  # noqa: E402
+from trackerbot.core.achievements import ACHIEVEMENTS  # noqa: E402
+from trackerbot.presentation.level_visuals import accent_for_level, accent_for_tier, prestige_style, render_achievement_gif, render_level_up_gif  # noqa: E402
+from trackerbot.core.progression import RANKS, rank_for_level  # noqa: E402
+from trackerbot.integrations.simkl_client import SimklClient  # noqa: E402
 
 
 def test_full_history_requests_completed_and_dropped_episode_rows(monkeypatch):

@@ -10,8 +10,8 @@ os.environ.setdefault('DISCORD_BOT_TOKEN','test-token')
 os.environ.setdefault('SIMKL_CLIENT_ID','test-client')
 os.environ.setdefault('TMDB_API_KEY','test-key')
 import bot  # noqa: E402
-import storage as storage_module  # noqa: E402
-from simkl_client import SimklAuthError  # noqa: E402
+import trackerbot.core.storage as storage_module  # noqa: E402
+from trackerbot.integrations.simkl_client import SimklAuthError  # noqa: E402
 
 GUILD='123'
 BROKEN='41'

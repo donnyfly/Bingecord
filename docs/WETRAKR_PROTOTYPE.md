@@ -15,20 +15,20 @@ The app key alone cannot read someone's watch history.
 
 ## Implemented foundation
 
-- `wetrakr_client.py`: device-code initiation/polling, refresh-token rotation,
+- `trackerbot/integrations/wetrakr_client.py`: device-code initiation/polling, refresh-token rotation,
   account lookup, activity timestamps, paginated journal, and compact history
   with opaque `after` cursors. Quota responses are returned as errors instead
   of retried in a tight loop.
-- `wetrakr_events.py`: source-aware play identities based on `play_id`,
+- `trackerbot/integrations/wetrakr_events.py`: source-aware play identities based on `play_id`,
   preserving rewatches and date edits; show and season roll-up rows cannot
   become additional episode XP. Status rows are separate from watched plays.
-- `storage.py` and `bot.py`: OAuth device approval and separate linked-account
+- `trackerbot/core/storage.py` and `trackerbot/bot.py`: OAuth device approval and separate linked-account
   state. A WeTrakr-only user is never accidentally polled as a SIMKL user.
-- `providers.py`: a source-scoped watch change contract and shared target
+- `trackerbot/core/providers.py`: a source-scoped watch change contract and shared target
   selection. Existing SIMKL state and polling retain their old behavior.
-- `wetrakr_auth.py`: an isolated, rotation-safe access token refresh helper,
+- `trackerbot/integrations/wetrakr_auth.py`: an isolated, rotation-safe access token refresh helper,
   invoked by WeTrakr polling.
-- `wetrakr_sync.py`: a compact-history baseline and an incremental journal
+- `trackerbot/integrations/wetrakr_sync.py`: a compact-history baseline and an incremental journal
   poller. It imports play IDs into the shared statistics and XP store, applies
   edits and removals, acknowledges each successfully delivered entry, and
   re-reads with overlap so equal timestamps cannot lose watches.
@@ -84,7 +84,7 @@ The long-term shape has three boundaries:
    does not automatically double-post or double-award XP. Once title and play
    matching are measured, dual-source merging can be opt-in.
 
-The `providers.py` contract is preparatory for moving SIMKL behind the same
+The `trackerbot/core/providers.py` contract is preparatory for moving SIMKL behind the same
 adapter boundary. The current SIMKL poller retains its legacy state and XP
 model; the WeTrakr poller has its own checkpoint and posts only for users who
 select it in that server.

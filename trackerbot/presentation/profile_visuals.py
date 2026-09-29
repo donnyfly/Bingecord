@@ -6,9 +6,9 @@ from io import BytesIO
 
 from PIL import Image, ImageDraw, ImageFont
 
-from achievements import ACHIEVEMENTS
-from level_visuals import accent_for_tier, draw_prestige_backdrop, prestige_style, _prestige_emblem
-from progression import level_progress, rank_for_level
+from trackerbot.core.achievements import ACHIEVEMENTS
+from trackerbot.presentation.level_visuals import accent_for_tier, draw_prestige_backdrop, prestige_style, _prestige_emblem
+from trackerbot.core.progression import level_progress, rank_for_level
 
 BG=(12,14,20)
 PANEL=(19,22,31)

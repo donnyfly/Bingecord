@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import discord
 import pytest
-from watch_delivery import WatchActivity, WatchBatch, together_embed
+from trackerbot.core.watch_delivery import WatchActivity, WatchBatch, together_embed
 
 
 def activity(user, minute=0, *, channel=10, guild='1', key=('episode', 'anime', '99', 2, (3,)), started=False, rewatched=False):

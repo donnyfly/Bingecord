@@ -9,8 +9,8 @@ os.environ.setdefault("SIMKL_CLIENT_ID","test-client")
 os.environ.setdefault("TMDB_API_KEY","test-key")
 
 import bot  # noqa: E402
-import storage as storage_module  # noqa: E402
-from progression import challenges_for  # noqa: E402
+import trackerbot.core.storage as storage_module  # noqa: E402
+from trackerbot.core.progression import challenges_for  # noqa: E402
 
 
 def test_live_challenges_announce_exact_xp_once_and_retry(tmp_path,monkeypatch):

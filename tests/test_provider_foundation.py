@@ -3,9 +3,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-import storage as storage_module
-from providers import WatchChange
-from wetrakr_auth import WeTrakrAuth
+import trackerbot.core.storage as storage_module
+from trackerbot.core.providers import WatchChange
+from trackerbot.integrations.wetrakr_auth import WeTrakrAuth
 
 
 class FakeClient:

@@ -3,8 +3,8 @@
 from datetime import datetime, timedelta, timezone
 import logging
 
-from wetrakr_client import WeTrakrError
-from wetrakr_events import normalize_compact_play, normalize_journal_entry
+from trackerbot.integrations.wetrakr_client import WeTrakrError
+from trackerbot.integrations.wetrakr_events import normalize_compact_play, normalize_journal_entry
 
 log = logging.getLogger("simkl-bot")
 

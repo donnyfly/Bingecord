@@ -11,7 +11,7 @@ import colorsys
 import math
 
 from PIL import Image, ImageDraw, ImageFont
-from progression import RANKS, rank_for_level
+from trackerbot.core.progression import RANKS, rank_for_level
 
 
 WIDTH = 720

@@ -197,6 +197,12 @@ Once the bot is online:
 
 Docker is recommended, but the bot can also run directly with Python 3.10+.
 
+Application code is grouped under `trackerbot/`: `core/` contains shared
+progression, storage, mapping, and delivery logic; `integrations/` contains
+tracker clients and sync; `metadata/` contains title/rating clients; and
+`presentation/` contains cards and recommendation UI. The root `bot.py` keeps
+the existing launch command working.
+
 ```bash
 git clone https://github.com/donnyfly/SIMKLTrackerBot.git
 cd SIMKLTrackerBot

@@ -1,7 +1,7 @@
 import asyncio
 from unittest.mock import AsyncMock
 
-from tmdb_client import TmdbClient
+from trackerbot.metadata.tmdb_client import TmdbClient
 
 
 def test_tvmaze_episode_identity_mapping_and_ambiguity():

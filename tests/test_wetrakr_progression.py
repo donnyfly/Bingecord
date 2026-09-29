@@ -1,7 +1,7 @@
 import asyncio
 
-import storage as storage_module
-from wetrakr_sync import WeTrakrSync
+import trackerbot.core.storage as storage_module
+from trackerbot.integrations.wetrakr_sync import WeTrakrSync
 
 
 class Auth:

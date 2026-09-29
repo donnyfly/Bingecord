@@ -12,12 +12,12 @@ import os
 from collections import defaultdict
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from progression import challenges_for, roll_prestige, xp_for_level
-from community import challenge_for_week, watch_contributions, split_pool
-from providers import provider_linked
-from tracker_mapping import build_occurrence_index, identity_from_event, identity_from_play, normalized_ids, same_watch
+from trackerbot.core.progression import challenges_for, roll_prestige, xp_for_level
+from trackerbot.core.community import challenge_for_week, watch_contributions, split_pool
+from trackerbot.core.providers import provider_linked
+from trackerbot.core.tracker_mapping import build_occurrence_index, identity_from_event, identity_from_play, normalized_ids, same_watch
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "store.json")
+DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "store.json")
 
 DEFAULT_POLL_INTERVAL_MINUTES = 60
 EPOCH_ISO = "1970-01-01T00:00:00Z"

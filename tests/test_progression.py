@@ -1,9 +1,9 @@
 import asyncio
 import tempfile
 
-import storage as storage_module
-from progression import challenges_for, level_from_xp, rank_for_level, xp_for_level, xp_for_watch
-from achievements import ACHIEVEMENTS
+import trackerbot.core.storage as storage_module
+from trackerbot.core.progression import challenges_for, level_from_xp, rank_for_level, xp_for_level, xp_for_watch
+from trackerbot.core.achievements import ACHIEVEMENTS
 
 
 def test_progression_curve():
@@ -29,7 +29,7 @@ def test_activity_based_episode_xp():
 
 
 def test_challenge_rotation():
-    from progression import challenges_for
+    from trackerbot.core.progression import challenges_for
 
     daily, weekly = challenges_for(__import__("datetime").date(2026, 9, 26))
     assert len(daily) == 3

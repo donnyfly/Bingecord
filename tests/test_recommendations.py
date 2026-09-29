@@ -8,8 +8,8 @@ os.environ.setdefault("SIMKL_CLIENT_ID", "test-client")
 os.environ.setdefault("TMDB_API_KEY", "test-key")
 
 import bot  # noqa: E402
-from recommendation_engine import recommendation_lineup, select_sources
-from recommendation_ui import RecommendationView, different_candidate, related_candidate
+from trackerbot.presentation.recommendation_engine import recommendation_lineup, select_sources
+from trackerbot.presentation.recommendation_ui import RecommendationView, different_candidate, related_candidate
 
 
 def source(name, ident, rating, media="anime", stamp="2026-09-01"):

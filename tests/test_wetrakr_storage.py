@@ -1,6 +1,6 @@
 import asyncio
 
-import storage as storage_module
+import trackerbot.core.storage as storage_module
 
 
 def test_wetrakr_link_preserves_simkl_and_unlink_is_independent(tmp_path, monkeypatch):
