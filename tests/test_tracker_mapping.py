@@ -32,6 +32,12 @@ def test_movie_rewatch_window_and_media_kind():
     assert not same_watch(original, watch("episode", "Film", 1, 1, {"imdb": "tt123"}))
 
 
+def test_episode_rewatch_is_a_distinct_occurrence():
+    original = watch(ids={"tmdb": 37854})
+    assert same_watch(original, watch(ids={"tmdb": 37854}, at="2026-09-28T12:04:59Z"))
+    assert not same_watch(original, watch(ids={"tmdb": 37854}, at="2026-09-29T12:00:00Z"))
+
+
 def test_registry_requires_history_changes_and_unique_names():
     good = ProviderManifest("future_tracker", "Future Tracker", True, True, True,
                             True, True, True, True,

@@ -47,18 +47,19 @@ def match_reason(left: WatchIdentity | None, right: WatchIdentity | None) -> str
             return None
         if (left.season, left.episode) != (right.season, right.episode):
             return None
-    else:
-        try:
-            a = datetime.fromisoformat(left.watched_at.replace("Z", "+00:00"))
-            b = datetime.fromisoformat(right.watched_at.replace("Z", "+00:00"))
-            if a.tzinfo is None:
-                a = a.replace(tzinfo=timezone.utc)
-            if b.tzinfo is None:
-                b = b.replace(tzinfo=timezone.utc)
-            if abs((a - b).total_seconds()) > 300:
-                return None
-        except (ValueError, TypeError, AttributeError):
+    # Episode coordinates identify the title, not a particular watch. A
+    # rewatch of the same episode must remain a separate XP occurrence.
+    try:
+        a = datetime.fromisoformat(left.watched_at.replace("Z", "+00:00"))
+        b = datetime.fromisoformat(right.watched_at.replace("Z", "+00:00"))
+        if a.tzinfo is None:
+            a = a.replace(tzinfo=timezone.utc)
+        if b.tzinfo is None:
+            b = b.replace(tzinfo=timezone.utc)
+        if abs((a - b).total_seconds()) > 300:
             return None
+    except (ValueError, TypeError, AttributeError):
+        return None
     left_ids, right_ids = normalized_ids(left.ids), normalized_ids(right.ids)
     shared = set(left_ids) & set(right_ids)
     if any(left_ids[name] != right_ids[name] for name in shared):
