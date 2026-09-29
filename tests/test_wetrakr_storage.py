@@ -41,6 +41,23 @@ def test_wetrakr_only_link_is_not_polled_as_simkl(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
+def test_started_series_history_ignores_colliding_provider_ids(tmp_path, monkeypatch):
+    async def run():
+        monkeypatch.setattr(storage_module, "DATA_PATH", str(tmp_path / "store.json"))
+        store = storage_module.Storage()
+        await store.link_wetrakr("1", "2", {"access_token": "a", "refresh_token": "r"}, {"id": 7})
+        await store.reconcile_wetrakr_plays("1", "2", [{
+            "source_event_id": "old-play", "media_type": "episode", "title": "Other Show",
+            "item_key": "wetrakr:episode:25:1:1", "show_id": 25,
+            "show_ids": {"tmdb": 111}, "ids": {"tmdb": 111},
+            "watched_at": "2026-09-28T12:00:00Z"}])
+        # A numeric provider ID collision must not hide the first episode of
+        # a different series when its external IDs explicitly conflict.
+        assert not await store.has_wetrakr_show_history("2", 25, {"tmdb": 222})
+        assert await store.has_wetrakr_show_history("2", 25, {"tmdb": 111})
+    asyncio.run(run())
+
+
 def test_different_episode_of_same_show_keeps_its_xp(tmp_path, monkeypatch):
     async def run():
         monkeypatch.setattr(storage_module, "DATA_PATH", str(tmp_path / "store.json"))
