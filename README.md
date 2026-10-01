@@ -367,3 +367,5 @@ If a Discord bot token is exposed, regenerate it immediately in the Discord Deve
 # License
 
 SIMKLTrackerBot is licensed under the MIT License.
+
+Live validation for experimental changes: [multi-tracker test checklist](docs/testing-multi-tracker.md).

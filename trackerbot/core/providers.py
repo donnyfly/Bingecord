@@ -1,7 +1,6 @@
 """Shared contracts for tracker ingestion; providers retain their own credentials.
 
-The old SIMKL data layout remains authoritative until each consumer has moved
-to these contracts. A source event ID is scoped to its provider and account;
+Registered adapters expose native sync and normalized read operations. A source event ID is scoped to its provider and account;
 it is never a cross-provider XP key by itself.
 """
 
@@ -52,6 +51,7 @@ class ProviderAccount:
     provider: str
     account_id: str
     username: str
+    discord_user_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -68,7 +68,7 @@ class ProviderPage:
                 raise ValueError("Provider observation lacks a stable event ID or watch time")
             if change.source_key in seen and change.action == "added":
                 raise ValueError("Provider page contains a duplicate added event")
-            if change.media_type == "episode" and (change.episode is None or
+            if change.action != "removed" and change.media_type == "episode" and (change.episode is None or
                     change.season is None and change.absolute_episode is None):
                 raise ValueError("Episode requires a season/episode or absolute number")
             seen.add(change.source_key)
@@ -86,7 +86,12 @@ class TrackerProvider(Protocol):
     async def watching(self, account: ProviderAccount) -> list[dict]: ...
     async def planning(self, account: ProviderAccount) -> list[dict]: ...
     async def title(self, media_type: str, title_ids: dict) -> dict: ...
-    def profile_url(self, account: ProviderAccount) -> str: ...
+    async def poll(self, guild_id=None, *, manual=False) -> int: ...
+    async def authorize(self, interaction) -> None: ...
+    async def unlink(self, interaction) -> None: ...
+    async def recommendation_sources(self, account: ProviderAccount, media_filter: str) -> tuple[list[dict], set]: ...
+    async def resolve_title_url(self, media_type: str, title_ids: dict) -> str | None: ...
+    def profile_url(self, account: ProviderAccount) -> str | None: ...
     def title_url(self, media_type: str, title_ids: dict) -> str | None: ...
 
 

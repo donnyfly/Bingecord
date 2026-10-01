@@ -22,7 +22,8 @@ from trackerbot.metadata.mdblist_client import MdbListClient
 from trackerbot.metadata.imdb_client import ImdbClient
 from trackerbot.presentation.recommendation_engine import rating_value, select_sources, source_weight, rank_candidates, recommendation_lineup
 from trackerbot.presentation.recommendation_ui import RecommendationView
-from trackerbot.core.providers import BUILTIN_TRACKERS
+from trackerbot.core.providers import BUILTIN_TRACKERS, ProviderRegistry
+from trackerbot.integrations.provider_adapters import SimklProvider, WeTrakrProvider, matches_filter
 
 load_dotenv()
 
@@ -1753,37 +1754,7 @@ async def poll_wetrakr_all(g=None):
                     except Exception:
                         log.warning("Could not reclassify WeTrakr movie %s for user %s.",movie_id,uid,exc_info=True)
                 async def resolve_play(play):
-                    """Fetch one title per show/movie for compact history and journal plays."""
-                    result = dict(play)
-                    kind = result.get("media_type")
-                    title_id = result.get("wetrakr_id") if kind == "movie" else result.get("show_id")
-                    if kind not in {"movie", "episode"} or not title_id:
-                        return result
-                    cache_key = (kind, str(title_id))
-                    if cache_key not in metadata_cache:
-                        metadata = await wetrakr.title(
-                            "movie" if kind == "movie" else "show", title_id)
-                        anime = (await is_wetrakr_anime(metadata, (metadata.get("ids") or {}).get("tmdb"))
-                                 if kind == "episode" else await is_wetrakr_anime_movie(
-                                     metadata, (metadata.get("ids") or {}).get("tmdb")))
-                        metadata_cache[cache_key] = (metadata, anime)
-                    metadata, anime = metadata_cache[cache_key]
-                    result["title"] = metadata.get("title") or result.get("title") or "Untitled"
-                    result["ids"] = metadata.get("ids") or result.get("ids") or {}
-                    result["genres"] = metadata.get("genres") or []
-                    result["media_type"] = ("anime_movie" if kind == "movie" else "anime_episode") if anime else kind
-                    if anime and kind == "episode":
-                        ids = result["ids"]
-                        tvdb_id = ids.get("tvdb") or ids.get("thetvdb")
-                        if not tvdb_id and ids.get("tmdb"):
-                            tvdb_id = await tmdb.get_tvdb_id_for_tmdb(ids["tmdb"])
-                        mapped = (await tmdb.map_anime_calendar_episode(
-                            tvdb_id, result.get("season"), result.get("episode")) if tvdb_id else None)
-                        if mapped:
-                            result["season"], result["episode"] = mapped
-                    result["item_key"] = (f"wetrakr:movie:{title_id}" if kind == "movie" else
-                                          f"wetrakr:episode:{title_id}:{result.get('season')}:{result.get('episode')}")
-                    return result
+                    return await provider_registry.get('wetrakr').resolve_play(play, metadata_cache)
                 async def deliver(change, row):
                     return await deliver_wetrakr_change(ch, gid, uid, name, member, change, row, started_ids)
                 async def deliver_group(batch):
@@ -2552,7 +2523,11 @@ async def simkl_user_reset(i, confirm: bool = False):
     uid=str(i.user.id)
     user=await storage.get_user(uid)
     provider=await storage.get_activity_provider(g,uid)
-    linked=bool(user and (user.get("wetrakr") if provider=="wetrakr" else user.get("simkl_token")))
+    try:
+        adapter, _ = await selected_provider(g, uid)
+        linked = True
+    except ValueError:
+        linked = False
     if not linked:
         await i.response.send_message(
             "You don't have a linked account for your selected source. Use /tracker-link first.",
@@ -2562,7 +2537,7 @@ async def simkl_user_reset(i, confirm: bool = False):
 
     if not confirm:
         await i.response.send_message(
-            f"This resets your {provider.upper() if provider=='simkl' else 'WeTrakr'} server tracking state "
+            f"This resets your {adapter.manifest.display_name} server tracking state "
             "and achievements. Your linked accounts, shared XP and personal style stay intact. "
             "The selected account's history will be imported again without old activity posts. "
             "Run /tracker-user-reset with confirm set to True to continue.",
@@ -2734,8 +2709,9 @@ async def show_profile(i,user):
     await i.response.defer()
     await evaluate_achievements(g,str(target.id))
     stats=await storage.get_statistics(g,str(target.id))
-    active_wetrakr = await storage.get_activity_provider(g, str(target.id)) == "wetrakr"
-    source_label = "WeTrakr" if active_wetrakr else "SIMKL"
+    source = await storage.get_activity_provider(g, str(target.id)) or 'simkl'
+    active_wetrakr = source == 'wetrakr'
+    source_label = provider_registry.get(source).manifest.display_name
     history=await storage.get_history_import_state(g,str(target.id))
     if not active_wetrakr and history["linked"] and not history["complete"] and not (int(stats.get("episodes_watched",0))+int(stats.get("movies_watched",0))):
         await i.followup.send("This SIMKL history import is still pending. Watch totals will appear here when it finishes; the bot retries automatically.",ephemeral=True)
@@ -3160,7 +3136,7 @@ async def _currently_watching_items(uid,user,token,media_types):
                 media=movie_item.get("movie") or movie_item.get("show") or {}
                 ids=media.get("ids") or {}
                 results.append({
-                    "media_type":"movies",
+                    "media_type":"movies", "anime": True,
                     "title":media.get("title") or "Untitled",
                     "ids":ids,
                     "poster":media.get("poster"),
@@ -3205,109 +3181,38 @@ async def simkl_watching(i,type: app_commands.Choice[str] | None = None):
         return
 
     uid=str(i.user.id)
-    if await storage.get_activity_provider(g, uid) == "wetrakr":
-        await i.response.defer(ephemeral=True)
-        try:
-            media_filter=type.value if type else "all"
-            targets=("movies",) if media_filter=="movies" else ("shows",) if media_filter=="shows" else ("shows", "movies")
-            rows=await wetrakr_tracking_rows(uid,"watching",targets)
-            display_rows=[]
-            for target,row in rows:
-                media=(row.get("movie") if target=="movies" else row.get("show")) or row
-                ids=media.get("ids") or {}
-                anime=(await is_wetrakr_anime_movie(media,ids.get("tmdb")) if target=="movies"
-                       else await is_wetrakr_anime(media,ids.get("tmdb")))
-                if media_filter=="anime" and not anime:
-                    continue
-                if media_filter=="shows" and anime:
-                    continue
-                title=media.get("title") or row.get("title") or "Untitled"
-                url=wetrakr_title_url("movie" if target=="movies" else "show",ids.get("tmdb"))
-                display_rows.append((target,anime,title,url))
-            if not display_rows:
-                await i.followup.send("You're not currently watching anything matching that filter on WeTrakr.",ephemeral=True)
-                return
-            display_rows.sort(key=lambda row:row[2].casefold())
-            lines=[]
-            for target,anime,title,url in display_rows[:15]:
-                emoji="🌸" if anime else "🎬" if target=="movies" else "📺"
-                title_text=f"[{title}]({url})" if url else f"**{title}**"
-                lines.append(f"{emoji} {title_text}")
-            if len(display_rows)>15:
-                lines.append(f"…and **{len(display_rows)-15}** more.")
-            embed=discord.Embed(title=f"👀 {i.user.display_name} · Currently Watching",
-                                description="\n".join(lines),color=0x5865F2)
-            embed.set_footer(text="Live from WeTrakr · Currently watching")
-            await i.followup.send(embed=embed,ephemeral=True)
-        except Exception:
-            log.exception("WeTrakr watching lookup failed for user %s.",uid)
-            await i.followup.send("I couldn't load your WeTrakr watching list right now.",ephemeral=True)
-        return
-    user=await storage.get_user(uid)
-    if not user or not user.get("simkl_token"):
-        await i.response.send_message(
-            "You don't have a linked SIMKL account in this server. Use /tracker-link first.",
-            ephemeral=True,
-        )
-        return
-
     await i.response.defer(ephemeral=True)
-
     try:
-        token=await valid_token(uid,user)
-        media_filter=type.value if type else "all"
-        media_types=MEDIA_TYPES if media_filter=="all" else (media_filter,)
-        items,token=await _currently_watching_items(uid,user,token,media_types)
-
+        provider, account = await selected_provider(g, uid)
+        media_filter = type.value if type else "all"
+        items = [item for item in await provider.watching(account) if matches_filter(item, media_filter)]
         if not items:
-            await i.followup.send(
-                "You're not currently watching anything on SIMKL.",
-                ephemeral=True,
-            )
+            await i.followup.send(f"You're not currently watching anything matching that filter on {provider.manifest.display_name}.", ephemeral=True)
             return
-
-        items.sort(key=lambda item: item["title"].casefold())
-        lines=[]
+        items.sort(key=lambda item: item['title'].casefold())
+        lines = []
         for item in items[:15]:
-            label=MEDIA_STYLES[item["media_type"]][1]
-            emoji={"shows":"📺","anime":"🌸","movies":"🎬"}.get(item["media_type"],"🎬")
-            line=f"{emoji} **{item['title']}**"
-            latest=item.get("latest")
-            if latest:
-                _,season,episode,episode_title=latest
-                if season is not None and episode is not None:
-                    line+=f" — **S{int(season):02d}E{int(episode):02d}**"
-                elif episode is not None:
-                    line+=f" — **E{int(episode):02d}**"
+            emoji = '🌸' if item.get('anime') else '🎬' if item['media_type'] == 'movies' else '📺'
+            title = f"[{item['title']}]({item['url']})" if item.get('url') else f"**{item['title']}**"
+            line = f"{emoji} {title}"
+            if item.get('latest'):
+                _, season, episode, episode_title = item['latest']
+                if episode is not None:
+                    line += ' — ' + format_episode_display(season, int(episode), int(episode))
                 if episode_title:
-                    line+=f" · {episode_title}"
+                    line += f" · {episode_title}"
             lines.append(line)
-
-        if len(items)>15:
-            lines.append(f"\n…and **{len(items)-15}** more.")
-
-        embed=discord.Embed(
-            title=f"👀 {i.user.display_name} · Currently Watching",
-            description="\n".join(lines),
-            color=0x5865F2,
-        )
-        embed.set_footer(text="Live from SIMKL · Currently watching")
-        await i.followup.send(embed=embed,ephemeral=True)
-
-    except SimklAuthError:
-        await i.followup.send(
-            "Your SIMKL authentication is no longer valid. Please use /tracker-link again.",
-            ephemeral=True,
-        )
-    except Exception as exc:
-        log.error(
-            "Currently watching failed for user %s: %s: %s",
-            uid,type(exc).__name__,exc,
-        )
-        await i.followup.send(
-            "I couldn't load your currently watching list right now. Please try again in a moment.",
-            ephemeral=True,
-        )
+        if len(items) > 15:
+            lines.append(f"…and **{len(items)-15}** more.")
+        embed = discord.Embed(title=f"👀 {i.user.display_name} · Currently Watching",
+                              description='\n'.join(lines), color=0x5865F2)
+        embed.set_footer(text=f"Live from {provider.manifest.display_name} · Currently watching")
+        await i.followup.send(embed=embed, ephemeral=True)
+    except ValueError as exc:
+        await i.followup.send(str(exc), ephemeral=True)
+    except Exception:
+        log.exception('Watching lookup failed for %s.', uid)
+        await i.followup.send("I couldn't load your selected tracker's watching list right now.", ephemeral=True)
 
 
 async def _recommendation_sources(uid,user,token,media_filter):
@@ -3520,41 +3425,16 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
         return
 
     uid=str(i.user.id)
-    active_provider=await storage.get_activity_provider(g,uid)
-    user=await storage.get_user(uid)
-    if not user or (active_provider=="wetrakr" and not user.get("wetrakr")) or (active_provider!="wetrakr" and not user.get("simkl_token")):
-        await i.response.send_message(
-            "Link your selected tracker in this server with /tracker-link first.",
-            ephemeral=True,
-        )
+    try:
+        provider, account = await selected_provider(g, uid)
+    except ValueError as exc:
+        await i.response.send_message(str(exc), ephemeral=True)
         return
-
     await i.response.defer(ephemeral=True)
     media_filter=type.value if type else "all"
 
     try:
-        if active_provider=="wetrakr":
-            plays=await storage.get_wetrakr_plays(uid)
-            sources=[]
-            excluded=set()
-            for play in plays:
-                kind="movie" if "movie" in play.get("media_type","") else "tv"
-                if media_filter=="movies" and kind!="movie" or media_filter=="shows" and kind!="tv":
-                    continue
-                if media_filter=="anime" and play.get("media_type") not in {"anime_episode","anime_movie"}:
-                    continue
-                try:
-                    tmdb_id=int((play.get("ids") or {}).get("tmdb"))
-                except (ValueError,TypeError):
-                    continue
-                excluded.add((kind,tmdb_id))
-                sources.append({"kind":kind,"tmdb_id":tmdb_id,"title":play.get("title") or "Untitled",
-                                "watched_at":play.get("watched_at") or "", "anime":play.get("media_type","").startswith("anime"),
-                                "media_type":play.get("media_type"),"rating":None,"genres":play.get("genres") or []})
-            sources=select_sources(sources)
-        else:
-            token=await valid_token(uid,user)
-            sources,excluded,token=await _recommendation_sources(uid,user,token,media_filter)
+        sources, excluded = await provider.recommendation_sources(account, media_filter)
 
         if not sources:
             await i.followup.send(
@@ -3570,7 +3450,7 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
         )
         if not recommendations:
             await i.followup.send(
-                f"I couldn't find a fresh recommendation from your current {'WeTrakr' if active_provider=='wetrakr' else 'SIMKL'} history. Try adding more watched titles.",
+                f"I couldn't find a fresh recommendation from your current {provider.manifest.display_name} history. Try adding more watched titles.",
                 ephemeral=True,
             )
             return
@@ -3599,14 +3479,11 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
         async def destination(result):
             kind=result["_recommendation_kind"]
             page=f"https://www.themoviedb.org/{'movie' if kind=='movie' else 'tv'}/{int(result['id'])}"
-            if active_provider=="wetrakr":
-                resolved=wetrakr_title_url(kind,result["id"])
-                return resolved or page, bool(resolved)
             try:
-                resolved=await simkl.resolve_title_url(result["id"],kind)
+                resolved = await provider.resolve_title_url('movies' if kind == 'movie' else 'shows', {'tmdb': result['id']})
             except Exception:
-                log.debug("Recommendation link resolution failed for TMDB=%s",result["id"],exc_info=True)
-                resolved=None
+                log.debug('Recommendation title resolution failed for %s.', result['id'], exc_info=True)
+                resolved = None
             return resolved or page, bool(resolved)
 
         async def render_pick(result,index,total):
@@ -3658,12 +3535,12 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
             embed.add_field(name="Why this pick",value=reason,inline=False)
             embed.add_field(name="Details",value=f"{kind_label} · {year}"+(f"\n{' · '.join(rating_parts)}" if rating_parts else ""),inline=False)
             if not on_tracker:
-                provider_name="WeTrakr" if active_provider=="wetrakr" else "SIMKL"
+                provider_name=provider.manifest.display_name
                 embed.add_field(name="Link",value=f"This title isn't matched on {provider_name} yet. The title opens its exact TMDB entry.",inline=False)
             poster=result.get("poster_path")
             if poster and poster.startswith("/"):
                 embed.set_thumbnail(url=f"https://image.tmdb.org/t/p/w500{poster}")
-            embed.set_footer(text=f"{index} of {total} · Based on your {'WeTrakr' if active_provider=='wetrakr' else 'SIMKL'} watch history")
+            embed.set_footer(text=f"{index} of {total} · Based on your {provider.manifest.display_name} watch history")
             return embed
 
         view=RecommendationView(i.user.id,selected,recommendations,render_pick)
@@ -3703,149 +3580,55 @@ async def simkl_random(
         await i.response.send_message("This command must be used in a server.",ephemeral=True)
         return
 
-    uid=str(i.user.id)
-    if await storage.get_activity_provider(g,uid)=="wetrakr":
-        await i.response.defer()
-        try:
-            media_filter=type.value if type else "all"
-            genre_filter=genre.value if genre else ""
-            targets=("movies",) if media_filter=="movies" else ("shows",) if media_filter=="shows" else ("shows", "movies")
-            rows=await wetrakr_tracking_rows(uid,"planning",targets)
-            candidates=[]
-            for target,row in rows:
-                media=(row.get("movie") if target=="movies" else row.get("show")) or row
-                ids=media.get("ids") or {}
-                anime=(await is_wetrakr_anime_movie(media,ids.get("tmdb")) if target=="movies"
-                       else await is_wetrakr_anime(media,ids.get("tmdb")))
-                if media_filter=="anime" and not anime:
-                    continue
-                if media_filter=="shows" and anime:
-                    continue
-                if genre_filter and not any(genre_filter.casefold()==str(
-                        value.get("name") if isinstance(value,dict) else value).casefold()
-                        for value in media.get("genres") or []):
-                    continue
-                candidates.append((target,media,anime))
-            if not candidates:
-                await i.followup.send("I couldn't find a matching title in your WeTrakr planning list.",ephemeral=True)
-                return
-            target,media,anime=random.choice(candidates)
-            title=media.get("title") or "Untitled"
-            ids=media.get("ids") or {}
-            tmdb_id=ids.get("tmdb")
-            url=wetrakr_title_url("movie" if target=="movies" else "show",tmdb_id)
-            kind_label="Anime Movie" if target=="movies" and anime else "Movie" if target=="movies" else "Anime" if anime else "Series"
-            embed=discord.Embed(title=title,url=url,
-                                description=f"Picked from your WeTrakr Plan To Watch · {kind_label}",
-                                color=0x5865F2)
-            poster=media.get("poster_path")
-            if poster and str(poster).startswith("/"):
-                embed.set_thumbnail(url=f"https://image.tmdb.org/t/p/w500{poster}")
-            await i.followup.send(embed=embed)
-        except Exception:
-            log.exception("WeTrakr random lookup failed for user %s.",uid)
-            await i.followup.send("I couldn't pick from your WeTrakr list right now.",ephemeral=True)
-        return
-    user=await storage.get_user(uid)
-    if not user or not user.get("simkl_token"):
-        await i.response.send_message(
-            "You don't have a linked SIMKL account in this server. Use /tracker-link first.",
-            ephemeral=True,
-        )
-        return
-
-    media_filter=type.value if type else "all"
-    genre_filter=genre.value if genre else ""
-
+    uid = str(i.user.id)
     await i.response.defer()
-
     try:
-        token=await valid_token(uid,user)
-        media_types=MEDIA_TYPES if media_filter=="all" else (media_filter,)
-        candidates=[]
-
-        for media_type in media_types:
-            items,token=await cached_simkl_items(
-                uid,user,token,media_type,
-                timeout=HISTORY_FETCH_TIMEOUT_SECONDS,
-            )
-            for item in items or []:
-                if item.get("status")!="plantowatch":
-                    continue
-                if genre_filter and not await random_picker_matches_genre(item,media_type,genre_filter):
-                    continue
-                candidates.append((media_type,item))
-
-        if not candidates:
-            description="I couldn't find anything matching those filters in your **Plan To Watch** list."
+        provider, account = await selected_provider(g, uid)
+        media_filter = type.value if type else 'all'
+        genre_filter = genre.value if genre else ''
+        candidates = []
+        for item in await provider.planning(account):
+            if not matches_filter(item, media_filter):
+                continue
             if genre_filter:
-                description+=f"\n\nTry a different genre or remove the **{genre_filter.title()}** filter."
-            await i.followup.send(description,ephemeral=True)
+                genres = [str(v.get('name') if isinstance(v, dict) else v).casefold() for v in item.get('genres') or []]
+                if genre_filter.casefold() not in genres:
+                    if not item.get('native_item') or not await random_picker_matches_genre(item['native_item'], item['native_scope'], genre_filter):
+                        continue
+            candidates.append(item)
+        if not candidates:
+            await i.followup.send(f"I couldn't find a matching title in your {provider.manifest.display_name} Plan To Watch list.", ephemeral=True)
             return
-
-        media_type,item=random.choice(candidates)
-        title,episode_count,ids=await random_picker_media_details(item,media_type)
-        simkl_id=ids.get("simkl")
-        slug=ids.get("slug")
-        title_url=simkl_title_url(media_type,simkl_id,slug) if simkl_id else None
-
-        poster_obj=item.get("movie") if media_type=="movies" else item.get("show")
-        poster=(poster_obj or {}).get("poster")
-        if media_type=="movies":
-            image=await tmdb.get_movie_backdrop(ids.get("tmdb"))
-            logo=await tmdb.get_movie_logo(ids.get("tmdb"))
+        item = random.choice(candidates)
+        media_type, ids, title = item['media_type'], item['ids'], item['title']
+        tmdb_id = ids.get('tmdb')
+        if media_type == 'movies':
+            image, logo = await tmdb.get_movie_backdrop(tmdb_id), await tmdb.get_movie_logo(tmdb_id)
         else:
-            image=await tmdb.get_tv_backdrop(ids.get("tmdb"))
-            logo=await tmdb.get_tv_logo(ids.get("tmdb"))
-
-        prefs=await storage.get_embed_preferences(g,uid)
-        label=MEDIA_STYLES[media_type][1]
-        lines=[f"**{label}**"]
-
-        if episode_count:
-            lines.append(f"📺 **{episode_count:,}** episode(s) total.")
-
-        added_at=random_picker_added_at(item)
-        if added_at:
-            added_dt=parse_iso(added_at)
-            if added_dt != datetime.min.replace(tzinfo=timezone.utc):
-                lines.append(f"📅 Added to Plan To Watch: **<t:{int(added_dt.timestamp())}:D>**")
-
+            image, logo = await tmdb.get_tv_backdrop(tmdb_id), await tmdb.get_tv_logo(tmdb_id)
+        label = '🌸 Anime Movie' if item.get('anime') and media_type == 'movies' else MEDIA_STYLES[media_type][1]
+        lines = [f"**{label}**"]
+        if item.get('episode_count'):
+            lines.append(f"📺 **{item['episode_count']:,}** episode(s) total.")
+        if item.get('added_at'):
+            added = parse_iso(item['added_at'])
+            if added != datetime.min.replace(tzinfo=timezone.utc):
+                lines.append(f"📅 Added to Plan To Watch: **<t:{int(added.timestamp())}:D>**")
         if genre_filter:
             lines.append(f"🏷️ Genre filter: **{genre_filter.title()}**")
-
-        embed=build_embed(
-            media_type,
-            "\n".join(lines),
-            datetime.now(timezone.utc),
-            i.user.display_name,
-            i.user,
-            image,
-            simkl_profile_url(user.get("simkl_account_id")),
-            title=title,
-            title_url=title_url,
-            poster=simkl_poster_url(poster) if poster else None,
-            logo=logo,
-            preferences=prefs,
-        )
-        embed.title=f"🎲 Random Pick · {title}"
-        embed.set_footer(text=f"{label} · SIMKL Plan To Watch")
+        embed = build_embed(media_type, '\n'.join(lines), datetime.now(timezone.utc),
+                            i.user.display_name, i.user, image, provider.profile_url(account),
+                            title=title, title_url=item.get('url'), poster=item.get('poster'), logo=logo,
+                            preferences=await storage.get_embed_preferences(g, uid))
+        embed.title = f"🎲 Random Pick · {title}"
+        embed.set_footer(text=f"{label} · {provider.manifest.display_name} Plan To Watch")
         await i.followup.send(embed=embed)
+    except ValueError as exc:
+        await i.followup.send(str(exc), ephemeral=True)
+    except Exception:
+        log.exception('Random picker failed for %s.', uid)
+        await i.followup.send("I couldn't pick a title from your selected tracker right now.", ephemeral=True)
 
-    except SimklAuthError:
-        await i.followup.send(
-            "Your SIMKL authentication is no longer valid. Please use /tracker-link again.",
-            ephemeral=True,
-        )
-    except Exception as exc:
-        log.error(
-            "Random picker failed for user %s: %s: %s",
-            uid,type(exc).__name__,exc,
-        )
-        await i.followup.send(
-            "I couldn't pick a title right now. Please try again in a moment.",
-            ephemeral=True,
-        )
 
 async def simkl_link(i):
     g=guild_id(i)
@@ -3976,7 +3759,7 @@ TRACKER_CHOICES=[app_commands.Choice(name=manifest.display_name,value=manifest.n
 @bot.tree.command(name="tracker-link", description="Link your SIMKL or WeTrakr account in this server.")
 @app_commands.choices(provider=TRACKER_CHOICES)
 async def tracker_link(i, provider: app_commands.Choice[str]):
-    handler={"simkl":simkl_link,"wetrakr":wetrakr_link}.get(provider.value)
+    handler = provider_registry.get(provider.value).authorize if provider.value in {m.name for m in provider_registry.manifests()} else None
     if handler is None:
         await i.response.send_message("That tracking provider is not available on this bot.",ephemeral=True)
         return
@@ -3986,7 +3769,7 @@ async def tracker_link(i, provider: app_commands.Choice[str]):
 @bot.tree.command(name="tracker-unlink", description="Unlink a tracker account from this server.")
 @app_commands.choices(provider=TRACKER_CHOICES)
 async def tracker_unlink(i, provider: app_commands.Choice[str]):
-    handler={"simkl":simkl_unlink,"wetrakr":wetrakr_unlink}.get(provider.value)
+    handler = provider_registry.get(provider.value).unlink if provider.value in {m.name for m in provider_registry.manifests()} else None
     if handler is None:
         await i.response.send_message("That tracking provider is not available on this bot.",ephemeral=True)
         return
@@ -4225,8 +4008,8 @@ async def tracker_checknow(i):
         await i.response.send_message("An activity check is already running.",ephemeral=True); return
     last_checknow_at=time.monotonic()
     await i.response.send_message("Checking this server's selected tracker activity now...",ephemeral=True)
-    simkl_posted=await poll_all(g,force_reconcile=True,ignore_failure_threshold=True)
-    wetrakr_posted=await poll_wetrakr_all(g)
+    posted = await poll_providers(g, manual=True)
+    simkl_posted, wetrakr_posted = posted.get('simkl', 0), posted.get('wetrakr', 0)
     await i.followup.send(
         f"Done. Posted **{simkl_posted + wetrakr_posted}** new activity item(s) "
         f"(SIMKL {simkl_posted}, WeTrakr {wetrakr_posted}). "
@@ -4252,8 +4035,7 @@ async def polling_loop():
     next_run=time.monotonic()
     while not bot.is_closed():
         try:
-            await poll_all()
-            await poll_wetrakr_all()
+            await poll_providers()
             await send_due_weekly_recaps()
             retry_delay=POLL_RETRY_DELAY_SECONDS
             next_run+=interval_seconds
@@ -4268,4 +4050,31 @@ async def polling_loop():
             await asyncio.sleep(retry_delay)
             retry_delay=min(retry_delay*2,POLL_MAX_RETRY_DELAY_SECONDS)
             next_run=time.monotonic()
-if __name__=="__main__": bot.run(DISCORD_BOT_TOKEN, log_handler=None)
+
+
+# Register both integrations once; command handlers route by the selected source.
+import sys as _sys
+provider_registry = ProviderRegistry()
+provider_registry.register(SimklProvider(_sys.modules[__name__]))
+provider_registry.register(WeTrakrProvider(_sys.modules[__name__]))
+
+
+async def selected_provider(guild_id, uid):
+    source = await storage.get_activity_provider(guild_id, uid)
+    if not source:
+        raise ValueError('Link your selected tracker in this server with /tracker-link first.')
+    provider = provider_registry.get(source)
+    targets = await storage.get_provider_targets(source, str(guild_id), active_only=True)
+    if not any(str(target['discord_user_id']) == str(uid) for target in targets):
+        raise ValueError('Link your selected tracker in this server with /tracker-link first.')
+    return provider, await provider.link(str(uid))
+
+
+async def poll_providers(guild_id=None, *, manual=False):
+    posted = {}
+    for manifest in provider_registry.manifests():
+        posted[manifest.name] = await provider_registry.get(manifest.name).poll(guild_id, manual=manual)
+    return posted
+
+if __name__ == "__main__":
+    bot.run(DISCORD_BOT_TOKEN, log_handler=None)

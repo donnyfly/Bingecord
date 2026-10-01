@@ -1,5 +1,5 @@
 """
-Lightweight persistent storage for the SIMKL Discord bot.
+Persistent tracker accounts, observations and shared Discord progression.
 
 Global user records contain SIMKL authentication and personal preferences.
 Guild records contain server configuration and per-server tracking state.
@@ -14,8 +14,9 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from trackerbot.core.progression import challenges_for, roll_prestige, xp_for_level
 from trackerbot.core.community import challenge_for_week, watch_contributions, split_pool
+from trackerbot.core import watch_ledger
 from trackerbot.core.providers import provider_linked
-from trackerbot.core.tracker_mapping import build_occurrence_index, identity_from_event, identity_from_play, normalized_ids, same_watch
+from trackerbot.core.tracker_mapping import identity_from_event, identity_from_play, normalized_ids
 
 DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "store.json")
 
@@ -134,14 +135,6 @@ def _watch_event_id(event: dict) -> str:
 
 def _watch_base(event: dict) -> str:
     return f"{event['media_type']}:{event['item_key']}:"
-
-
-def _simkl_xp_identity(event):
-    return identity_from_event(event)
-
-
-def _wetrakr_play_identity(play):
-    return identity_from_play(play)
 
 
 def _genre_names(genres) -> list[str]:
@@ -265,29 +258,25 @@ def _record_watch_stats(stats: dict, media_type: str, title: str, item_key: str,
 
 def _add_watch_xp_events(progression: dict, events: list[dict]) -> tuple[int,list[dict]]:
     """Apply one imported history batch without copying or pruning per watch."""
+    rows = watch_ledger.ensure(progression)
     known=progression["watch_xp_keys"]
     added=[]
     amount=0
     for event in events:
         key=event["event_key"]
-        if key in known:
+        provider = "wetrakr" if str(key).startswith("wetrakr:") else "simkl"
+        identity = (identity_from_play({**event, "watched_at": event["at"]})
+                    if provider == "wetrakr" else identity_from_event(event))
+        row = watch_ledger.observe(rows, provider, key, identity)
+        if row["award_keys"] or key in known:
+            # Classification enrichment updates the shared reward projection;
+            # a generic movie observation must not downgrade an anime film.
+            if event['media_type'].startswith('anime'):
+                for award in progression['xp_events']:
+                    if award.get('event_key') in row['award_keys']:
+                        award['media_type'] = event['media_type']
             continue
-        if not str(key).startswith("wetrakr:"):
-            for play in progression.get("wetrakr_plays", {}).values():
-                prior=play.get("xp_key")
-                if prior and same_watch(_wetrakr_play_identity(play), _simkl_xp_identity(event)):
-                    matching=next((old for old in progression["xp_events"] if old.get("event_key")==prior),None)
-                    if matching:
-                        matching["event_key"]=key
-                        matching["at"]=event["at"]
-                        known.pop(prior,None)
-                        known[key]=event["at"]
-                        play["xp_key"]=None
-                        break
-            else:
-                matching=None
-            if matching:
-                continue
+        row["award_keys"].append(key)
         stamp=event["at"]
         xp=max(0,int(event["amount"]))
         known[key]=stamp
@@ -940,6 +929,8 @@ class Storage:
                 if play.get("media_type") != kind or not play.get("anime_classified"):
                     play["media_type"] = kind
                     play["anime_classified"] = True
+                    watch_ledger.observe(watch_ledger.ensure(progression), 'wetrakr',
+                                         f"wetrakr:{play_id}:{play['watched_at']}", identity_from_play(play))
                     for event in progression["xp_events"]:
                         if event.get("event_key") == play.get("xp_key"):
                             event["media_type"] = kind
@@ -1008,6 +999,7 @@ class Storage:
                 raise ValueError("WeTrakr account changed during watch reconciliation")
             account=str(current_account)
             progression = global_user["progression"]
+            watch_ledger.ensure(progression)
             ledger = progression["wetrakr_plays"]
             def scoped_id(source_id):
                 source_id=str(source_id)
@@ -1019,21 +1011,6 @@ class Storage:
             if not isinstance(stats.get("watch_events"), dict):
                 stats["watch_events"] = {}
             events = stats["watch_events"]
-            simkl_awards = [_simkl_xp_identity(event) for event in progression["xp_events"]
-                            if not str(event.get("event_key", "")).startswith("wetrakr:")]
-            claimed_awards = set()
-            incoming = {scoped_id(play.get("source_event_id")) : play for play in plays}
-            for old_id, old in ledger.items():
-                if str(old.get("account_id")) != account:
-                    continue
-                changed = old_id in incoming and (incoming[old_id].get("removed") or
-                          incoming[old_id].get("watched_at", old.get("watched_at")) != old.get("watched_at"))
-                if old.get("xp_key") or changed or (complete and old_id not in incoming):
-                    continue
-                for index, award in enumerate(simkl_awards):
-                    if index not in claimed_awards and same_watch(_wetrakr_play_identity(old), award):
-                        claimed_awards.add(index)
-                        break
             observed = set()
             added = removed = xp_delta = 0
             revised = False
@@ -1060,6 +1037,8 @@ class Storage:
                             previous[field] = copy.deepcopy(value)
                             changed_metadata = True
                     if changed_metadata:
+                        watch_ledger.observe(progression['occurrence_ledger'], 'wetrakr',
+                                             f"wetrakr:{play_id}:{stamp}", identity_from_play(previous))
                         for award in progression["xp_events"]:
                             if award.get("event_key") == previous.get("xp_key"):
                                 award["media_type"] = previous["media_type"]
@@ -1079,9 +1058,9 @@ class Storage:
                     continue
                 if previous:
                     revised = True
-                    previous_key = previous.get("xp_key")
-                    if previous_key:
-                        xp_delta -= self._remove_wetrakr_xp_locked(progression, previous_key)
+                    previous_key = f"wetrakr:{play_id}:{previous['watched_at']}"
+                    for award_key in watch_ledger.remove(progression, previous_key):
+                        xp_delta -= self._remove_watch_award_locked(progression, award_key)
                     events.pop(key, None)
                 elif not play.get("removed"):
                     added += 1
@@ -1099,21 +1078,13 @@ class Storage:
                                "ids": copy.deepcopy(play.get("ids") or {}),
                                "genres": _genre_names(play.get("genres"))}
                 xp_key = key + ":" + stamp
-                identity=_wetrakr_play_identity({"media_type":kind,"title":title,
-                                                 "item_key":item_key,"watched_at":stamp,
-                                                 "ids":play.get("ids") or {}})
-                matching_index = next((index for index, award in enumerate(simkl_awards)
-                                       if index not in claimed_awards and same_watch(identity, award)), None)
-                duplicate = matching_index is not None
-                if duplicate:
-                    claimed_awards.add(matching_index)
-                if not duplicate:
-                    amount, added_events = _add_watch_xp_events(progression, [{"event_key": xp_key,
-                        "media_type": kind, "title": title, "at": stamp,
-                        "ids": play.get("ids") or {},
-                        "amount": 300 if "movie" in kind else 100}])
-                    xp_delta += amount
-                    challenge_events.extend(added_events)
+                amount, added_events = _add_watch_xp_events(progression, [{"event_key": xp_key,
+                    "media_type": kind, "title": title, "at": stamp, "item_key": item_key,
+                    "ids": play.get("ids") or {},
+                    "amount": 300 if "movie" in kind else 100}])
+                duplicate = not added_events
+                xp_delta += amount
+                challenge_events.extend(added_events)
                 ledger[play_id] = {"watched_at": stamp, "xp_key": None if duplicate else xp_key,
                                    "account_id":account,"source_event_id":source_id,
                                    "media_type": kind, "title": title, "item_key": item_key,
@@ -1124,8 +1095,8 @@ class Storage:
                 for play_id in {key for key, value in ledger.items()
                                 if str(value.get("account_id"))==account} - observed:
                     old = ledger.pop(play_id)
-                    if old.get("xp_key"):
-                        xp_delta -= self._remove_wetrakr_xp_locked(progression, old["xp_key"])
+                    for award_key in watch_ledger.remove(progression, f"wetrakr:{play_id}:{old['watched_at']}"):
+                        xp_delta -= self._remove_watch_award_locked(progression, award_key)
                     events.pop("wetrakr:" + play_id, None)
                     removed += 1
             if challenge_events:
@@ -1142,7 +1113,7 @@ class Storage:
         return {"added": added, "removed": removed, "xp": xp_delta}
 
     @staticmethod
-    def _remove_wetrakr_xp_locked(progression: dict, key: str) -> int:
+    def _remove_watch_award_locked(progression: dict, key: str) -> int:
         removed = sum(max(0, int(event.get("amount", 0))) for event in progression["xp_events"]
                       if event.get("event_key") == key)
         progression["xp_events"] = [event for event in progression["xp_events"]
@@ -1339,17 +1310,6 @@ class Storage:
             user = self._user(discord_user_id)
             return copy.deepcopy(user.get("progression", {})) if user else {}
 
-    def _simkl_observations_locked(self, discord_user_id: str) -> dict[str, dict]:
-        observations = {}
-        uid = str(discord_user_id)
-        for guild in self._data["guilds"].values():
-            guild_user = (guild.get("users") or {}).get(uid) or {}
-            events = ((guild_user.get("statistics") or {}).get("watch_events") or {})
-            for key, event in events.items():
-                if not str(key).startswith("wetrakr:"):
-                    observations[key] = copy.deepcopy(event)
-        return observations
-
     async def get_mapping_audit(self, discord_user_id: str) -> dict:
         """Preview the cross-provider occurrence index without changing XP."""
         async with _lock:
@@ -1358,10 +1318,8 @@ class Storage:
                 return {"occurrences": 0, "verified": 0, "legacy": 0,
                         "unpaired": 0, "review": 0, "double_awards": 0}
             progression = user["progression"]
-            xp_events = copy.deepcopy(progression["xp_events"])
-            plays = copy.deepcopy(progression["wetrakr_plays"])
-            simkl_observations = self._simkl_observations_locked(discord_user_id)
-        index = build_occurrence_index(xp_events, plays, simkl_observations)
+            # A read-only preview can migrate a copy without altering saved data.
+            index = watch_ledger.audit(watch_ledger.ensure(copy.deepcopy(progression)))
         return {
             "occurrences": len(index),
             "verified": sum(row["match_reason"] == "verified_id" for row in index.values()),
@@ -1372,26 +1330,13 @@ class Storage:
         }
 
     async def refresh_watch_occurrences(self, discord_user_id: str) -> dict:
-        """Save the derived migration ledger; never alter historical awards."""
+        """Persist the authoritative ledger and its read-only command projection."""
         async with _lock:
             user = self._user(discord_user_id)
             if not user:
                 return {}
             progression = user["progression"]
-            events = copy.deepcopy(progression["xp_events"])
-            plays = copy.deepcopy(progression["wetrakr_plays"])
-            simkl_observations = self._simkl_observations_locked(discord_user_id)
-        index = build_occurrence_index(events, plays, simkl_observations)
-        async with _lock:
-            user = self._user(discord_user_id)
-            if not user:
-                return {}
-            progression = user["progression"]
-            # Another poll may have changed the source data while the index
-            # was built. Keep the previous version and let the next poll retry.
-            if (progression["xp_events"] != events or progression["wetrakr_plays"] != plays
-                    or self._simkl_observations_locked(discord_user_id) != simkl_observations):
-                return {}
+            index = watch_ledger.audit(watch_ledger.ensure(progression))
             if progression.get("watch_occurrences") != index:
                 progression["watch_occurrences"] = index
                 self._dirty = True
@@ -1418,8 +1363,11 @@ class Storage:
             if not user or not user["progression"].get("history_xp_seeded"):
                 return 0
             progression=user["progression"]
-            existing={key[:-len(stamp)] for key,stamp in progression["watch_xp_keys"].items()
-                      if isinstance(key,str) and isinstance(stamp,str) and stamp and key.endswith(stamp)}
+            rows = watch_ledger.ensure(progression)
+            existing = {key[:-(len(o['identity']['watched_at']))]
+                        for row in rows.values() for key, o in row['observations'].items()
+                        if o['provider'] == 'simkl' and o['identity']
+                        and key.endswith(o['identity']['watched_at'])}
             seen=set()
             missing=[]
             for entry in entries:
@@ -1433,9 +1381,9 @@ class Storage:
                                 "ids":entry.get("ids") or {},
                                 "amount":300 if entry["media_type"] in {"movie","anime_movie"} else 100})
             amount,_=_add_watch_xp_events(progression,missing)
-            if amount:
+            if missing:
                 self._dirty=True
-        if amount:
+        if missing:
             await self.flush()
         return amount
 
@@ -1455,8 +1403,6 @@ class Storage:
             if not user:
                 return {"awarded": False, "amount": 0, "progression": {}}
             progression = user["progression"]
-            if event_key in progression["watch_xp_keys"]:
-                return {"awarded": False, "amount": 0, "progression": copy.deepcopy(progression)}
             xp = max(0, int(amount))
             amount,_=_add_watch_xp_events(progression,[{"event_key":event_key,"media_type":media_type,
                                                 "title":title,"at":watched_at,"amount":xp,
@@ -1573,9 +1519,10 @@ class Storage:
                 return {"removed": False, "amount": 0, "events": 0, "progression": {}}
 
             progression = user["progression"]
-            xp_events = progression.get("xp_events", [])
+            rows = watch_ledger.ensure(progression)
             removed_keys = set()
             removed_amount = 0
+            changed = False
 
             def event_base(event_key: str) -> str | None:
                 if not isinstance(event_key, str):
@@ -1590,48 +1537,23 @@ class Storage:
                     return None
                 return event_key[:delimiter + 1]
 
-            kept_events = []
-            transferred = 0
-            available_plays = []
-            for play_id, play in progression.get("wetrakr_plays", {}).items():
-                if not play.get("xp_key"):
-                    available_plays.append((play_id, play))
-            for event in xp_events:
-                media_type = event.get("media_type")
-                event_key = event.get("event_key")
-                if media_type not in media_types:
-                    kept_events.append(event)
+            observations = [(key, observation) for row in rows.values()
+                            for key, observation in row["observations"].items()
+                            if observation["provider"] == "simkl"]
+            for key, observation in observations:
+                identity = observation.get("identity") or {}
+                if identity.get("media_type", key.split(':', 1)[0]) not in media_types:
                     continue
-                base = event_base(event_key)
+                base = event_base(key)
                 if base is None or base in active_watch_bases:
-                    kept_events.append(event)
                     continue
-                match_index = next((index for index, (_, play) in enumerate(available_plays)
-                                    if same_watch(_simkl_xp_identity(event),
-                                                  _wetrakr_play_identity(play))), None)
-                if match_index is not None:
-                    play_id, play = available_plays.pop(match_index)
-                    replacement = f"wetrakr:{play_id}:{play['watched_at']}"
-                    play["xp_key"] = replacement
-                    progression["watch_xp_keys"].pop(event_key, None)
-                    progression["watch_xp_keys"][replacement] = play["watched_at"]
-                    kept_events.append({**event, "event_key": replacement, "at": play["watched_at"]})
-                    transferred += 1
-                    continue
-                removed_keys.add(event_key)
-                removed_amount += max(0, int(event.get("amount", 0)))
-
-            if not removed_keys and not transferred:
+                changed = True
+                for award_key in watch_ledger.remove(progression, key):
+                    removed_keys.add(award_key)
+                    removed_amount += self._remove_watch_award_locked(progression, award_key)
+            if not changed:
                 return {"removed": False, "amount": 0, "events": 0, "progression": copy.deepcopy(progression)}
-
-            progression["xp_events"] = kept_events
-            progression["watch_xp_keys"] = {
-                key: stamp
-                for key, stamp in progression.get("watch_xp_keys", {}).items()
-                if key not in removed_keys
-            }
-            progression["xp"] = max(0, int(progression.get("xp", 0)) - removed_amount)
-            progression["lifetime_xp"] = max(0, int(progression.get("lifetime_xp", 0)) - removed_amount)
+            removed_amount += _revoke_unmet_watch_challenges(progression)
             self._dirty = True
             result = copy.deepcopy(progression)
 
