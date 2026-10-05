@@ -69,7 +69,7 @@ async def check_wetrakr(client, link, guild_user, progression, max_pages):
             if play['media_type'] == 'episode' and first_episode is None:
                 first_episode = play
         histories[target] = {'sampled_plays': len(rows), 'pages': count, 'complete': complete,
-                             'undated_plays': sum(not p.get('watched_at') for p in normalized)}
+                             'undated_plays': sum(p.get('watched_at_unknown') or not p.get('watched_at') for p in normalized)}
     all_complete = all(h['complete'] for h in histories.values())
     lists = {}
     for status in ('watching', 'planning'):
@@ -85,6 +85,8 @@ async def check_wetrakr(client, link, guild_user, progression, max_pages):
             seen = set(sync.get('recent_entry_ids') or [])
             normalized = [normalize_journal_entry(row) for row in rows]
             journal = {'status': 'read', 'rows': len(rows),
+                       'visible_until': getattr(rows, 'visible_until', None),
+                       'journal_visible_until': activities.get('journal_visible_until'),
                        'unacknowledged_rows': sum(str(r.get('entry_id')) not in seen for r in rows),
                        'changes': dict(Counter(c.get('action') for c in normalized if c))}
         except WeTrakrError as exc:

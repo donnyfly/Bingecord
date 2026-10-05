@@ -10,11 +10,8 @@ def normalize_journal_entry(entry: dict) -> dict | None:
     media_type = entry.get("type")
     if category == "watched":
         play_id = entry.get("play_id")
-        if media_type == "show" and not play_id and status == "added":
-            return {"source": "wetrakr", "change_id": str(entry.get("entry_id") or ""),
-                    "action": "added", "status": "completed", "media_type": "show",
-                    "wetrakr_id": entry.get("id"), "ids": entry.get("ids") or {},
-                    "title": entry.get("title") or "", "action_at": entry.get("action_at")}
+        # Since 1.0.7, watched show rollups also include ongoing caught-up
+        # shows and settings changes. They cannot establish series completion.
         if not play_id or media_type not in {"movie", "episode"}:
             return None
         if status not in {"added", "updated", "removed"}:
@@ -29,7 +26,7 @@ def normalize_journal_entry(entry: dict) -> dict | None:
             "title": entry.get("title") or "",
             "wetrakr_id": entry.get("id"),
             "ids": entry.get("ids") or {},
-            "show_id": entry.get("media_id") or show.get("id"),
+            "show_id": entry.get("show_id") or entry.get("media_id") or show.get("id"),
             "show_ids": entry.get("show_ids") or show.get("ids") or {},
             "season": entry.get("season_number"),
             "episode": entry.get("number"),
@@ -48,12 +45,13 @@ def normalize_journal_entry(entry: dict) -> dict | None:
 
 
 def normalize_compact_play(row: dict) -> dict | None:
-    """The 1.0.3 compact shape has title id and a separate play_id."""
+    """Compact history separates title, parent-show and stable play identities."""
     if row.get("type") not in {"movie", "episode"} or not row.get("play_id"):
         return None
     return {"source": "wetrakr", "source_event_id": str(row["play_id"]),
             "media_type": row["type"], "wetrakr_id": row.get("id"),
             "ids": row.get("ids") or {}, "show_id": row.get("show_id"),
+            "show_ids": row.get("show_ids") or {},
             "season": row.get("season_number"), "episode": row.get("number"),
             "watched_at": row.get("watched_at"),
             "watched_at_unknown": bool(row.get("watched_at_unknown"))}

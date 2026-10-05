@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 import logging
 
-from trackerbot.integrations.wetrakr_client import WeTrakrError, page_rows
+from trackerbot.integrations.wetrakr_client import WeTrakrError, page_rows, timestamp
 from trackerbot.integrations.wetrakr_events import normalize_compact_play, normalize_journal_entry
 
 log = logging.getLogger("simkl-bot")
@@ -29,6 +29,11 @@ class WeTrakrSync:
         current = activities.get("all")
         if not current:
             raise ValueError("WeTrakr last activities response has no all timestamp")
+        timestamp(current)
+        visible = activities.get('journal_visible_until')
+        if visible is not None:
+            timestamp(visible)
+        baseline_mark = min((current, visible), key=timestamp) if visible else current
         if not state["seeded"]:
             # Capture the mark before the slow history walk. Changes during
             # import are picked up by the journal on the next poll.
@@ -44,7 +49,7 @@ class WeTrakrSync:
             result = await self.store.reconcile_wetrakr_plays(gid, uid, plays, complete=True,
                                                              account_id=account_id)
             saved = await self.store.save_wetrakr_sync(
-                gid, uid, account_id, seeded=True, checkpoint=current)
+                gid, uid, account_id, seeded=True, checkpoint=baseline_mark)
             if not saved:
                 raise ValueError("WeTrakr link changed during baseline")
             log.info("WeTrakr baseline for user %s in guild %s: %d plays, %d added, %d removed, %+d XP; no historical embeds.",
@@ -72,10 +77,13 @@ class WeTrakrSync:
             await self.store.reconcile_wetrakr_plays(gid, uid, plays, complete=True,
                                                     account_id=account_id)
             await self.store.save_wetrakr_sync(
-                gid, uid, account_id, seeded=True, checkpoint=current,
-                last_activity=current)
+                gid, uid, account_id, seeded=True, checkpoint=baseline_mark,
+                last_activity=baseline_mark)
             log.warning("WeTrakr journal expired for user %s in guild %s; baseline re-seeded.", uid, gid)
             return 0
+        read_mark = getattr(rows, 'visible_until', None)
+        if read_mark is not None:
+            timestamp(read_mark)
         seen = set(state["recent_entry_ids"])
         checkpoint = state["checkpoint"]
         posted = 0
@@ -143,7 +151,10 @@ class WeTrakrSync:
                 watch_added += result["added"]
                 watch_removed += result["removed"]
                 xp_delta += result["xp"]
-            checkpoint = max(checkpoint, *(row["action_at"] for _, row in batch))
+            batch_mark = max((row['action_at'] for _, row in batch), key=timestamp)
+            if read_mark:
+                batch_mark = min((batch_mark, read_mark), key=timestamp)
+            checkpoint = max((checkpoint, batch_mark), key=timestamp)
             entry_ids = [str(row["entry_id"]) for _, row in batch]
             if not await self.store.save_wetrakr_sync(
                     gid, uid, account_id, checkpoint=checkpoint, entry_ids=entry_ids):
@@ -155,8 +166,13 @@ class WeTrakrSync:
                     posted += int(change.get("media_type") in {"movie", "episode"}
                                   or change.get("status") in {"planning", "dropped", "paused", "completed"})
             index += len(batch)
+        # Advance through a quiet/filtered read only after every delivered row
+        # is acknowledged. A failed delivery must never skip to this watermark.
+        if read_mark:
+            checkpoint = max((checkpoint, read_mark), key=timestamp)
+        observed = min((current, read_mark or visible or checkpoint), key=timestamp)
         if not await self.store.save_wetrakr_sync(
-                gid, uid, account_id, checkpoint=checkpoint, last_activity=current):
+                gid, uid, account_id, checkpoint=checkpoint, last_activity=observed):
             raise ValueError("WeTrakr link changed during journal sync")
         log.info("WeTrakr sync for user %s in guild %s: %d journal row(s), %d duplicate(s), "
                  "%d new row(s), %d episode range(s), %d activity item(s), "

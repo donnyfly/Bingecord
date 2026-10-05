@@ -1,29 +1,31 @@
 # WeTrakr API review — 2026-10-05
 
-## Evidence and access limits
+## Evidence
 
-The last directly reviewed API documentation baseline in this repository is 1.0.3 beta, dated 2026-09-27. The request header remains `wetrakr-api-version: 1`; documentation release numbers are not assumed to be new API header versions.
+Reviewed the user-supplied changelog for **1.0.7 beta (2026-10-01)** and **1.0.8 beta (2026-10-05)**. Direct documentation retrieval remains unavailable; release details below come from that supplied text. The API header remains `wetrakr-api-version: 1`.
 
 Official changelog: https://api.wetrakr.com/#/changelog
 
-The documentation could not be read in this review: web retrieval reported an inaccessible URL, a direct request to the official documentation root returned HTTP 403, and the candidate documentation Markdown resources timed out. No unofficial mirror was accepted as authoritative. The latest release number and detailed breaking changelog entries therefore remain **unverified**. Paste/export the recent official changelog and the affected endpoint documentation to complete that part of the review.
+## Applied changes
 
-Developer announcements reviewed:
+- Initial imports and journal-expiry reseeds use `journal_visible_until` rather than acknowledging a newer write-time activity stamp. The changelog documents a five-second journal publication delay.
+- Journal batches retain `visible_until`. Across pagination, the earliest readable watermark is used conservatively. Timestamps are validated and compared by instant, including timezone offsets.
+- After all rows are acknowledged, sync advances to the journal's readable watermark, including quiet or filtered reads. Failed deliveries retain their retry position. `last_activity` does not acknowledge changes beyond readable visibility.
+- The provider adapter exposes the journal watermark as its change cursor.
+- Compact episode history preserves `show_ids`; title resolution merges these parent IDs with metadata without mistaking episode IDs for show IDs. Journal normalization accepts `show_id` as well as the existing parent shapes.
+- Watched show rollups without a `play_id` no longer imply completion. Since 1.0.7 they can represent ongoing caught-up shows or a user toggling the watched-list setting. Individual episode plays still supply activity, XP and removal events. This deliberately suppresses completion-only rollup notifications until an unambiguous completion signal is available.
+- The read-only validation report includes both visibility watermarks and counts explicitly unknown watch dates as undated, including flagged January 1970 imports.
 
-- September 27: https://www.reddit.com/r/WeTrakr/comments/1wrgiwg/wetrakr_api_first_days_after_launch/ — developer says beta endpoints are changing frequently and specifically asks integrators to check breaking changelog entries.
-- October 1: https://www.reddit.com/r/WeTrakr/comments/1wuugw6/server_upgrade/ — developer reports an API server upgrade and explicitly says no client action is required. This announcement is not evidence of changed payloads or pagination.
+Existing malformed-response, cursor-cycle, page-count and gateway-retry safeguards remain.
 
-## Changes made from code validation
+## Reviewed changes needing no current transport update
 
-These are defensive fixes discovered in the bot, **not claimed adaptations to an unread changelog**:
+The bot does not currently call WeTrakr's Discover, comment writes, calendar, friends feed, rating-distribution, tracking writes or note endpoints. Their new filters, fields and breaking validation rules do not alter these existing calls. Refresh errors remain surfaced by code; neither `INVALID_TOKEN` nor `TOKEN_REVOKED` is treated as a successful authentication response.
 
-- Unknown history/list envelopes and non-object rows raise `INVALID_RESPONSE`; they cannot masquerade as empty histories or silently wipe imported watches during a full reconciliation.
-- Full baseline imports reject entries without recognized stable play identities before updating saved watches or sync checkpoints.
-- Repeated cursor cycles are rejected, including cycles longer than one page.
-- Journal page counts are validated; missing journal envelopes cannot silently advance sync.
-- Transient 500/502/503/504 responses retry before JSON decoding, covering HTML gateway errors. Quota responses remain surfaced without automatic quota retries.
-- The read-only live validator can cap journal/history/list reads and produce a credential-free account report. It does not rotate tokens, publish Discord activity or apply data changes.
+Show episode trees via `append=episodes` and WeTrakr community scores are useful future optimizations. They are not IMDb episode ratings. Watched TV/anime episode embeds continue to require the individual episode's IMDb rating and omit MAL; anime movies and status activities retain their applicable title-level ratings.
 
-## Still to verify against the official changelog
+## Remaining live validation
 
-Authentication and refresh-token field names; journal field names, ordering, retention and lag guarantees; full-history/list envelope and cursor headers; compact play IDs and unknown watch dates; title/episode metadata, external IDs and calendar-season numbering; rate-limit/quota behavior. Do not change these contracts based on guesses. Run the host-side report in `docs/testing-multi-tracker.md` and the interactive watch/switch/removal sequence before marking live parity complete.
+A check immediately after a watch may legitimately see zero rows during WeTrakr's five-second publication delay. The next scheduled poll should pick it up; the visibility fix prevents acknowledging an unread change. No polling interval change is required by these release notes.
+
+Run the host-side report and interactive watch/switch/removal sequence in `docs/testing-multi-tracker.md`. Automated fixtures establish checkpoint behavior; they do not establish actual Discord delivery, rewards or live payload compatibility. Exact unshown endpoint envelopes and production-status codes have not been guessed.

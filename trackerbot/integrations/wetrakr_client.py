@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Any
 
 import aiohttp
@@ -38,6 +39,24 @@ def page_rows(payload, *, journal=False):
     if any(not isinstance(row, dict) for row in rows):
         raise WeTrakrError(200, 'INVALID_RESPONSE', 'Expected object entries in list response')
     return rows
+
+
+def timestamp(value: str) -> datetime:
+    """Compare API timestamps by instant, never by their timezone spelling."""
+    try:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if parsed.tzinfo is None:
+            raise ValueError
+        return parsed.astimezone(timezone.utc)
+    except (AttributeError, TypeError, ValueError):
+        raise WeTrakrError(200, 'INVALID_RESPONSE', 'Invalid visibility timestamp') from None
+
+
+class JournalEntries(list):
+    """List-compatible journal batch with its conservative readable watermark."""
+    def __init__(self):
+        super().__init__()
+        self.visible_until = None
 
 
 class WeTrakrClient:
@@ -143,12 +162,20 @@ class WeTrakrClient:
         params: dict[str, Any] = {"from_date": from_date, "limit": min(limit, 1000)}
         if category:
             params["category"] = category
-        entries = []
+        entries = JournalEntries()
+        visibility_complete = True
         page = 1
         while True:
             data, headers = await self._request("GET", "/sync/journal", token,
                                                 params={**params, "page": page})
             entries.extend(page_rows(data, journal=True))
+            mark = data.get('visible_until')
+            if mark is None:
+                visibility_complete = False
+            else:
+                timestamp(mark)
+                if entries.visible_until is None or timestamp(mark) < timestamp(entries.visible_until):
+                    entries.visible_until = mark
             try:
                 pages = int(headers.get("X-Pagination-Page-Count", "1"))
                 if pages < page:
@@ -156,6 +183,8 @@ class WeTrakrClient:
             except (TypeError, ValueError):
                 raise WeTrakrError(200, 'INVALID_RESPONSE', 'Invalid journal pagination count') from None
             if page >= pages:
+                if not visibility_complete:
+                    entries.visible_until = None
                 return entries
             if max_pages is not None and page >= max_pages:
                 raise WeTrakrError(200, 'VALIDATION_PAGE_LIMIT', 'Journal exceeds the validation page limit')

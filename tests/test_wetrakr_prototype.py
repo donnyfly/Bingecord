@@ -87,7 +87,7 @@ def test_play_ids_survive_date_edits_and_status_rollups_do_not_award_watches():
     removed = normalize_journal_entry({**play, "entry_id": "entry-3", "status": "removed"})
     assert first["source_event_id"] == edited["source_event_id"] == removed["source_event_id"]
     assert [first["action"], edited["action"], removed["action"]] == ["added", "updated", "removed"]
-    assert normalize_journal_entry({**play, "type": "show", "play_id": None})["status"] == "completed"
+    assert normalize_journal_entry({**play, "type": "show", "play_id": None}) is None
     assert normalize_journal_entry({**play, "category": "ratings"}) is None
     compact = normalize_compact_play({"type": "episode", "id": 99, "play_id": "stable-play",
                                       "show_id": 11, "season_number": 2, "number": 3,
@@ -158,3 +158,31 @@ def test_html_gateway_error_retries_before_parsing_json(monkeypatch):
         assert await client.last_activities('token') == {'all': 'timestamp'}
         assert len(session.calls) == 3
     asyncio.run(run())
+
+
+def test_journal_visibility_uses_earliest_page_instant():
+    async def run():
+        client = WeTrakrClient('key', Session([
+            Response({'journal': [], 'visible_until': '2026-10-05T02:00:00+02:00'}, {'X-Pagination-Page-Count': '2'}),
+            Response({'journal': [], 'visible_until': '2026-10-05T00:00:03Z'}, {'X-Pagination-Page-Count': '2'}),
+        ]))
+        rows = await client.journal('token', '2026-10-04T00:00:00Z')
+        assert rows == []
+        assert rows.visible_until == '2026-10-05T02:00:00+02:00'
+        invalid = WeTrakrClient('key', Session([Response({'journal': [], 'visible_until': 'invalid'})]))
+        try:
+            await invalid.journal('token', '2026-10-04T00:00:00Z')
+        except WeTrakrError as exc:
+            assert exc.code == 'INVALID_RESPONSE'
+        else:
+            raise AssertionError('Malformed visibility must not advance sync')
+    asyncio.run(run())
+
+
+def test_compact_parent_ids_and_unknown_watch_date_are_retained():
+    row = normalize_compact_play({'type': 'episode', 'id': 5, 'play_id': 6,
+        'show_id': 7, 'show_ids': {'imdb': 'tt123'}, 'ids': {'imdb': 'tt456'},
+        'watched_at': '1970-01-01T00:00:00Z', 'watched_at_unknown': True})
+    assert row['show_ids'] == {'imdb': 'tt123'}
+    assert row['ids'] == {'imdb': 'tt456'}
+    assert row['watched_at_unknown']

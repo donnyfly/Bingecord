@@ -29,7 +29,7 @@ Create a new `tracker-validation-after.json` report after the interactive sequen
 
 - Automated fixture and API-contract tests: run for this change; regression results recorded in the commit.
 - Actual live account/Discord checks: **pending**. This development workspace has no connected bot credentials or access to the running container.
-- Detailed latest WeTrakr API changelog: **blocked by documentation access errors**. See [API review](wetrakr-api-review.md). No unverified breaking changes are assumed.
+- WeTrakr 1.0.7/1.0.8 changelog: **reviewed from user-supplied release notes**. Visibility, parent-ID and caught-up rollup adaptations are covered by fixtures. See [API review](wetrakr-api-review.md).
 
 ## Live account checks
 
@@ -56,3 +56,12 @@ For a failed check, retain the exact command order, selected source, title and e
 ## Limits before a third provider
 
 Delivery still uses the native sync/checkpoint engines behind the adapter interface. The normalized page API needs a generic consumer; legacy SIMKL observation keys need account scoping; inactive accounts need independent resume/import cursors. ID enrichment and episode crosswalks remain incomplete. Matches beyond the five-minute window are deliberately separate. Ambiguous mappings and legacy double awards remain flagged for review rather than silently changing existing XP. These limits must be resolved and the live checks must pass before claiming complete provider parity or enabling another tracker.
+
+## WeTrakr 1.0.7/1.0.8 live checks
+
+1. Select WeTrakr and mark one previously unwatched episode. A check within five seconds can return zero because the journal is not published yet. After at least five seconds, allow the next scheduled poll or run `/tracker-checknow` once. Expect one activity and one watch contribution; a repeated check must add neither.
+2. Capture the read-only report around that watch. Compare journal `visible_until` and `journal_visible_until` with outstanding rows. A write-time stamp beyond visibility must remain pending, not be acknowledged as seen.
+3. Toggle WeTrakr's “Show caught-up shows in Watched” setting for an ongoing caught-up series. Expect no completed-series notification, no duplicate episode XP, and no reversal of existing episode XP.
+4. Repeat the existing cross-source duplicate and both-provider removal tests. New compact `show_ids` should support mapping even when a metadata response omits a parent external ID.
+
+Series-level watched rollups alone currently do not produce completion notifications, because the API now uses those rows for both completion and caught-up settings. Individual watch embeds remain enabled.

@@ -89,7 +89,7 @@ adapter boundary. The current SIMKL poller retains its legacy state and XP
 model; the WeTrakr poller has its own checkpoint and posts only for users who
 select it in that server.
 
-The last directly reviewed API baseline was beta 1.0.3 (2026-09-27); this is not a claim about the current release. See `docs/wetrakr-api-review.md` for the latest review status. Check the breaking changelog
+The latest reviewed release notes are beta 1.0.7 and 1.0.8 (2026-10-01/05), supplied by the user; the last directly retrieved endpoint documentation was 1.0.3. See `docs/wetrakr-api-review.md` for the latest review status. Check the breaking changelog
 before wiring live traffic. Documentation:
 
 - https://api.wetrakr.com/#/authentication

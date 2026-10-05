@@ -128,3 +128,45 @@ def test_unrecognized_baseline_does_not_revoke_existing_xp(tmp_path, monkeypatch
         after = (await store.get_provider_targets('wetrakr', '123', active_only=True))[0]
         assert not after['guild_user_data']['wetrakr_sync']['seeded']
     asyncio.run(run())
+
+
+def test_visibility_lag_quiet_reads_and_failed_delivery(tmp_path, monkeypatch):
+    async def run():
+        from trackerbot.integrations.wetrakr_client import JournalEntries
+        monkeypatch.setattr(storage_module, 'DATA_PATH', str(tmp_path / 'store.json'))
+        store = storage_module.Storage()
+        await store.link_wetrakr('123', '42', {'access_token': 'a', 'refresh_token': 'r'}, {'id': 19})
+        class Visible(Client):
+            async def last_activities(self, token):
+                return {'all': '2026-10-05T00:00:10Z', 'journal_visible_until': '2026-10-05T00:00:05Z'}
+            async def journal(self, token, since, *, category):
+                self.calls.append(since)
+                result = JournalEntries()
+                result.extend(self.rows)
+                result.visible_until = self.mark
+                return result
+        client = Visible()
+        client.mark = '2026-10-05T00:00:06Z'
+        sync = WeTrakrSync(client, Auth(), store)
+        async def target():
+            return (await store.get_provider_targets('wetrakr', '123', active_only=True))[0]
+        async def accept(*args):
+            return True
+        async def reject(*args):
+            return False
+        await sync.poll(await target(), accept)
+        assert (await target())['guild_user_data']['wetrakr_sync']['checkpoint'] == '2026-10-05T00:00:05Z'
+        await sync.poll(await target(), accept)
+        state = (await target())['guild_user_data']['wetrakr_sync']
+        assert state['checkpoint'] == state['last_activity'] == client.mark
+        client.mark = '2026-10-05T00:00:09Z'
+        client.rows = [{'entry_id': 'new', 'action_at': '2026-10-05T00:00:07Z',
+            'category': 'watched', 'status': 'added', 'type': 'movie', 'play_id': 'p', 'id': 1}]
+        assert await sync.poll(await target(), reject) == 0
+        assert (await target())['guild_user_data']['wetrakr_sync']['checkpoint'] == '2026-10-05T00:00:06Z'
+        assert await sync.poll(await target(), accept) == 1
+        state = (await target())['guild_user_data']['wetrakr_sync']
+        assert state['checkpoint'] == client.mark
+        assert state['recent_entry_ids'] == ['new']
+        assert await sync.poll(await target(), accept) == 0
+    asyncio.run(run())

@@ -4,7 +4,7 @@ The application context keeps transport clients and Discord delivery injectable.
 Provider-specific sync retains its retry/checkpoint behavior behind poll().
 """
 from trackerbot.core.providers import BUILTIN_TRACKERS, ProviderAccount, ProviderPage, WatchChange
-from .wetrakr_client import page_rows
+from .wetrakr_client import page_rows, timestamp
 from .wetrakr_events import normalize_compact_play, normalize_journal_entry
 from .wetrakr_sync import overlap
 from trackerbot.core.tracker_mapping import WatchIdentity, match_reason, identity_from_play, normalized_ids
@@ -287,8 +287,10 @@ class WeTrakrProvider(BaseProvider):
                      if kind == 'episode' else await self.app.is_wetrakr_anime_movie(metadata, (metadata.get('ids') or {}).get('tmdb')))
             cache[cache_key] = metadata, anime
         metadata, anime = cache[cache_key]
+        parent_ids = result.get('show_ids') if kind == 'episode' else result.get('ids')
         result.update(title=metadata.get('title') or result.get('title') or 'Untitled',
-                      ids=metadata.get('ids') or result.get('ids') or {}, genres=metadata.get('genres') or [])
+                      ids={**(parent_ids or {}),
+                           **(metadata.get('ids') or {})}, genres=metadata.get('genres') or [])
         result['media_type'] = ('anime_movie' if kind == 'movie' else 'anime_episode') if anime else kind
         if anime and kind == 'episode':
             ids = result['ids']
@@ -332,7 +334,8 @@ class WeTrakrProvider(BaseProvider):
             play = normalize_journal_entry(row)
             if play and play.get('source_event_id'):
                 changes.append(await self._change(account, play, cache))
-        result = ProviderPage(tuple(changes), max((row['action_at'] for row in rows), default=cursor))
+        result = ProviderPage(tuple(changes), getattr(rows, 'visible_until', None) or
+                              max((row['action_at'] for row in rows), default=cursor, key=timestamp))
         result.validate(account)
         return result
 
