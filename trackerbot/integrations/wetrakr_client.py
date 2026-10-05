@@ -168,7 +168,8 @@ class WeTrakrClient:
         while True:
             data, headers = await self._request("GET", "/sync/journal", token,
                                                 params={**params, "page": page})
-            entries.extend(page_rows(data, journal=True))
+            rows = page_rows(data, journal=True)
+            entries.extend(rows)
             mark = data.get('visible_until')
             if mark is None:
                 visibility_complete = False
@@ -178,6 +179,8 @@ class WeTrakrClient:
                     entries.visible_until = mark
             try:
                 pages = int(headers.get("X-Pagination-Page-Count", "1"))
+                if pages == 0 and page == 1 and not rows:
+                    pages = 1  # Empty result sets may report zero total pages.
                 if pages < page:
                     raise ValueError
             except (TypeError, ValueError):

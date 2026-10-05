@@ -14,8 +14,8 @@ from .mdblist_tracking_client import MDBListTrackingError
 
 def normalize_play(row, kind):
     """Preserve play identity; refuse aggregate or undated rows as a full snapshot."""
-    media=row.get('movie' if kind=='movie' else 'show') or {}
     episode=row.get('episode') if isinstance(row.get('episode'),dict) else {}
+    media=row.get('movie' if kind=='movie' else 'show') or (episode.get('show') if kind=='episode' else None) or {}
     play_id=row.get('play_id')
     stamp=row.get('watched_at')
     if not play_id or not stamp or row.get('watched_at_unknown'):
@@ -26,6 +26,12 @@ def normalize_play(row, kind):
     except (ValueError,AttributeError,TypeError):
         raise MDBListTrackingError(200,'INVALID_WATCH_TIME') from None
     ids=media.get('ids') or row.get('show_ids' if kind=='episode' else 'ids') or {}
+    # Some responses embed a parent show inside the episode; root episode IDs
+    # must never be treated as series IDs. Flat explicitly scoped IDs are safe.
+    if not ids:
+        prefix='show_' if kind=='episode' else ''
+        ids={name:row[prefix+name+'_id'] for name in ('tmdb','tvdb','imdb','mdblist')
+             if row.get(prefix+name+'_id') is not None}
     if not ids or not isinstance(ids,dict):
         raise MDBListTrackingError(200,'MISSING_TITLE_IDS')
     result={'source':'mdblist','source_event_id':str(play_id),'media_type':kind,
@@ -154,7 +160,15 @@ class MDBListProvider(BaseProvider):
                 if bucket not in page or not isinstance(page[bucket],list):
                     raise MDBListTrackingError(200,'UNSUPPORTED_HISTORY_SHAPE')
                 for row in page[bucket]:
-                    plays.append(await self.resolve_play(normalize_play(row,kind)))
+                    try:
+                        normalized=normalize_play(row,kind)
+                    except MDBListTrackingError:
+                        # Field names only: no tokens, titles, dates or user values.
+                        shape={key:sorted(value.keys()) if isinstance(value,dict) else type(value).__name__
+                               for key,value in row.items()}
+                        self.app.log.warning('MDBList %s history field structure: %s',kind,shape)
+                        raise
+                    plays.append(await self.resolve_play(normalized))
         seen=set()
         for play in plays:
             if play['source_event_id'] in seen: raise MDBListTrackingError(200,'DUPLICATE_PLAY_ID')

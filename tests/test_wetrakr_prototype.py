@@ -186,3 +186,15 @@ def test_compact_parent_ids_and_unknown_watch_date_are_retained():
     assert row['show_ids'] == {'imdb': 'tt123'}
     assert row['ids'] == {'imdb': 'tt456'}
     assert row['watched_at_unknown']
+
+
+def test_empty_journal_zero_page_count():
+    async def run():
+        client=WeTrakrClient('key',Session([Response({'journal':[],'visible_until':'2026-10-05T00:00:00Z'}, {'X-Pagination-Page-Count':'0'})]))
+        rows=await client.journal('token','2026-10-04T00:00:00Z')
+        assert rows==[] and rows.visible_until=='2026-10-05T00:00:00Z'
+        invalid=WeTrakrClient('key',Session([Response({'journal':[{'entry_id':'a'}]}, {'X-Pagination-Page-Count':'0'})]))
+        try: await invalid.journal('token','2026-10-04T00:00:00Z')
+        except WeTrakrError: pass
+        else: raise AssertionError('Nonempty zero-page response must fail closed')
+    asyncio.run(run())

@@ -196,3 +196,11 @@ def test_episode_specials_keep_season_zero():
     play=normalize_play({'play_id':9,'watched_at':STAMP,'show':{'ids':{'tmdb':100}},
         'episode':{'season':0,'number':1}},'episode')
     assert play['season']==0 and play['source_season']==0
+
+
+def test_nested_episode_show_and_explicit_flat_parent_ids():
+    base={'play_id':9,'watched_at':STAMP}
+    nested=normalize_play({**base,'episode':{'show':{'ids':{'tmdb':100}},'ids':{'tmdb':200},'season':1,'number':2}},'episode')
+    assert nested['ids']['tmdb']==100 and nested['episode_ids']['tmdb']==200
+    flat=normalize_play({**base,'show_tmdb_id':100,'season_num':1,'episode_num':2},'episode')
+    assert flat['ids']=={'tmdb':100}
