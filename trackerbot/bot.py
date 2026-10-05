@@ -7,7 +7,7 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 from trackerbot.integrations.simkl_client import SimklAuthError, SimklClient, SimklSlowDown
-from trackerbot.integrations.wetrakr_client import WeTrakrClient, WeTrakrError
+from trackerbot.integrations.wetrakr_client import WeTrakrClient, WeTrakrError, page_rows
 from trackerbot.integrations.wetrakr_auth import WeTrakrAuth
 from trackerbot.integrations.wetrakr_sync import WeTrakrSync
 from trackerbot.core.storage import DEFAULT_FEATURES, EPOCH_ISO, storage
@@ -3161,10 +3161,8 @@ async def wetrakr_tracking_rows(uid, status, targets):
     rows = []
     for target in targets:
         async for page in wetrakr.tracking(token, status, target):
-            values = page if isinstance(page, list) else next(
-                (page[key] for key in ("items", "tracking", "results", "data")
-                 if isinstance(page.get(key), list)), [])
-            rows.extend((target, row) for row in values if isinstance(row, dict))
+            values = page_rows(page)
+            rows.extend((target, row) for row in values)
     return rows
 
 

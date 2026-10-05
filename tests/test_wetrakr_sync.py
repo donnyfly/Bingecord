@@ -103,3 +103,28 @@ def test_bulk_episode_range_acknowledges_only_after_delivery(tmp_path, monkeypat
         assert attempts == [["1", "2", "3"], ["1", "2", "3"], "movie"]
         assert await sync.poll(target, deliver, group) == 0
     asyncio.run(run())
+
+
+def test_unrecognized_baseline_does_not_revoke_existing_xp(tmp_path, monkeypatch):
+    async def run():
+        from trackerbot.integrations.wetrakr_client import WeTrakrError
+        monkeypatch.setattr(storage_module, 'DATA_PATH', str(tmp_path / 'store.json'))
+        store = storage_module.Storage()
+        await store.link_wetrakr('123', '42', {'access_token': 'a', 'refresh_token': 'r'}, {'id': 19})
+        await store.reconcile_wetrakr_plays('123', '42', [{'source_event_id': 'old', 'media_type': 'movie',
+            'title': 'Existing Film', 'item_key': 'wetrakr:movie:50', 'watched_at': '2026-10-01T00:00:00Z'}])
+        before = await store.get_progression('42')
+        class Changed(Client):
+            async def compact_history(self, token, target):
+                yield {'unexpected_response': []}
+        target = (await store.get_provider_targets('wetrakr', '123', active_only=True))[0]
+        try:
+            await WeTrakrSync(Changed(), Auth(), store).poll(target, lambda *_: None)
+        except WeTrakrError as exc:
+            assert exc.code == 'INVALID_RESPONSE'
+        else:
+            raise AssertionError('Changed baseline must stop before reconciliation')
+        assert await store.get_progression('42') == before
+        after = (await store.get_provider_targets('wetrakr', '123', active_only=True))[0]
+        assert not after['guild_user_data']['wetrakr_sync']['seeded']
+    asyncio.run(run())

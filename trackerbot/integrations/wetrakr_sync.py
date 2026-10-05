@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 import logging
 
-from trackerbot.integrations.wetrakr_client import WeTrakrError
+from trackerbot.integrations.wetrakr_client import WeTrakrError, page_rows
 from trackerbot.integrations.wetrakr_events import normalize_compact_play, normalize_journal_entry
 
 log = logging.getLogger("simkl-bot")
@@ -35,11 +35,12 @@ class WeTrakrSync:
             plays = []
             for kind in ("movies", "episodes"):
                 async for page in self.client.compact_history(token, kind):
-                    rows = page if isinstance(page, list) else page.get("items", page.get("history", []))
+                    rows = page_rows(page)
                     for row in rows:
                         play = normalize_compact_play(row)
-                        if play:
-                            plays.append(await resolve_play(play) if resolve_play else play)
+                        if not play:
+                            raise WeTrakrError(200, 'INVALID_RESPONSE', 'History entry lacks a recognized play identity')
+                        plays.append(await resolve_play(play) if resolve_play else play)
             result = await self.store.reconcile_wetrakr_plays(gid, uid, plays, complete=True,
                                                              account_id=account_id)
             saved = await self.store.save_wetrakr_sync(
@@ -62,11 +63,12 @@ class WeTrakrSync:
             plays = []
             for kind in ("movies", "episodes"):
                 async for page in self.client.compact_history(token, kind):
-                    rows = page if isinstance(page, list) else page.get("items", page.get("history", []))
+                    rows = page_rows(page)
                     for row in rows:
                         play = normalize_compact_play(row)
-                        if play:
-                            plays.append(await resolve_play(play) if resolve_play else play)
+                        if not play:
+                            raise WeTrakrError(200, 'INVALID_RESPONSE', 'History entry lacks a recognized play identity')
+                        plays.append(await resolve_play(play) if resolve_play else play)
             await self.store.reconcile_wetrakr_plays(gid, uid, plays, complete=True,
                                                     account_id=account_id)
             await self.store.save_wetrakr_sync(

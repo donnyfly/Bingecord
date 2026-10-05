@@ -100,3 +100,61 @@ if __name__ == "__main__":
     test_device_flow_refresh_and_headers()
     test_journal_pages_compact_cursor_and_quota_error()
     test_play_ids_survive_date_edits_and_status_rollups_do_not_award_watches()
+
+
+def test_malformed_history_or_journal_is_never_empty_success():
+    async def run():
+        for payload in ({'error': 'changed_response'}, {'items': ['invalid']}, None):
+            client = WeTrakrClient('key', Session([Response(payload)]))
+            try:
+                _ = [page async for page in client.compact_history('token', 'movies')]
+            except WeTrakrError as exc:
+                assert exc.code == 'INVALID_RESPONSE'
+            else:
+                raise AssertionError('Malformed history must fail closed')
+        client = WeTrakrClient('key', Session([Response({'changed_field': []})]))
+        try:
+            await client.journal('token', '2026-10-05T00:00:00Z')
+        except WeTrakrError as exc:
+            assert exc.code == 'INVALID_RESPONSE'
+        else:
+            raise AssertionError('Malformed journal must not advance sync')
+    asyncio.run(run())
+
+
+def test_cursor_cycles_and_journal_page_budget():
+    async def run():
+        client = WeTrakrClient('key', Session([
+            Response([], {'X-Pagination-Next': 'a'}),
+            Response([], {'X-Pagination-Next': 'b'}),
+            Response([], {'X-Pagination-Next': 'a'})]))
+        try:
+            _ = [page async for page in client.tracking('token', 'watching', 'shows')]
+        except WeTrakrError as exc:
+            assert exc.code == 'INVALID_RESPONSE'
+        else:
+            raise AssertionError('A cursor cycle must stop')
+        session = Session([Response({'journal': []}, {'X-Pagination-Page-Count': '5'})])
+        client = WeTrakrClient('key', session)
+        try:
+            await client.journal('token', '2026-10-05T00:00:00Z', max_pages=1)
+        except WeTrakrError as exc:
+            assert exc.code == 'VALIDATION_PAGE_LIMIT'
+        else:
+            raise AssertionError('Validator must respect its request budget')
+        assert len(session.calls) == 1
+    asyncio.run(run())
+
+
+def test_html_gateway_error_retries_before_parsing_json(monkeypatch):
+    from unittest.mock import AsyncMock
+    async def run():
+        class HTML(Response):
+            async def json(self, content_type=None):
+                raise ValueError('not JSON')
+        monkeypatch.setattr(asyncio, 'sleep', AsyncMock())
+        session = Session([HTML(None, status=503), HTML(None, status=502), Response({'all': 'timestamp'})])
+        client = WeTrakrClient('key', session)
+        assert await client.last_activities('token') == {'all': 'timestamp'}
+        assert len(session.calls) == 3
+    asyncio.run(run())

@@ -4,6 +4,7 @@ The application context keeps transport clients and Discord delivery injectable.
 Provider-specific sync retains its retry/checkpoint behavior behind poll().
 """
 from trackerbot.core.providers import BUILTIN_TRACKERS, ProviderAccount, ProviderPage, WatchChange
+from .wetrakr_client import page_rows
 from .wetrakr_events import normalize_compact_play, normalize_journal_entry
 from .wetrakr_sync import overlap
 from trackerbot.core.tracker_mapping import WatchIdentity, match_reason, identity_from_play, normalized_ids
@@ -315,7 +316,7 @@ class WeTrakrProvider(BaseProvider):
         token, changes, cache = await self._token(account), [], {}
         for target in ('movies', 'episodes'):
             async for page in self.app.wetrakr.compact_history(token, target):
-                rows = page if isinstance(page, list) else page.get('items', page.get('history', []))
+                rows = page_rows(page)
                 for row in rows:
                     play = normalize_compact_play(row)
                     if play:

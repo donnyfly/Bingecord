@@ -24,6 +24,22 @@ class WeTrakrError(Exception):
         super().__init__(f"WeTrakr {status} {code}: {message}")
 
 
+def page_rows(payload, *, journal=False):
+    """Reject changed/error envelopes instead of treating them as empty history."""
+    if isinstance(payload, list) and not journal:
+        rows = payload
+    elif isinstance(payload, dict):
+        keys = ('journal',) if journal else ('items', 'history', 'tracking', 'results', 'data')
+        rows = next((payload[key] for key in keys if isinstance(payload.get(key), list)), None)
+        if rows is None:
+            raise WeTrakrError(200, 'INVALID_RESPONSE', 'Expected a recognized list envelope')
+    else:
+        raise WeTrakrError(200, 'INVALID_RESPONSE', 'Expected a list response')
+    if any(not isinstance(row, dict) for row in rows):
+        raise WeTrakrError(200, 'INVALID_RESPONSE', 'Expected object entries in list response')
+    return rows
+
+
 class WeTrakrClient:
     @classmethod
     def from_environment(cls, session: aiohttp.ClientSession | None = None):
@@ -62,14 +78,17 @@ class WeTrakrClient:
                 self.request_counts[category] += 1
                 async with self._session.request(method, BASE_URL + path, headers=headers,
                                                  params=params, json=body) as response:
-                    payload = await response.json(content_type=None)
+                    if response.status in {500, 502, 503, 504} and attempt < 2:
+                        await asyncio.sleep(2 ** attempt)
+                        continue
+                    try:
+                        payload = await response.json(content_type=None)
+                    except (ValueError, aiohttp.ContentTypeError):
+                        raise WeTrakrError(response.status, 'INVALID_RESPONSE', 'Response was not JSON') from None
                     if response.status >= 400:
                         error = payload.get("error") if isinstance(payload, dict) else None
                         code = error.get("code") if isinstance(error, dict) else error
                         message = payload.get("message", "Request failed") if isinstance(payload, dict) else "Request failed"
-                        if response.status in {500, 502, 503, 504} and attempt < 2:
-                            await asyncio.sleep(2 ** attempt)
-                            continue
                         raise WeTrakrError(response.status, str(code or "HTTP_ERROR"), message)
                     return payload, response.headers
             except (aiohttp.ClientError, asyncio.TimeoutError):
@@ -117,7 +136,7 @@ class WeTrakrClient:
         return data
 
     async def journal(self, token: str, from_date: str, *, category: str | None = None,
-                      limit: int = 1000) -> list[dict]:
+                      limit: int = 1000, max_pages: int | None = None) -> list[dict]:
         """Read all pages before advancing a stored mark; retain entry_ids for overlap."""
         if not from_date:
             raise ValueError("A journal checkpoint is required")
@@ -129,10 +148,17 @@ class WeTrakrClient:
         while True:
             data, headers = await self._request("GET", "/sync/journal", token,
                                                 params={**params, "page": page})
-            entries.extend(data.get("journal", []))
-            pages = int(headers.get("X-Pagination-Page-Count", "1"))
+            entries.extend(page_rows(data, journal=True))
+            try:
+                pages = int(headers.get("X-Pagination-Page-Count", "1"))
+                if pages < page:
+                    raise ValueError
+            except (TypeError, ValueError):
+                raise WeTrakrError(200, 'INVALID_RESPONSE', 'Invalid journal pagination count') from None
             if page >= pages:
                 return entries
+            if max_pages is not None and page >= max_pages:
+                raise WeTrakrError(200, 'VALIDATION_PAGE_LIMIT', 'Journal exceeds the validation page limit')
             page += 1
 
     async def compact_history(self, token: str, target: str, *, limit: int = 5000):
@@ -140,18 +166,21 @@ class WeTrakrClient:
         if target not in {"movies", "episodes"}:
             raise ValueError("target must be movies or episodes")
         after = None
+        seen_cursors = set()
         while True:
             params = {"compact": "true", "limit": min(limit, 5000)}
             if after:
                 params["after"] = after
             data, headers = await self._request(
                 "GET", f"/sync/tracking/watched/history/{target}", token, params=params)
+            page_rows(data)
             yield data
             next_cursor = headers.get("X-Pagination-Next")
             if not next_cursor:
                 return
-            if next_cursor == after:
-                raise RuntimeError("WeTrakr returned the same history cursor twice")
+            if next_cursor in seen_cursors:
+                raise WeTrakrError(200, 'INVALID_RESPONSE', 'History pagination cursor repeated')
+            seen_cursors.add(next_cursor)
             after = next_cursor
 
     async def tracking(self, token: str, status: str, target: str, *, limit: int = 5000):
@@ -161,16 +190,19 @@ class WeTrakrClient:
         if target not in {"movies", "shows"}:
             raise ValueError("WeTrakr tracking target must be movies or shows")
         after = None
+        seen_cursors = set()
         while True:
             params = {"compact": "true", "limit": min(limit, 5000)}
             if after:
                 params["after"] = after
             data, headers = await self._request(
                 "GET", f"/sync/tracking/{status}/{target}", token, params=params)
+            page_rows(data)
             yield data
             next_cursor = headers.get("X-Pagination-Next")
             if not next_cursor:
                 return
-            if next_cursor == after:
-                raise RuntimeError("WeTrakr returned the same tracking cursor twice")
+            if next_cursor in seen_cursors:
+                raise WeTrakrError(200, 'INVALID_RESPONSE', 'Tracking pagination cursor repeated')
+            seen_cursors.add(next_cursor)
             after = next_cursor

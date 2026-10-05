@@ -144,3 +144,14 @@ def test_wetrakr_history_and_partial_removal_contract(tmp_path, monkeypatch):
         assert removals.changes[0].action == 'removed'
         assert removals.next_cursor == '2026-09-28T13:00:00Z'
     asyncio.run(run())
+
+
+def test_native_tracking_rows_keep_every_page(monkeypatch):
+    async def run():
+        async def tracking(token, status, target):
+            yield {'items': [{'id': 1}]}
+            yield {'items': [{'id': 2}]}
+        monkeypatch.setattr(bot, 'wetrakr', SimpleNamespace(tracking=tracking))
+        monkeypatch.setattr(bot, 'wetrakr_sync', SimpleNamespace(auth=SimpleNamespace(access_token=AsyncMock(return_value='token'))))
+        assert await bot.wetrakr_tracking_rows('42', 'watching', ('shows',)) == [('shows', {'id': 1}), ('shows', {'id': 2})]
+    asyncio.run(run())
