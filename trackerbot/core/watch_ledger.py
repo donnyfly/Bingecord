@@ -50,22 +50,23 @@ def ensure(progression):
     # Migrate conservatively: preserve all prior awards, including legacy doubles.
     for event in progression.get('xp_events', []):
         key = str(event.get('event_key') or '')
-        if key.startswith('wetrakr:'):
+        if key.startswith(('wetrakr:','mdblist:')):
             continue
         identity = identity_from_event(event)
         if identity or (key and event.get('media_type') in {'episode', 'anime_episode', 'movie', 'anime_movie'}):
             observe(rows, 'simkl', key, identity)['award_keys'].append(key)
-    for play_id, play in progression.get('wetrakr_plays', {}).items():
-        key = f"wetrakr:{play_id}:{play['watched_at']}"
-        row = observe(rows, 'wetrakr', key, identity_from_play(play))
-        if play.get('xp_key'):
-            row['award_keys'].append(play['xp_key'])
+    for provider in ('wetrakr','mdblist'):
+        for play_id, play in progression.get(provider+'_plays', {}).items():
+            key = f"{provider}:{play_id}:{play['watched_at']}"
+            row = observe(rows, provider, key, identity_from_play(play))
+            if play.get('xp_key'):
+                row['award_keys'].append(play['xp_key'])
     # Retain orphaned legacy awards; migration must never deduct earned XP.
     represented = {k for row in rows.values() for k in row['award_keys']}
     for event in progression.get('xp_events', []):
         key = str(event.get('event_key') or '')
-        if key.startswith('wetrakr:') and key not in represented:
-            observe(rows, 'wetrakr', key, None)['award_keys'].append(key)
+        if key.startswith(('wetrakr:','mdblist:')) and key not in represented:
+            observe(rows, key.split(':',1)[0], key, None)['award_keys'].append(key)
     progression['occurrence_ledger'] = rows
     return rows
 

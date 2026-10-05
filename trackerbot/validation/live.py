@@ -15,6 +15,8 @@ from trackerbot.integrations.simkl_client import SimklClient, SimklAuthError
 from trackerbot.integrations.wetrakr_client import WeTrakrClient, WeTrakrError, page_rows
 from trackerbot.integrations.wetrakr_events import normalize_compact_play, normalize_journal_entry
 from trackerbot.integrations.wetrakr_sync import overlap
+from trackerbot.integrations.mdblist_tracking_client import MDBListTrackingClient, MDBListTrackingError
+from trackerbot.integrations.mdblist_provider import normalize_play
 
 
 async def sample_pages(pages, max_pages):
@@ -89,7 +91,7 @@ async def check_wetrakr(client, link, guild_user, progression, max_pages):
                        'journal_visible_until': activities.get('journal_visible_until'),
                        'unacknowledged_rows': sum(str(r.get('entry_id')) not in seen for r in rows),
                        'changes': dict(Counter(c.get('action') for c in normalized if c))}
-        except WeTrakrError as exc:
+        except (WeTrakrError, MDBListTrackingError) as exc:
             journal = {'status': 'blocked', 'http_status': exc.status, 'code': exc.code}
     episode = {'status': 'no_episode_sample'}
     if first_episode and first_episode.get('wetrakr_id'):
@@ -105,6 +107,33 @@ async def check_wetrakr(client, link, guild_user, progression, max_pages):
                 (identity_from_play(p).season or 0) >= 1900) for p in stored.values()),
             'imported_anime_movies': sum(p.get('media_type') == 'anime_movie' for p in stored.values()),
             'requests': dict(client.request_counts)}
+
+
+async def check_mdblist(client, link, progression, max_pages):
+    token=link['access_token']
+    account=await client.account(token)
+    if str(account['user_id'])!=str(link['account_id']):
+        raise MDBListTrackingError(200,'ACCOUNT_MISMATCH')
+    activities=await client.last_activities(token)
+    counts={};live_ids=set()
+    for kind,bucket in (('movie','movies'),('episode','episodes')):
+        pages=0;total=0;complete=True
+        async for page in client.history(token,media_type=kind):
+            rows=page.get(bucket)
+            if not isinstance(rows,list):raise MDBListTrackingError(200,'UNSUPPORTED_HISTORY_SHAPE')
+            for row in rows:
+                play=normalize_play(row,kind)
+                live_ids.add(play['source_event_id'])
+            total+=len(rows);pages+=1
+            if pages>=max_pages:complete=False;break
+        counts[bucket]={'sampled_plays':total,'pages':pages,'complete':complete}
+    stored={p['source_event_id'] for p in progression.get('mdblist_plays',{}).values()
+            if str(p.get('account_id'))==str(link['account_id'])}
+    complete=all(c['complete'] for c in counts.values())
+    return {'status':'read','history':counts,'server_time':activities['server_time'],
+        'sampled_live_plays_missing_from_store':len(live_ids-stored),
+        'stored_plays_missing_from_live':len(stored-live_ids) if complete else None,
+        'comparison_complete':complete,'requests':dict(client.request_counts)}
 
 
 async def check_simkl(client, token):
@@ -133,18 +162,21 @@ async def collect_report(snapshot, guild_id, user_id, providers, max_pages, keys
               'mode': 'read_only', 'selected_source': guild_user.get('activity_provider', 'simkl'),
               'local': local_summary(progression), 'providers': {},
               'live_posting_and_reward_checks': 'pending_interactive_discord_checks'}
-    factories = factories or {'wetrakr': WeTrakrClient, 'simkl': SimklClient}
+    factories = factories or {'wetrakr': WeTrakrClient, 'simkl': SimklClient, 'mdblist': MDBListTrackingClient}
     for provider in providers:
         key = keys.get(provider)
-        token = (user.get('wetrakr') or {}).get('access_token') if provider == 'wetrakr' else user.get('simkl_token')
+        token = (user.get(provider) or {}).get('access_token') if provider != 'simkl' else user.get('simkl_token')
         if not key or not token:
             report['providers'][provider] = {'status': 'blocked', 'code': 'MISSING_KEY_OR_LINK'}
             continue
         client = factories[provider](key)
         try:
+            if provider=='mdblist':
+                report['providers'][provider]=await check_mdblist(client,user['mdblist'],progression,max_pages)
+                continue
             report['providers'][provider] = (await check_wetrakr(client, user['wetrakr'], guild_user, progression, max_pages)
                 if provider == 'wetrakr' else await check_simkl(client, token))
-        except WeTrakrError as exc:
+        except (WeTrakrError, MDBListTrackingError) as exc:
             report['providers'][provider] = {'status': 'blocked', 'http_status': exc.status, 'code': exc.code}
         except SimklAuthError:
             report['providers'][provider] = {'status': 'blocked', 'code': 'AUTHENTICATION_EXPIRED'}
@@ -161,7 +193,7 @@ def main():
     parser.add_argument('--store', required=True, type=Path)
     parser.add_argument('--guild-id', required=True)
     parser.add_argument('--user-id', required=True)
-    parser.add_argument('--provider', choices=('both', 'simkl', 'wetrakr'), default='both')
+    parser.add_argument('--provider', choices=('both', 'all', 'simkl', 'wetrakr', 'mdblist'), default='both')
     parser.add_argument('--max-pages', type=int, default=2)
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
@@ -172,9 +204,9 @@ def main():
     load_dotenv()
     try:
         snapshot = json.loads(args.store.read_text())
-        providers = ('simkl', 'wetrakr') if args.provider == 'both' else (args.provider,)
+        providers = ('simkl','wetrakr','mdblist') if args.provider=='all' else ('simkl', 'wetrakr') if args.provider == 'both' else (args.provider,)
         report = asyncio.run(collect_report(snapshot, args.guild_id, args.user_id, providers, args.max_pages,
-            {'simkl': os.getenv('SIMKL_CLIENT_ID'), 'wetrakr': os.getenv('WETRAKR_API_KEY')}))
+            {'simkl': os.getenv('SIMKL_CLIENT_ID'), 'wetrakr': os.getenv('WETRAKR_API_KEY'), 'mdblist': os.getenv('MDBLIST_CLIENT_ID')}))
     except Exception as exc:
         parser.exit(2, f'Validation could not start: {type(exc).__name__}\n')
     serialized = json.dumps(report, indent=2) + '\n'

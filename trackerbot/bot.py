@@ -10,6 +10,8 @@ from trackerbot.integrations.simkl_client import SimklAuthError, SimklClient, Si
 from trackerbot.integrations.wetrakr_client import WeTrakrClient, WeTrakrError, page_rows
 from trackerbot.integrations.wetrakr_auth import WeTrakrAuth
 from trackerbot.integrations.wetrakr_sync import WeTrakrSync
+from trackerbot.integrations.mdblist_tracking_client import MDBListTrackingClient, MDBListTrackingError
+from trackerbot.integrations.mdblist_provider import MDBListProvider
 from trackerbot.core.storage import DEFAULT_FEATURES, EPOCH_ISO, storage
 from trackerbot.core.watch_delivery import WatchActivity, WatchBatch
 from trackerbot.core.achievements import ACHIEVEMENTS, all_achievements
@@ -75,6 +77,9 @@ if DEFAULT_TIMEZONE_NAME == "UTC" and os.getenv("SIMKL_DEFAULT_TIMEZONE"):
 simkl=SimklClient(SIMKL_CLIENT_ID); tmdb=TmdbClient(TMDB_API_KEY); mdblist=MdbListClient(MDBLIST_API_KEY) if MDBLIST_API_KEY else None; imdb=ImdbClient()
 wetrakr=WeTrakrClient(WETRAKR_API_KEY) if WETRAKR_API_KEY else None
 wetrakr_sync=WeTrakrSync(wetrakr, WeTrakrAuth(wetrakr,storage),storage) if wetrakr else None
+MDBLIST_CLIENT_ID=os.getenv("MDBLIST_CLIENT_ID", "").strip()
+mdblist_tracking=MDBListTrackingClient(MDBLIST_CLIENT_ID,os.getenv("MDBLIST_CLIENT_SECRET") or None) if MDBLIST_CLIENT_ID else None
+mdblist_auth=WeTrakrAuth(mdblist_tracking,storage,provider="mdblist") if mdblist_tracking else None
 if mdblist is not None:
     log.info("MDBList IMDb ratings enabled.")
 else:
@@ -142,7 +147,7 @@ class SimklBot(discord.Client):
         except Exception:
             log.exception("Failed to flush persistent storage during shutdown.")
 
-        for client in (simkl,wetrakr,tmdb,mdblist,imdb):
+        for client in (simkl,wetrakr,mdblist_tracking,tmdb,mdblist,imdb):
             if client is None:
                 continue
             try:
@@ -2717,7 +2722,7 @@ async def show_profile(i,user):
     await evaluate_achievements(g,str(target.id))
     stats=await storage.get_statistics(g,str(target.id))
     source = await storage.get_activity_provider(g, str(target.id)) or 'simkl'
-    active_wetrakr = source == 'wetrakr'
+    active_wetrakr = source != 'simkl'
     source_label = provider_registry.get(source).manifest.display_name
     history=await storage.get_history_import_state(g,str(target.id))
     if not active_wetrakr and history["linked"] and not history["complete"] and not (int(stats.get("episodes_watched",0))+int(stats.get("movies_watched",0))):
@@ -3474,6 +3479,9 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
         detail_cache={}
 
         async def recommendation_ratings(result):
+            if provider.manifest.name=='mdblist':
+                ratings=await provider.ratings(account,result.get('_recommendation_kind')=='movie',{'tmdb':result.get('id')})
+                return {'imdb':ratings.get('imdb'),'myanimelist':ratings.get('mal')}
             if mdblist is None or result.get("id") is None:
                 return {}
 
@@ -3495,7 +3503,7 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
             kind=result["_recommendation_kind"]
             page=f"https://www.themoviedb.org/{'movie' if kind=='movie' else 'tv'}/{int(result['id'])}"
             try:
-                resolved = await provider.resolve_title_url('movies' if kind == 'movie' else 'shows', {'tmdb': result['id']})
+                resolved = await provider.resolve_title_url('movies' if kind == 'movie' else 'shows', {'tmdb': result['id']}, account=account) if provider.manifest.name=='mdblist' else await provider.resolve_title_url('movies' if kind == 'movie' else 'shows', {'tmdb': result['id']})
             except Exception:
                 log.debug('Recommendation title resolution failed for %s.', result['id'], exc_info=True)
                 resolved = None
@@ -3767,11 +3775,112 @@ async def wetrakr_unlink(i):
     await i.response.send_message("WeTrakr has been unlinked from this server." if linked else "You don't have a WeTrakr link in this server.",ephemeral=True)
 
 
+async def mdblist_link(i):
+    g=guild_id(i)
+    if not g:
+        await i.response.send_message("Use this command in a server.",ephemeral=True);return
+    if not mdblist_tracking:
+        await i.response.send_message("MDBList OAuth is not configured. The host must set MDBLIST_CLIENT_ID from their registered MDBList app.",ephemeral=True);return
+    uid=str(i.user.id);key=f"mdblist:{uid}"
+    if key in linking_users:
+        await i.response.send_message("An MDBList linking code is already waiting for you.",ephemeral=True);return
+    linking_users.add(key)
+    await i.response.defer(ephemeral=True)
+    try:
+        pin=await mdblist_tracking.device_code()
+        url=pin['verification_uri']
+        from urllib.parse import urlparse
+        parsed=urlparse(url)
+        if parsed.scheme!='https' or parsed.hostname not in {'mdblist.com','www.mdblist.com'}:
+            raise ValueError('Unexpected verification URL')
+        interval=max(1,int(pin.get('interval',5)))
+        expires=max(interval,int(pin.get('expires_in',300)))
+        await i.followup.send(f"Open {url} and enter `{pin['user_code']}`. This code expires in about {expires//60} minutes.",ephemeral=True)
+        deadline=time.monotonic()+expires;tokens=None
+        while time.monotonic()+interval<deadline:
+            await asyncio.sleep(interval)
+            try:
+                tokens=await mdblist_tracking.device_token(pin['device_code']);break
+            except MDBListTrackingError as exc:
+                if exc.code=='authorization_pending':continue
+                if exc.code=='slow_down':interval+=5;continue
+                if exc.code in {'expired_token','access_denied'}:break
+                raise
+        if not tokens:
+            await i.followup.send("MDBList approval expired or was cancelled. Run `/tracker-link` again.",ephemeral=True);return
+        account=await mdblist_tracking.account(tokens['access_token'])
+        tokens['expires_at']=(datetime.now(timezone.utc)+timedelta(seconds=int(tokens.get('expires_in',2592000)))).isoformat()
+        if not tokens.get('refresh_token'):raise ValueError('Missing renewable account token')
+        await storage.link_provider_account(g,uid,tokens,{'id':account['user_id'],'username':account['username']},provider='mdblist')
+        await i.followup.send(f"Linked MDBList as **{discord.utils.escape_markdown(account['username'])}**. Select MDBList with `/tracker-source`; the first check imports history quietly.",ephemeral=True)
+    except Exception as exc:
+        log.warning("MDBList link failed user %s guild %s: %s",uid,g,getattr(exc,'code',type(exc).__name__))
+        await i.followup.send("MDBList linking failed. Check the registered OAuth app/device grant and try again. No watch history was imported.",ephemeral=True)
+    finally:
+        linking_users.discard(key)
+
+
+async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last_play=None):
+    movie='movie' in play['media_type'];anime=play['media_type'].startswith('anime')
+    media='movies' if movie else 'anime' if anime else 'shows'
+    title=play['title'];ids=play['ids'];tmdb_id=ids.get('tmdb')
+    p=await prefs(gid,uid)
+    metadata=await provider.title('movies' if movie else 'shows',ids)
+    poster=metadata.get('poster_path')
+    if poster:poster='https://image.tmdb.org/t/p/w500'+poster
+    image=None;episode_title=None;rating=None
+    previous=await storage.get_provider_plays(uid,provider='mdblist')
+    rewatch=any(old.get('item_key')==play['item_key'] and old.get('source_event_id')!=play['source_event_id'] for old in previous)
+    if movie:
+        image=await tmdb.get_movie_backdrop(tmdb_id) if tmdb_id else None
+        description=f"{'Rewatched' if rewatch else 'Watched'} **{title}**"
+        ratings=await provider.ratings(account,True,ids)
+    else:
+        entry={'tmdb_id':tmdb_id,'tvdb_id':ids.get('tvdb'),'season_num':play['season'],'episode_number':play['episode']}
+        image,episode_title,episode_imdb,runtime=await episode_media(media,entry)
+        episode_imdb=episode_imdb or (play.get('episode_ids') or {}).get('imdb')
+        if episode_imdb and p.get('show_imdb',True):rating=await imdb.get_rating(episode_imdb)
+        label=format_episode_display(play['season'],play['episode'],last_play['episode'] if last_play else play['episode'],p.get("episode_code",False))
+        description=f"{'Rewatched' if rewatch else 'Watched'} {label} of **{title}**"
+        if episode_title:description+=f"\n*{episode_title}*"
+        if play['season']==1 and play['episode']==1 and not any(old.get('show_id')==play.get('show_id') and 'episode' in old.get('media_type','') for old in previous):
+            description+="\n🆕 Started watching this series."
+        ratings={'imdb':rating}
+        if last_play:
+            last_entry={**entry,'episode_number':last_play['episode']}
+            _,_,last_imdb,_=await episode_media(media,last_entry)
+            last_rating=await imdb.get_rating(last_imdb) if last_imdb and p.get('show_imdb',True) else None
+            parts=[]
+            if rating is not None:parts.append(f"E{play['episode']:02} {rating:.1f}/10")
+            if last_rating is not None:parts.append(f"E{last_play['episode']:02} {last_rating:.1f}/10")
+            if parts:description+='\n⭐ IMDb '+ ' · '.join(parts)
+            ratings={}
+    if ratings:
+        if p.get('show_imdb',True) and ratings.get('imdb') is not None:description+=f"\n⭐ IMDb {ratings['imdb']:.1f}/10"
+        if movie and anime and p.get('show_mal',True) and ratings.get('mal') is not None:description+=f" · 🌸 MAL {ratings['mal']:.2f}/10"
+    embed=build_embed(media,description,parse_iso(play['watched_at']),name,member,image,provider.profile_url(account),
+        title=title,title_url=provider.title_url('movies' if movie else 'shows',ids),poster=poster,preferences=p,provider='MDBList')
+    return await send_embed(ch,embed,'MDBList activity')
+
+
+async def deliver_mdblist_status(ch,gid,uid,name,member,provider,account,status,item):
+    media=item['media_type'];movie=media=='movies';anime=item.get('anime')
+    description=f"{'Planned to watch' if status=='planning' else 'Dropped'} **{item['title']}**"
+    ratings=await provider.ratings(account,movie,item['ids'])
+    p=await prefs(gid,uid)
+    if ratings:
+        if p.get('show_imdb',True) and ratings.get('imdb') is not None:description+=f"\n⭐ IMDb {ratings['imdb']:.1f}/10"
+        if anime and p.get('show_mal',True) and ratings.get('mal') is not None:description+=f" · 🌸 MAL {ratings['mal']:.2f}/10"
+    embed=build_embed(media,description,datetime.now(timezone.utc),name,member,None,provider.profile_url(account),
+        title=item['title'],title_url=item.get('url'),poster=item.get('poster'),preferences=p,status_activity=True,provider='MDBList')
+    return await send_embed(ch,embed,'MDBList status')
+
+
 TRACKER_CHOICES=[app_commands.Choice(name=manifest.display_name,value=manifest.name)
                  for manifest in BUILTIN_TRACKERS]
 
 
-@bot.tree.command(name="tracker-link", description="Link your SIMKL or WeTrakr account in this server.")
+@bot.tree.command(name="tracker-link", description="Link your SIMKL, WeTrakr or MDBList account in this server.")
 @app_commands.choices(provider=TRACKER_CHOICES)
 async def tracker_link(i, provider: app_commands.Choice[str]):
     handler = provider_registry.get(provider.value).authorize if provider.value in {m.name for m in provider_registry.manifests()} else None
@@ -3800,24 +3909,23 @@ async def tracker_source(i, provider: app_commands.Choice[str] | None = None):
         return
     uid=str(i.user.id)
     if provider is None:
-        targets=await storage.get_provider_targets("simkl",str(g),active_only=True)
-        if any(t["discord_user_id"]==uid for t in targets):
-            active="SIMKL"
-        else:
-            targets=await storage.get_provider_targets("wetrakr",str(g),active_only=True)
-            active="WeTrakr" if any(t["discord_user_id"]==uid for t in targets) else "none"
+        source=await storage.get_activity_provider(g,uid)
+        active=provider_registry.get(source).manifest.display_name if source else "none"
         await i.response.send_message(f"Your activity source here is **{active}**. Choose a provider to change it.",ephemeral=True)
         return
     if provider.value=="wetrakr" and not wetrakr_sync:
         await i.response.send_message("WeTrakr is not configured on this bot.",ephemeral=True)
         return
+    if provider.value=="mdblist" and not mdblist_tracking:
+        await i.response.send_message("MDBList OAuth is not configured on this bot. Set MDBLIST_CLIENT_ID first.",ephemeral=True)
+        return
     changed=await storage.set_activity_provider(g,uid,provider.value)
     if not changed:
         await i.response.send_message(f"Link your {provider.name} account in this server first.",ephemeral=True)
         return
-    detail=("The next check imports WeTrakr watch history, XP and statistics without posting old activity. "
+    detail=(f"The next check imports {provider.name} watch history, XP and statistics without posting old activity. "
             "Later watches post normally; switching back preserves your progression."
-            if provider.value=="wetrakr" else
+            if provider.value in {"wetrakr","mdblist"} else
             "SIMKL activity resumes from now; its existing XP and statistics remain in place.")
     await i.response.send_message(f"Activity source set to **{provider.name}**. {detail}",ephemeral=True)
 
@@ -3964,12 +4072,18 @@ async def simkl_status(i,user: discord.Member | None = None):
             links.append(f"SIMKL: **{u.get('simkl_username') or 'unknown'}**")
         if wetrakr_linked:
             links.append(f"WeTrakr: **{u['wetrakr'].get('username') or 'unknown'}**")
-        identity=f"• <@{uid}> — active: **{selected.upper() if selected == 'simkl' else 'WeTrakr'}** · " + (" · ".join(links) or "no linked account")
-        if selected == "wetrakr":
-            sync=gu.get("wetrakr_sync") or {}
+        identity=f"• <@{uid}> — active: **{provider_registry.get(selected).manifest.display_name}** · " + (" · ".join(links) or "no linked account")
+        if gu.get("mdblist_linked") and u.get("mdblist"):
+            identity+=f" · MDBList: **{u['mdblist'].get('username') or 'unknown'}**"
+        if selected in {"wetrakr","mdblist"}:
+            sync=gu.get(f"{selected}_sync") or {}
             state="ready" if sync.get("seeded") else "first check will seed history"
             last=sync.get("last_activity")
-            lines.append(identity+f"\n  WeTrakr sync: **{state}**"+(f" · last activity {last}" if last else ""))
+            health=sync.get("health") or {}
+            if health.get("error"):
+                state+=f" · {health['error']} · {health.get('consecutive_failures',0)} failure(s)"
+                if health.get("retry_at"):state+=f" · retry after {health['retry_at']}"
+            lines.append(identity+f"\n  {provider_registry.get(selected).manifest.display_name} sync: **{state}**"+(f" · last activity {last}" if last else ""))
             continue
         expires=u.get("token_expires_at")
         if expires:
@@ -4025,16 +4139,16 @@ async def tracker_checknow(i):
     if not g or not is_admin(i): await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True); return
     if time.monotonic()-last_checknow_at<CHECKNOW_COOLDOWN_SECONDS:
         await i.response.send_message("Please wait before using /tracker-checknow again.",ephemeral=True); return
-    if poll_lock.locked() or wetrakr_poll_lock.locked():
+    if poll_lock.locked() or wetrakr_poll_lock.locked() or provider_registry.get("mdblist").lock.locked():
         await i.response.send_message("An activity check is already running.",ephemeral=True); return
     last_checknow_at=time.monotonic()
     await i.response.send_message("Checking this server's selected tracker activity now...",ephemeral=True)
     posted = await poll_providers(g, manual=True)
-    simkl_posted, wetrakr_posted = posted.get('simkl', 0), posted.get('wetrakr', 0)
+    total_posted=sum(posted.values())
+    breakdown=", ".join(f"{provider_registry.get(source).manifest.display_name} {count}" for source,count in posted.items())
     await i.followup.send(
-        f"Done. Posted **{simkl_posted + wetrakr_posted}** new activity item(s) "
-        f"(SIMKL {simkl_posted}, WeTrakr {wetrakr_posted}). "
-        "A WeTrakr user's first check seeds history without posting older watches.",
+        f"Done. Posted **{total_posted}** new activity item(s) ({breakdown}). "
+        "A new provider's first check seeds history without posting older watches.",
         ephemeral=True)
 
 POLL_RETRY_DELAY_SECONDS=60
@@ -4078,6 +4192,7 @@ import sys as _sys
 provider_registry = ProviderRegistry()
 provider_registry.register(SimklProvider(_sys.modules[__name__]))
 provider_registry.register(WeTrakrProvider(_sys.modules[__name__]))
+provider_registry.register(MDBListProvider(_sys.modules[__name__]))
 
 
 async def selected_provider(guild_id, uid):

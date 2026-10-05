@@ -43,6 +43,9 @@ BUILTIN_TRACKERS = (
                      "https://simkl.com/{id}", "https://simkl.com/{type}/{id}"),
     ProviderManifest("wetrakr", "WeTrakr", True, True, True, True, True, True, True,
                      "https://wetrakr.com/{id}", "https://wetrakr.com/tmdb/{type}/{id}"),
+    ProviderManifest("mdblist", "MDBList", True, True, True, True, True, True, True,
+                     "https://mdblist.com/users/{id}", "https://mdblist.com/{type}/{id}",
+                     ("Experimental: full play snapshots on changed buckets; paused status and completion-only notices pending live validation.",)),
 )
 
 
@@ -143,6 +146,6 @@ def provider_linked(guild_user: dict, user: dict, provider: ProviderName) -> boo
     """Legacy SIMKL links default to enabled; new providers require an opt-in."""
     if provider == "simkl":
         return bool(guild_user.get("simkl_linked", True) and user.get("simkl_token"))
-    if provider == "wetrakr":
-        return bool(guild_user.get("wetrakr_linked", False) and user.get("wetrakr"))
+    if provider in {"wetrakr", "mdblist"}:
+        return bool(guild_user.get(f"{provider}_linked", False) and user.get(provider))
     raise ValueError(f"Unknown tracking provider: {provider}")

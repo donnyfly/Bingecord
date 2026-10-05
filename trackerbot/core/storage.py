@@ -154,7 +154,7 @@ def _rebuild_watch_statistics(events: dict, timezone_name: str | None) -> dict:
     source_counts=defaultdict(int)
     paired_counts=defaultdict(int)
     for key,event in events.items():
-        if not str(key).startswith("wetrakr:"):
+        if not str(key).startswith(("wetrakr:","mdblist:")):
             source_counts[(event.get("media_type"),str(event.get("title") or "").casefold())]+=1
     for key,event in events.items():
         if str(key).startswith("wetrakr:"):
@@ -203,13 +203,9 @@ def _statistics_for_provider(guild_user: dict, provider: str, timezone_name: str
     stats=guild_user.get("statistics") or _default_statistics()
     events=stats.get("watch_events")
     if not isinstance(events,dict):
-        return copy.deepcopy(stats) if provider != "wetrakr" else _default_statistics()
-    want_wetrakr=provider == "wetrakr"
-    filtered={
-        key: copy.deepcopy(event)
-        for key,event in events.items()
-        if (str(key).startswith("wetrakr:")) == want_wetrakr
-    }
+        return copy.deepcopy(stats) if provider == "simkl" else _default_statistics()
+    filtered={key:copy.deepcopy(event) for key,event in events.items()
+              if (str(key).split(":",1)[0] if str(key).startswith(("wetrakr:","mdblist:")) else "simkl") == provider}
     return _rebuild_watch_statistics(filtered,timezone_name)
 
 
@@ -264,9 +260,9 @@ def _add_watch_xp_events(progression: dict, events: list[dict]) -> tuple[int,lis
     amount=0
     for event in events:
         key=event["event_key"]
-        provider = "wetrakr" if str(key).startswith("wetrakr:") else "simkl"
+        provider = str(key).split(":",1)[0] if str(key).startswith(("wetrakr:","mdblist:")) else "simkl"
         identity = (identity_from_play({**event, "watched_at": event["at"]})
-                    if provider == "wetrakr" else identity_from_event(event))
+                    if provider != "simkl" else identity_from_event(event))
         row = watch_ledger.observe(rows, provider, key, identity)
         if row["award_keys"] or key in known:
             # Classification enrichment updates the shared reward projection;
@@ -412,6 +408,8 @@ def _default_guild_user(start_time_iso: str | None = None) -> dict:
     return {
         "simkl_linked": True,
         "wetrakr_linked": False,
+        "mdblist_linked": False,
+        "mdblist_sync": {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []},
         "activity_provider": "simkl",
         "wetrakr_sync": {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []},
         "history_seeded": False,
@@ -436,6 +434,7 @@ def _default_guild_user(start_time_iso: str | None = None) -> dict:
 def _normalise_user(user: dict) -> None:
     user.setdefault("simkl_token", None)
     user.setdefault("wetrakr", None)
+    user.setdefault("mdblist", None)
     user.setdefault("refresh_token", None)
     user.setdefault("token_expires_at", None)
     user.setdefault("simkl_username", "unknown")
@@ -451,6 +450,7 @@ def _normalise_user(user: dict) -> None:
     progression.setdefault("prestige_notified", int(progression.get("prestige", 0)))
     progression.setdefault("watch_xp_keys", {})
     progression.setdefault("wetrakr_plays", {})
+    progression.setdefault("mdblist_plays", {})
     progression.setdefault("watch_occurrences", {})
     progression.setdefault("xp_events", [])
     progression.setdefault("challenge_completions", {})
@@ -499,8 +499,10 @@ def _normalise_guild_user(user: dict) -> None:
     defaults = _default_guild_user()
     user.setdefault("simkl_linked", True)
     user.setdefault("wetrakr_linked", False)
+    user.setdefault("mdblist_linked", False)
+    user.setdefault("mdblist_sync", {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []})
     user.setdefault("activity_provider", "simkl" if user.get("simkl_linked", True) else "wetrakr")
-    if user["activity_provider"] not in {"simkl", "wetrakr"}:
+    if user["activity_provider"] not in {"simkl", "wetrakr", "mdblist"}:
         user["activity_provider"] = "simkl"
     if not isinstance(user.get("wetrakr_sync"), dict):
         user["wetrakr_sync"] = {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []}
@@ -599,8 +601,26 @@ def _normalise_guild(guild: dict) -> None:
 
 
 class Storage:
-    async def link_wetrakr(self, guild_id: str | int, discord_user_id: str,
-                           tokens: dict, account: dict) -> None:
+    async def save_wetrakr_sync(self, *args, **kwargs):
+        return await self.save_provider_sync(*args, **kwargs)
+
+    async def reconcile_wetrakr_plays(self, *args, **kwargs):
+        return await self.reconcile_provider_plays(*args, **kwargs)
+
+    async def get_wetrakr_plays(self, *args, **kwargs):
+        return await self.get_provider_plays(*args, **kwargs)
+
+    async def rotate_wetrakr_tokens(self, *args, **kwargs):
+        return await self.rotate_provider_tokens(*args, **kwargs)
+
+    async def unlink_wetrakr(self, *args, **kwargs):
+        return await self.unlink_provider_account(*args, **kwargs)
+
+    async def link_wetrakr(self, *args, **kwargs):
+        return await self.link_provider_account(*args, **kwargs)
+
+    async def link_provider_account(self, guild_id: str | int, discord_user_id: str,
+                           tokens: dict, account: dict, provider: str = "wetrakr") -> None:
         """Add an independent WeTrakr link without resetting SIMKL or XP."""
         gid, uid = str(guild_id), str(discord_user_id)
         async with _lock:
@@ -611,14 +631,14 @@ class Storage:
                 user = {}
                 _normalise_user(user)
                 self._data["users"][uid] = user
-            prior = user.get("wetrakr")
+            prior = user.get(provider)
             if prior and str(prior.get("account_id")) != str(account.get("id")):
-                if any((other.get("users") or {}).get(uid, {}).get("wetrakr_linked")
+                if any((other.get("users") or {}).get(uid, {}).get(f"{provider}_linked")
                        for other in self._data["guilds"].values()):
                     raise ValueError("Unlink the existing WeTrakr account in all servers before switching accounts")
             account_user=account.get("user") if isinstance(account.get("user"),dict) else {}
             account_info=account.get("info") if isinstance(account.get("info"),dict) else {}
-            user["wetrakr"] = {
+            user[provider] = {
                 "access_token": tokens["access_token"],
                 "refresh_token": tokens["refresh_token"],
                 "expires_at": tokens.get("expires_at"),
@@ -629,19 +649,19 @@ class Storage:
             if uid not in guild["users"]:
                 guild["users"][uid] = _default_guild_user()
                 guild["users"][uid]["simkl_linked"] = False
-                guild["users"][uid]["activity_provider"] = "wetrakr"
-            guild["users"][uid]["wetrakr_linked"] = True
+                guild["users"][uid]["activity_provider"] = provider
+            guild["users"][uid][f"{provider}_linked"] = True
             if not prior or str(prior.get("account_id")) != str(account.get("id")):
-                guild["users"][uid]["wetrakr_sync"] = {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []}
+                guild["users"][uid][f"{provider}_sync"] = {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []}
             self._dirty = True
         await self.flush()
 
-    async def rotate_wetrakr_tokens(self, discord_user_id: str, account_id: str | int,
-                                    old_refresh_token: str, tokens: dict) -> bool:
+    async def rotate_provider_tokens(self, discord_user_id: str, account_id: str | int,
+                                    old_refresh_token: str, tokens: dict, provider: str = "wetrakr") -> bool:
         """Persist a rotated refresh token only for the same account and session."""
         async with _lock:
             user = self._user(str(discord_user_id))
-            link = user.get("wetrakr") if user else None
+            link = user.get(provider) if user else None
             if not link or str(link.get("account_id")) != str(account_id) or link.get("refresh_token") != old_refresh_token:
                 return False
             link["access_token"] = tokens["access_token"]
@@ -651,21 +671,21 @@ class Storage:
         await self.flush()
         return True
 
-    async def unlink_wetrakr(self, guild_id: str | int, discord_user_id: str) -> bool:
+    async def unlink_provider_account(self, guild_id: str | int, discord_user_id: str, provider: str = "wetrakr") -> bool:
         gid, uid = str(guild_id), str(discord_user_id)
         async with _lock:
             user = self._user(uid)
             guild = self._guild(gid)
-            if not user or not user.get("wetrakr") or not guild or uid not in guild["users"] or not guild["users"][uid].get("wetrakr_linked"):
+            if not user or not user.get(provider) or not guild or uid not in guild["users"] or not guild["users"][uid].get(f"{provider}_linked"):
                 return False
-            guild["users"][uid]["wetrakr_linked"] = False
-            if guild["users"][uid]["activity_provider"] == "wetrakr":
-                guild["users"][uid]["activity_provider"] = "simkl"
+            guild["users"][uid][f"{provider}_linked"] = False
+            if guild["users"][uid]["activity_provider"] == provider:
+                guild["users"][uid]["activity_provider"] = next((p for p in ("simkl","wetrakr","mdblist") if p != provider and provider_linked(guild["users"][uid],user,p)), "simkl")
             # Keep the guild membership while the SIMKL link still uses it.
-            if not guild["users"][uid].get("simkl_linked", True):
+            if not any(provider_linked(guild["users"][uid],user,p) for p in ("simkl","wetrakr","mdblist")):
                 guild["users"].pop(uid, None)
-            if not any((other.get("users") or {}).get(uid, {}).get("wetrakr_linked") for other in self._data["guilds"].values()):
-                user["wetrakr"] = None
+            if not any((other.get("users") or {}).get(uid, {}).get(f"{provider}_linked") for other in self._data["guilds"].values()):
+                user[provider] = None
                 # Keep shared XP and historical observations for a later relink.
             self._dirty = True
         await self.flush()
@@ -845,7 +865,7 @@ class Storage:
 
     async def get_provider_targets(self, provider: str, guild_id: str | None = None,
                                    active_only: bool = False) -> list[dict]:
-        if provider not in {"simkl", "wetrakr"}:
+        if provider not in {"simkl", "wetrakr", "mdblist"}:
             raise ValueError(f"Unknown tracking provider: {provider}")
         async with _lock:
             guild_ids = [str(guild_id)] if guild_id is not None else list(self._data["guilds"].keys())
@@ -874,7 +894,7 @@ class Storage:
 
     async def set_activity_provider(self, guild_id: str | int, discord_user_id: str,
                                     provider: str) -> bool:
-        if provider not in {"simkl", "wetrakr"}:
+        if provider not in {"simkl", "wetrakr", "mdblist"}:
             raise ValueError(f"Unknown tracking provider: {provider}")
         async with _lock:
             guild_user = self._guild_user(str(guild_id), str(discord_user_id))
@@ -883,8 +903,8 @@ class Storage:
                 return False
             if guild_user.get("activity_provider") != provider:
                 guild_user["activity_provider"] = provider
-                if provider == "wetrakr":
-                    guild_user["wetrakr_sync"] = {"seeded": False, "checkpoint": None,
+                if provider in {"wetrakr","mdblist"}:
+                    guild_user[f"{provider}_sync"] = {"seeded": False, "checkpoint": None,
                                                   "last_activity": None, "recent_entry_ids": []}
                 elif guild_user.get("history_seeded"):
                     stamp = datetime.now(timezone.utc).isoformat()
@@ -898,14 +918,14 @@ class Storage:
             guild_user = self._guild_user(str(guild_id), str(discord_user_id))
             return guild_user.get("activity_provider", "simkl") if guild_user else None
 
-    async def get_wetrakr_plays(self, discord_user_id: str) -> list[dict]:
+    async def get_provider_plays(self, discord_user_id: str, provider: str = "wetrakr") -> list[dict]:
         async with _lock:
             user = self._user(str(discord_user_id))
             if not user:
                 return []
-            account=str((user.get("wetrakr") or {}).get("account_id"))
+            account=str((user.get(provider) or {}).get("account_id"))
             return [{**copy.deepcopy(play), "source_event_id": play.get("source_event_id", play_id)}
-                    for play_id, play in user["progression"].get("wetrakr_plays", {}).items()
+                    for play_id, play in user["progression"].get(f"{provider}_plays", {}).items()
                     if str(play.get("account_id"))==account]
 
     async def classify_wetrakr_movie(self, discord_user_id: str, movie_id, anime: bool) -> None:
@@ -980,9 +1000,9 @@ class Storage:
                     return True
             return False
 
-    async def reconcile_wetrakr_plays(self, guild_id: str | int, discord_user_id: str,
+    async def reconcile_provider_plays(self, guild_id: str | int, discord_user_id: str,
                                       plays: list[dict], *, complete: bool = False,
-                                      account_id: str | int | None = None) -> dict:
+                                      account_id: str | int | None = None, notify: bool | None = None, provider: str = "wetrakr") -> dict:
         """Apply stable WeTrakr play IDs; a full import can revoke deleted plays.
 
         Keep source observations separately from XP so switching sources never
@@ -994,18 +1014,20 @@ class Storage:
             global_user = self._user(discord_user_id)
             if not guild_user or not global_user:
                 return {"added": 0, "removed": 0, "xp": 0}
-            current_account=(global_user.get("wetrakr") or {}).get("account_id")
+            if provider == "mdblist" and (not provider_linked(guild_user,global_user,provider) or guild_user.get("activity_provider") != provider):
+                raise ValueError("MDBList source changed during reconciliation")
+            current_account=(global_user.get(provider) or {}).get("account_id")
             if account_id is not None and str(current_account) != str(account_id):
                 raise ValueError("WeTrakr account changed during watch reconciliation")
             account=str(current_account)
             progression = global_user["progression"]
             watch_ledger.ensure(progression)
-            ledger = progression["wetrakr_plays"]
+            ledger = progression.setdefault(f"{provider}_plays", {})
             def scoped_id(source_id):
                 source_id=str(source_id)
                 existing=ledger.get(source_id)
                 if existing is None or str(existing.get("account_id"))==account:
-                    return source_id
+                    return f"{account}/{source_id}" if provider != "wetrakr" else source_id
                 return f"{account}/{source_id}"
             stats = guild_user["statistics"]
             if not isinstance(stats.get("watch_events"), dict):
@@ -1023,7 +1045,7 @@ class Storage:
                 if not play_id or not stamp:
                     continue
                 observed.add(play_id)
-                key = "wetrakr:" + play_id
+                key = f"{provider}:" + play_id
                 if previous and previous.get("watched_at") == stamp and not play.get("removed"):
                     # Re-imports can discover a better title ID or corrected
                     # anime coordinates. Update the observation without
@@ -1037,8 +1059,8 @@ class Storage:
                             previous[field] = copy.deepcopy(value)
                             changed_metadata = True
                     if changed_metadata:
-                        watch_ledger.observe(progression['occurrence_ledger'], 'wetrakr',
-                                             f"wetrakr:{play_id}:{stamp}", identity_from_play(previous))
+                        watch_ledger.observe(progression['occurrence_ledger'], provider,
+                                             f"{provider}:{play_id}:{stamp}", identity_from_play(previous))
                         for award in progression["xp_events"]:
                             if award.get("event_key") == previous.get("xp_key"):
                                 award["media_type"] = previous["media_type"]
@@ -1058,7 +1080,7 @@ class Storage:
                     continue
                 if previous:
                     revised = True
-                    previous_key = f"wetrakr:{play_id}:{previous['watched_at']}"
+                    previous_key = f"{provider}:{play_id}:{previous['watched_at']}"
                     for award_key in watch_ledger.remove(progression, previous_key):
                         xp_delta -= self._remove_watch_award_locked(progression, award_key)
                     events.pop(key, None)
@@ -1090,18 +1112,20 @@ class Storage:
                                    "media_type": kind, "title": title, "item_key": item_key,
                                    "show_id": play.get("show_id"),
                                    "show_ids": play.get("show_ids") or {},
+                                   "season": play.get("season"), "episode": play.get("episode"),
+                                   "source_season": play.get("source_season"), "source_episode": play.get("source_episode"),
                                    "ids": play.get("ids") or {}, "genres": _genre_names(play.get("genres"))}
             if complete:
                 for play_id in {key for key, value in ledger.items()
                                 if str(value.get("account_id"))==account} - observed:
                     old = ledger.pop(play_id)
-                    for award_key in watch_ledger.remove(progression, f"wetrakr:{play_id}:{old['watched_at']}"):
+                    for award_key in watch_ledger.remove(progression, f"{provider}:{play_id}:{old['watched_at']}"):
                         xp_delta -= self._remove_watch_award_locked(progression, award_key)
-                    events.pop("wetrakr:" + play_id, None)
+                    events.pop(f"{provider}:" + play_id, None)
                     removed += 1
             if challenge_events:
                 before = progression["lifetime_xp"]
-                _complete_watch_challenges(progression, challenge_events, notify=not complete)
+                _complete_watch_challenges(progression, challenge_events, notify=(not complete if notify is None else notify))
                 xp_delta += progression["lifetime_xp"] - before
             if removed or revised:
                 xp_delta -= _revoke_unmet_watch_challenges(progression)
@@ -1123,17 +1147,21 @@ class Storage:
         progression["lifetime_xp"] = max(0, progression["lifetime_xp"] - removed)
         return removed
 
-    async def save_wetrakr_sync(self, guild_id: str | int, discord_user_id: str,
+    async def save_provider_sync(self, guild_id: str | int, discord_user_id: str,
                                 account_id: str | int, *, seeded=None, checkpoint=None,
-                                last_activity=None, entry_id=None, entry_ids=None) -> bool:
+                                last_activity=None, entry_id=None, entry_ids=None, status_snapshot=None, health=None, provider: str = "wetrakr") -> bool:
         async with _lock:
             guild_user = self._guild_user(str(guild_id), str(discord_user_id))
             user = self._user(str(discord_user_id))
-            if not guild_user or not user or not provider_linked(guild_user, user, "wetrakr"):
+            if not guild_user or not user or not provider_linked(guild_user, user, provider):
                 return False
-            if guild_user.get("activity_provider") != "wetrakr" or str(user["wetrakr"]["account_id"]) != str(account_id):
+            if guild_user.get("activity_provider") != provider or str(user[provider]["account_id"]) != str(account_id):
                 return False
-            sync = guild_user["wetrakr_sync"]
+            sync = guild_user[f"{provider}_sync"]
+            if health is not None:
+                sync["health"] = copy.deepcopy(health)
+            if status_snapshot is not None:
+                sync["status_snapshot"] = copy.deepcopy(status_snapshot)
             if seeded is not None:
                 sync["seeded"] = bool(seeded)
             if checkpoint is not None:
@@ -1298,7 +1326,7 @@ class Storage:
                 return False
             prior = guild["users"][str(discord_user_id)]
             replacement = _default_guild_user(start_time_iso)
-            for key in ("simkl_linked", "wetrakr_linked", "activity_provider"):
+            for key in ("simkl_linked", "wetrakr_linked", "mdblist_linked", "activity_provider"):
                 replacement[key] = copy.deepcopy(prior.get(key, replacement[key]))
             guild["users"][str(discord_user_id)] = replacement
             self._dirty = True
@@ -1814,7 +1842,7 @@ class Storage:
                     events[_watch_event_id(entry)]=entry
             else:
                 events={key:event for key,event in events.items()
-                        if event.get("media_type") not in media_types or _watch_base(event) in active_watch_bases}
+                        if str(key).startswith(("wetrakr:","mdblist:")) or event.get("media_type") not in media_types or _watch_base(event) in active_watch_bases}
                 if full_snapshot and baseline_entries is not None:
                     present_bases={_watch_base(event) for event in events.values()}
                     for entry in baseline_entries:
@@ -1938,6 +1966,7 @@ class Storage:
             if existing:
                 personal = {
                     "wetrakr": copy.deepcopy(existing.get("wetrakr")),
+                    "mdblist": copy.deepcopy(existing.get("mdblist")),
                     "embed_preferences": copy.deepcopy(existing.get("embed_preferences", DEFAULT_EMBED_PREFERENCES)),
                     "embed_preferences_custom": existing.get("embed_preferences_custom", False),
                     "progression": copy.deepcopy(existing.get("progression", {"xp": 0, "lifetime_xp": 0, "prestige": 0, "watch_xp_keys": {}, "xp_events": [], "challenge_completions": {}, "achievement_xp_awarded": {}})),
@@ -1956,7 +1985,7 @@ class Storage:
                 **personal,
             }
             prior_guild_user=self._data["guilds"][str(guild_id)]["users"].get(discord_user_id)
-            if prior_guild_user and prior_guild_user.get("wetrakr_linked"):
+            if prior_guild_user and (prior_guild_user.get("wetrakr_linked") or prior_guild_user.get("mdblist_linked")):
                 prior_guild_user["simkl_linked"] = True
             else:
                 self._data["guilds"][str(guild_id)]["users"][discord_user_id] = _default_guild_user(start_time_iso)
@@ -1973,10 +2002,13 @@ class Storage:
             if not guild_user.get("simkl_linked", True):
                 return False
             guild_user["simkl_linked"] = False
+            if guild_user.get("activity_provider") == "simkl" and guild_user.get("mdblist_linked") and not guild_user.get("wetrakr_linked"):
+                guild_user["activity_provider"] = "mdblist"
+                guild_user["mdblist_sync"]["seeded"] = False
             if guild_user.get("activity_provider") == "simkl" and guild_user.get("wetrakr_linked"):
                 guild_user["activity_provider"] = "wetrakr"
                 guild_user["wetrakr_sync"] = {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []}
-            if not guild_user.get("wetrakr_linked"):
+            if not guild_user.get("wetrakr_linked") and not guild_user.get("mdblist_linked"):
                 del guild["users"][discord_user_id]
 
             # Authentication is global and can be reused in other servers.
@@ -2027,12 +2059,12 @@ class Storage:
                 stats=_statistics_for_provider(user,provider,guild.get("timezone"))
                 results.append({
                     "discord_user_id": uid,
-                    "simkl_username": ((global_user.get("wetrakr") or {}).get("username")
-                                       if provider=="wetrakr" else
+                    "simkl_username": ((global_user.get(provider) or {}).get("username")
+                                       if provider!="simkl" else
                                        global_user.get("simkl_username")) or uid,
                     "statistics": stats,
-                    "history_seeded":(bool((user.get("wetrakr_sync") or {}).get("seeded"))
-                                      if provider=="wetrakr" else bool(user.get("history_seeded"))),
+                    "history_seeded":(bool((user.get(f"{provider}_sync") or {}).get("seeded"))
+                                      if provider!="simkl" else bool(user.get("history_seeded"))),
                 })
             return results
 
@@ -2052,16 +2084,16 @@ class Storage:
                 stats=_statistics_for_provider(user,provider,guild.get("timezone"))
                 rows.append({
                     "discord_user_id":uid,
-                    "simkl_username":((global_user.get("wetrakr") or {}).get("username")
-                                      if provider=="wetrakr" else
+                    "simkl_username":((global_user.get(provider) or {}).get("username")
+                                      if provider!="simkl" else
                                       global_user.get("simkl_username")) or uid,
                     "xp":int(p.get("xp",0)),
                     "prestige":int(p.get("prestige",0)),
                     "episodes":int(stats.get("episodes_watched",0)),
                     "movies":int(stats.get("movies_watched",0)),
                     "anime":int(stats.get("anime_episodes_watched",0))+int(stats.get("anime_movies_watched",0)),
-                    "history_seeded":(bool((user.get("wetrakr_sync") or {}).get("seeded"))
-                                      if provider=="wetrakr" else bool(user.get("history_seeded"))),
+                    "history_seeded":(bool((user.get(f"{provider}_sync") or {}).get("seeded"))
+                                      if provider!="simkl" else bool(user.get("history_seeded"))),
                 })
             return rows
 
@@ -2097,7 +2129,7 @@ class Storage:
                 selected={uid:_statistics_for_provider(member,providers.get(uid,member.get("activity_provider","simkl")),
                                                        guild.get("timezone")).get("watch_events",{})
                           for uid,member in guild.get("users",{}).items()
-                          if providers.get(uid,member.get("activity_provider"))=="wetrakr" or
+                          if providers.get(uid,member.get("activity_provider")) in {"wetrakr","mdblist"} or
                           (member.get("statistics") or {}).get("watch_events")}
                 return watch_contributions(self._data["users"],record.get("members") or [],
                                            period_start,period_end,record.get("kind","episodes"),

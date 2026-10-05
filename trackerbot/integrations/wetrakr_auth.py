@@ -5,7 +5,8 @@ from datetime import datetime, timedelta, timezone
 
 
 class WeTrakrAuth:
-    def __init__(self, client, store):
+    def __init__(self, client, store, provider="wetrakr"):
+        self.provider = provider
         self.client = client
         self.store = store
         self._locks = {}
@@ -15,9 +16,9 @@ class WeTrakrAuth:
         lock = self._locks.setdefault(uid, asyncio.Lock())
         async with lock:
             user = await self.store.get_user(uid)
-            link = (user or {}).get("wetrakr")
+            link = (user or {}).get(self.provider)
             if not link:
-                raise ValueError("WeTrakr is not linked")
+                raise ValueError(f"{self.provider} is not linked")
             expires = link.get("expires_at")
             if expires:
                 expiry = datetime.fromisoformat(expires.replace("Z", "+00:00"))
@@ -30,15 +31,15 @@ class WeTrakrAuth:
             saved = await self.store.rotate_wetrakr_tokens(
                 uid, link["account_id"], link["refresh_token"],
                 {"access_token": refreshed["access_token"],
-                 "refresh_token": refreshed["refresh_token"],
-                 "expires_at": expires_at.isoformat()},
+                 "refresh_token": refreshed.get("refresh_token") or link["refresh_token"],
+                 "expires_at": expires_at.isoformat()}, provider=self.provider,
             )
             if saved:
                 return refreshed["access_token"]
             # A relink/unlink may have raced this request. Do not return a
             # token for an account that the user has since removed.
             latest = await self.store.get_user(uid)
-            current = (latest or {}).get("wetrakr")
+            current = (latest or {}).get(self.provider)
             if current and str(current.get("account_id")) == str(link["account_id"]):
                 return current["access_token"]
-            raise ValueError("WeTrakr link changed during token refresh")
+            raise ValueError(f"{self.provider} link changed during token refresh")

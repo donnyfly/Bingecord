@@ -11,7 +11,15 @@
 
 `trackerbot/integrations/mdblist_tracking_client.py` is a separate account transport. It never uses the bot's existing `MDBLIST_API_KEY` ratings key for somebody else's watch history. It supports device authorization, token exchange/refresh, account reads, activity stamps, paginated individual history, paginated journal reads, watchlist reads and bounded per-item play histories. OAuth requests use form encoding and retain required trailing slashes. API calls use user bearer tokens. Errors omit arbitrary response text and surface quota retry delays without a retry loop.
 
-This is an integration foundation, **not a selectable third tracker yet**. No MDBList credentials are stored, watches imported, Discord activity posted, or shared XP changed by this new module. API-contract fixtures pass; no MDBList live account has been tested.
+MDBList is now a **selectable experimental tracker**. Device linking, token refresh, selected-source polling, quiet history imports, stable play reconciliation, shared XP/removal support, grouped episode activity, planned/dropped notices, statistics/rewards and registry discovery commands are connected. Missing or malformed full-history rows fail closed rather than removing credited watches. API-contract and reconciliation fixtures pass; no MDBList live account has been tested.
+
+## Configure and test
+
+1. Register your own MDBList OAuth application with device authorization enabled. Set `MDBLIST_CLIENT_ID` on the bot host; set `MDBLIST_CLIENT_SECRET` only if your application requires it. Members authorize through `/tracker-link provider:MDBList`, without supplying API keys. Keep host credentials and persisted member tokens private.
+2. Deploy the experimental image after its build succeeds, preserving the existing data volume. Select `/tracker-source provider:MDBList`, then `/tracker-checknow`. The first complete import is quiet.
+3. Mark one new episode or movie in MDBList and check again. Verify the activity, selected-source statistics and shared progression. Follow `docs/testing-multi-tracker.md` for duplicate, removal and discovery checks.
+
+Polling follows the bot's shared polling interval. Unchanged activity stamps skip expensive history/list reads. Changed stamps trigger complete paginated movie/episode snapshots, plus planned/dropped lists. Quota errors pause that account until its retry delay expires and are visible in `/tracker-status`. This correctness-first implementation does not yet use the journal to narrow invalidations.
 
 ## Authentication
 
@@ -35,17 +43,16 @@ The separate authorization-code flow requires PKCE and a redirect URI. A device 
 | `/upnext` | In-progress shows with next episode; offset pagination and `has_more` | Basis for watching list, not equivalent to paused playback alone. |
 | `/watchlist/items` | Planned movies/shows and cursor pagination | Basis for random picks and source-specific recommendation exclusions. |
 
-Dropped endpoints exist. A paused activity stamp exists, but the exact paused list and status-notification semantics remain to verify. Series completion also needs an explicit distinction between ended/completed and currently caught-up entries. Native profile/title URL patterns, anime classification and exact episode-rating retrieval are not guessed from other trackers.
+Dropped endpoints exist. A paused activity stamp exists, but the exact paused list and status-notification semantics remain to verify. Series completion also needs an explicit distinction between ended/completed and currently caught-up entries. Activity links use native movie/show IDs. The account link currently opens the member’s public MDBList lists page; dedicated profile deep links need live verification. Anime classification uses shared metadata and crosswalks. Episode IMDb ratings use exact episode metadata; watched episodes omit MAL.
 
 ## Quotas
 
 Official docs give a free-account daily limit of 1,000 calls, plus fixed five-minute limits of 1,000 reads and 300 writes. Limits are shared across that account's keys and OAuth apps. A 429 carries `Retry-After`. Poll using activity invalidation stamps and cached source data; do not fetch every list and full history every cycle. One stamp call every five minutes is 288 daily calls before history, commands and other apps, so the implementation must budget additional work and display quota pauses clearly.
 
-## Work before exposing MDBList
+## Remaining before claiming full parity
 
-1. Finish provider-neutral account storage, reconciliation and selected-source projections currently hard-coded for SIMKL/WeTrakr. Keep legacy SIMKL observation migration safe and account-scoped; retain independent source cursors.
-2. Capture redacted `plays=all` movie, TV episode and anime fixtures with real stable play IDs, edits, rewatches and removals. Preserve null/unknown dates without inventing watch times.
-3. Add a journal invalidation consumer: refresh affected individual plays, diff stable play IDs, and feed shared ledger observations. Use full paginated fallback when an item response is truncated; never widen partial rollup removals.
-4. Add Discord OAuth link/unlink and registry manifest, source selection/status, quiet import, scheduled/manual polls, title/profile links, first-episode/range notices, exact episode IMDb ratings and anime film classification.
-5. Connect stats, achievements, challenges, community, recaps, leaderboards, watching, random and recommendations to MDBList projections. Preserve shared XP/rewards and five-member display limits.
-6. Test both existing-provider ingestion/removal orders, switches, retries, quota handling, journal expiry, restarts and failed posts. Run a live provider-only and mixed-server validation before advertising parity.
+- Validate our registered OAuth device grant and real `plays=all` movie/episode payloads, including rewatches and removals. The official schema does not completely describe individual play rows; unsupported shapes stop reconciliation safely.
+- Verify native title/account destinations, calendar-numbered anime and anime movies against live accounts.
+- Add paused and completion-only activity semantics after verifying the API contracts. These notices are not implemented in this beta.
+- Optimize changed-account scans with journal invalidations and safe truncated-history fallbacks. Full snapshots currently avoid relying on the journal's retention window.
+- Complete the provider-only and mixed-server live checklist before describing the integration as 1:1 parity.

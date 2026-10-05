@@ -86,7 +86,7 @@ def test_registry_dispatches_both_pollers(monkeypatch):
     async def run():
         monkeypatch.setattr(bot, 'poll_all', AsyncMock(return_value=2))
         monkeypatch.setattr(bot, 'poll_wetrakr_all', AsyncMock(return_value=3))
-        assert await bot.poll_providers(1, manual=True) == {'simkl': 2, 'wetrakr': 3}
+        assert await bot.poll_providers(1, manual=True) == {'simkl': 2, 'wetrakr': 3, 'mdblist':0}
         bot.poll_all.assert_awaited_once_with(1, force_reconcile=True, ignore_failure_threshold=True)
         bot.poll_wetrakr_all.assert_awaited_once_with(1)
     asyncio.run(run())

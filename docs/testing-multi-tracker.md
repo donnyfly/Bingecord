@@ -72,3 +72,18 @@ Series-level watched rollups alone currently do not produce completion notificat
 - `/tracker-leaderboard` displays five members per page with Previous/Next buttons controlled by the command author. Rank numbers continue across pages, and both image and fallback text paths paginate.
 - Community summaries, community reward announcements and watched-together mentions display at most five members followed by an additional-member count. Weekly recaps retain their top-five summary. Every member still participates in accounting, delivery acknowledgement and rewards.
 - Live check: use a server with more than five linked members, inspect a member outside the summary, browse all leaderboard pages, and confirm group reward/watch totals include members omitted from display.
+
+
+## MDBList experimental live validation
+
+Configure `MDBLIST_CLIENT_ID` (and client secret if required by your registered OAuth app), deploy the latest experimental build and preserve the data volume. Never paste tokens into Discord or issue logs.
+
+1. `/tracker-link provider:MDBList`: authorize the private device link with your own account. Check `/tracker-status user:@yourself` shows MDBList.
+2. `/tracker-source provider:MDBList`, `/tracker-stats`, `/tracker-checknow`: the initial complete history import posts zero old activity. Record XP and `/tracker-mapping`.
+3. Mark a new TV S01E01, then a consecutive range beginning at S01E01 on another series. Check title/source links, episode IMDb scores when available, no episode MAL score, and the Started watching line. Check anime movie classification separately.
+4. Mark that same watch in SIMKL or WeTrakr after switching to that provider. Check XP does not increase for the matched occurrence. Switch back; history catch-up stays quiet.
+5. Remove the watch on one provider: XP remains while another observation supports it. After both sources have synced their removals, the final support removal reverses XP. A genuine later rewatch remains a separate occurrence.
+6. Check `/tracker-watching`, `/tracker-random`, `/tracker-recommend`, stats, leaderboard and reward cards use MDBList data and shared progression. Verify a new eligible watch can trigger achievement/challenge/prestige notifications.
+7. Restart the bot and check again: no replay or duplicate XP. Check `/tracker-status` reports authorization/quota failures without exposing tokens. MDBList paused/completion-only notices remain outside this beta.
+
+Optional read-only audit: `python3 -m trackerbot.validation.live --help`, then use its `--provider mdblist` option with your persisted store and account selection. The audit does not refresh tokens or mutate XP. Share only redacted report/log output when a live payload fails; never share the store or credentials.

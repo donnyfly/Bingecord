@@ -142,3 +142,24 @@ class MDBListTrackingClient:
         if data.get('truncated') is not False:
             raise MDBListTrackingError(200,'INCOMPLETE_PLAY_HISTORY')
         return data
+
+    def dropped(self, token):
+        return self._cursor_pages(token,'/sync/dropped',{'limit':1000},('shows',))
+
+    async def watching(self, token):
+        offset=0
+        while True:
+            data=await self._request('GET','/upnext',token,params={'limit':100,'offset':offset,'air_date_format':'instant'})
+            if not isinstance(data.get('items'),list) or not isinstance(data.get('has_more'),bool):
+                raise MDBListTrackingError(200,'INVALID_RESPONSE')
+            if any(not isinstance(row,dict) for row in data['items']) or data['has_more'] and not data['items']:
+                raise MDBListTrackingError(200,'INVALID_RESPONSE')
+            yield data
+            if not data['has_more']:
+                return
+            offset+=len(data['items'])
+
+    async def media(self, token, media_type, tmdb_id):
+        if media_type not in {'movie','show'}:
+            raise ValueError('Unsupported media type')
+        return await self._request('GET',f'/tmdb/{media_type}/{int(tmdb_id)}/',token)

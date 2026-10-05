@@ -369,3 +369,8 @@ If a Discord bot token is exposed, regenerate it immediately in the Discord Deve
 SIMKLTrackerBot is licensed under the MIT License.
 
 Live validation for experimental changes: [multi-tracker test checklist](docs/testing-multi-tracker.md).
+
+
+### Experimental MDBList tracking
+
+Register your own MDBList OAuth application and configure `MDBLIST_CLIENT_ID` (plus `MDBLIST_CLIENT_SECRET` if your application requires it). Members link with `/tracker-link provider:MDBList` and select `/tracker-source provider:MDBList`; no member API key is required. Keep the existing ratings `MDBLIST_API_KEY` separate. Initial history imports are quiet. See [MDBList setup and limitations](docs/mdblist-integration.md) and [live validation](docs/testing-multi-tracker.md).
