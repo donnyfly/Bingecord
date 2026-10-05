@@ -3837,8 +3837,13 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
         description=f"{'Rewatched' if rewatch else 'Watched'} **{title}**"
         ratings=await provider.ratings(account,True,ids)
     else:
-        entry={'tmdb_id':tmdb_id,'tvdb_id':ids.get('tvdb'),'season_num':play['season'],'episode_number':play['episode']}
-        image,episode_title,episode_imdb,runtime=await episode_media(media,entry)
+        # Display coordinates belong to the shared anime layout; metadata
+        # coordinates remain in MDBList/TMDB's original episode namespace.
+        entry={'tmdb_id':tmdb_id,'tvdb_id':ids.get('tvdb'),
+               'season_num':play.get('source_season',play['season']),
+               'episode_number':play.get('source_episode',play['episode'])}
+        metadata_media='shows' if anime else media
+        image,episode_title,episode_imdb,runtime=await episode_media(metadata_media,entry)
         episode_imdb=episode_imdb or (play.get('episode_ids') or {}).get('imdb')
         if episode_imdb and p.get('show_imdb',True):rating=await imdb.get_rating(episode_imdb)
         label=format_episode_display(play['season'],play['episode'],last_play['episode'] if last_play else play['episode'],p.get("episode_code",False))
@@ -3848,8 +3853,9 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
             started=True
         ratings={'imdb':rating}
         if last_play:
-            last_entry={**entry,'episode_number':last_play['episode']}
-            _,_,last_imdb,_=await episode_media(media,last_entry)
+            last_entry={**entry,'season_num':last_play.get('source_season',last_play['season']),
+                        'episode_number':last_play.get('source_episode',last_play['episode'])}
+            _,_,last_imdb,_=await episode_media(metadata_media,last_entry)
             last_rating=await imdb.get_rating(last_imdb) if last_imdb and p.get('show_imdb',True) else None
             parts=[]
             if rating is not None:parts.append(f"E{play['episode']:02} {rating:.1f}/10")
@@ -3862,6 +3868,9 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
     if started:description+='\n\n🆕 Started watching this series.'
     embed=build_embed(media,description,parse_iso(play['watched_at']),name,member,image,provider.profile_url(account),
         title=title,title_url=provider.title_url('movies' if movie else 'shows',ids),poster=poster,logo=logo,preferences=p,provider='MDBList')
+    # A missing still must not suppress an independently available title logo.
+    if logo and p.get('style','rich')!='minimal' and p.get('artwork','auto') in {'auto','backdrop'}:
+        embed.set_thumbnail(url=logo)
     return await send_embed(ch,embed,'MDBList activity')
 
 
