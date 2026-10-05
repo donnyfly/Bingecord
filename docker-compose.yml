@@ -1,6 +1,6 @@
 services:
   simkltrackerbot:
-    image: ghcr.io/donnyfly/simkltrackerbot:latest
+    image: ghcr.io/donnyfly/simkltrackerbot:experimental
     container_name: simkltrackerbot
     restart: unless-stopped
     env_file:

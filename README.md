@@ -1,56 +1,85 @@
 # SIMKLTrackerBot
 
-A self-hosted, multi-tracker Discord bot for **SIMKL, WeTrakr and MDBList**. Share watch activity, discover what to watch next, and earn shared XP, achievements and prestige through one set of `/tracker-*` commands.
+A self-hosted Discord bot that shares watch activity from **SIMKL, WeTrakr and MDBList**. One set of `/tracker-*` commands supports watch statistics, recommendations and shared XP, levels, achievements and prestige.
 
-> This README describes the **experimental** branch. Its Docker image is `ghcr.io/donnyfly/simkltrackerbot:experimental`. The `latest` image follows the main branch and may not include these features.
+**Branch:** `experimental` · **Docker image:** `ghcr.io/donnyfly/simkltrackerbot:experimental`
 
-## Activity previews
+Multi-tracker development is on this branch. The `latest` image follows `main` and may have different features.
 
-These are **illustrative Discord-style mockups**, with fictional titles, users, artwork and ratings—not live Discord screenshots. Actual artwork, scores and formatting depend on available metadata and your selected style.
+## Features
 
-**Anime episode:** individual episode IMDb rating, title logo, episode artwork, and the first-episode notice below the ratings.
+- Link multiple accounts and select one tracking source per member, per server. Members using different providers can share the same server.
+- Post movies, episodes, episode ranges and supported status changes, with provider links, title logos and artwork when available.
+- Combine matching activity into **Watched Together** embeds, including mixed-provider groups. Watches must share a title identity and movie/episode range, happen within 30 minutes, and use the same posting channel.
+- Show selected-source watch statistics, watching/planned lists, random picks and recommendations.
+- Track shared XP, ranks and automatic prestige, with achievements, daily/weekly challenges, community goals, leaderboards and recaps.
+- Configure personal/server styles, timezone and optional features, including an activity-only mode. Server member lists use bounded displays; `/tracker-status` can inspect one member.
 
-<img src="docs/images/episode-preview.png" alt="Illustrative MDBList anime episode embed with IMDb rating and Started watching notice" width="720">
+Watched TV/anime episodes show **individual episode IMDb ratings**, when available. MAL is reserved for anime movies and anime status activities. Status embeds use posters; watch embeds can use episode stills or backdrops. A range starting at S1E1 includes the Started watching notice below the ratings.
 
-**Watched Together:** members using different providers can share one activity embed.
+### History, switching and XP
 
-<img src="docs/images/together-preview.png" alt="Illustrative mixed-provider Watched Together episode range embed" width="720">
+Initial imports and catch-up after switching sources are quiet. Existing history does not generate old activity posts or progression notifications. Switching sources preserves shared XP.
 
-**Status activity:** poster artwork and title-level ratings; anime statuses can include MAL.
+A shared watch ledger uses catalog IDs and episode identities to match confirmed duplicates across providers. A matched watch earns XP once; genuine rewatches remain separate. Removing a watch reverses its contribution only when no other imported source observation supports it. Inactive-account changes become known when that source is synced again.
 
-<img src="docs/images/status-preview.png" alt="Illustrative WeTrakr paused anime embed with IMDb and MAL ratings" width="720">
+`/tracker-mapping` is a private, read-only view of matches, unpaired watches and possible duplicate awards. Uncertain mapping is kept separate for review. The integration is experimental; see the [live validation checklist](docs/testing-multi-tracker.md) for outstanding acceptance checks.
 
-Regenerate these examples with `python scripts/render_readme_previews.py` after installing Pillow. They demonstrate presentation rules rather than exercising live provider delivery.
+## Installation
 
-## What the bot supports
+### 1. Configure credentials
 
-- Each member links accounts and selects one activity source **per Discord server**. A server can contain SIMKL, WeTrakr and MDBList members together.
-- The selected provider supplies activity, watch history, watch totals, watching and planned lists, random picks, and recommendation history/exclusions.
-- XP, levels, ranks and prestige remain shared progression for the Discord user. Achievements, challenges, community goals, leaderboards and recaps use the common tracking system.
-- First imports and source-switch catch-up are quiet: existing history does not flood the channel with activity or old progression animations.
-- A shared occurrence ledger matches confirmed duplicate watches across providers so the same watch earns XP once. Genuine rewatches remain separate occurrences. Uncertain identities require review rather than a title-only guess.
-- Switching sources does not itself deduct XP. A removal reverses its contribution when no other imported provider observation supports that occurrence. Changes on an inactive account become known when that account is synced again.
-- `/tracker-mapping` privately previews verified matches, unpaired watches, review cases and possible double XP awards. It does not change XP.
+Create a Discord bot and invite it using the `bot` and `applications.commands` scopes. Give it **View Channel, Send Messages, Embed Links, Attach Files and Read Message History** permissions in the activity channel.
 
-### Embeds and presentation
+Copy `.env.example` to `.env` and set the following:
 
-Titles and activity headers link to the provider's title and member pages when available. Rich activity can include title logos, movie backdrops, episode stills, episode titles and ratings. Status activities use posters. Personal and server styles control artwork, detail, episode labels and rating visibility.
+| Variable | Purpose |
+| --- | --- |
+| `DISCORD_BOT_TOKEN` | Required Discord bot token. |
+| `SIMKL_CLIENT_ID` | Required SIMKL application ID; startup currently requires it even when another provider is selected. |
+| `TMDB_API_KEY` | Required metadata and artwork key. |
+| `WETRAKR_API_KEY` | Application key enabling WeTrakr. |
+| `MDBLIST_CLIENT_ID` | OAuth application ID enabling MDBList tracking. Register a device-authorization application at [MDBList Developer](https://mdblist.com/developer/). |
+| `MDBLIST_CLIENT_SECRET` | Only needed if your MDBList application requires it for token refresh. |
+| `MDBLIST_API_KEY` | Optional IMDb/MAL ratings enrichment; separate from MDBList tracking authorization. |
 
-Watched TV and anime episodes use **individual episode IMDb ratings**. They do not show MAL or substitute the whole show's IMDb score when an episode score is missing. Anime movies and anime status activities can show title-level IMDb and MAL scores. Episode ranges can show the first and last episode's scores when available.
+The host supplies application credentials. Members link their own accounts through `/tracker-link` and do not need the host's API keys. Keep `.env` and the data directory private: persisted data includes account tokens.
 
-A watch beginning at **S1E1**, including a range starting there, displays **“🆕 Started watching this series.”** on the last line after a blank line. Anime display numbering is mapped separately from provider metadata coordinates, so artwork and ratings can still use the original episode identity.
+### 2. Start the bot
 
-**Watched Together** works across all three providers, including mixed-provider groups. Matching requires the same server/channel, a shared title identity, the same movie or episode/range, and watch times within 30 minutes. Partial-overlap ranges remain separate. Group descriptions show at most five member mentions without pinging them. Delivery must succeed before pending watch state and XP are committed.
+Save the included `docker-compose.yml` alongside `.env`, then run:
 
-### MDBList tracking
+```bash
+docker compose pull
+docker compose up -d
+docker compose logs -f
+```
 
-MDBList tracking uses each member's OAuth account, independently of the optional MDBList ratings API key. It supports watched activity, history, lists, discovery and shared progression. Playback can supply paused notices and in-progress movies. Ended/cancelled shows use **Completed**; ongoing shows use **Caught up with**.
+Compose mounts `./data` at `/app/data` to preserve accounts, sync state and progression. Keep this volume across upgrades and back it up privately. After changing `.env`, recreate the container with `docker compose up -d --force-recreate`.
 
-Its journal invalidates affected title histories rather than acting as a play-event feed. The bot uses targeted refreshes where possible, safe full-history fallbacks, quiet recovery after expired journals, and per-account quota backoff. Stable play identities are used for reconciliation.
+To run from source instead, use Python 3.13 (matching the Docker image):
+
+```bash
+git clone --branch experimental https://github.com/donnyfly/SIMKLTrackerBot.git
+cd SIMKLTrackerBot
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+# Configure .env, then start:
+python bot.py
+```
+
+### 3. Set up your server
+
+1. Run `/tracker-setchannel`. Configure `/tracker-features` and `/tracker-timezone` as desired.
+2. Each member runs `/tracker-link`, then chooses their provider with `/tracker-source`.
+3. Run `/tracker-checknow` to import the initial history quietly.
+4. Mark a new watch after the import, then wait for polling or check again. Review `/tracker-stats` and `/tracker-status` to confirm the result.
 
 ## Commands
 
-Members use the same commands whichever provider they select. Administrative commands require the relevant server permissions.
+All providers use the same command names. Commands marked **Admin** require server permissions.
 
 | Command | Purpose |
 | --- | --- |
@@ -75,92 +104,49 @@ Members use the same commands whichever provider they select. Administrative com
 | `/tracker-setchannel` | Admin: choose the activity channel. |
 | `/tracker-features` | Admin: configure optional features, including activity-only mode and Watched Together. |
 | `/tracker-timezone` | Admin: view or set the server timezone. |
-| `/tracker-user-reset` | Reset this server's imported tracking state and achievements while retaining account links, global XP and personal style; history is quietly reimported. Read the confirmation before proceeding. |
-| `/tracker-debug` | Admin: privately preview level, rank, achievement and prestige notifications without changing XP. This is a progression-card preview, not an activity-embed preview. |
+| `/tracker-user-reset` | Reset this server's imported tracking state and achievements while retaining account links, global XP and personal style; history is quietly reimported.  |
+| `/tracker-debug` | Admin: privately preview level, rank, achievement and prestige notifications without changing XP.  |
 
-## Host setup
+## Configuration
 
-### Credentials
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `POLL_INTERVAL_MINUTES` | `60` | Scheduled polling interval for all providers. |
+| `POLL_CONCURRENCY` | `5` | Concurrent SIMKL user checks. |
+| `HISTORY_BACKFILL_CONCURRENCY` | `2` | Concurrent SIMKL history imports. |
+| `SIMKL_DEFAULT_TIMEZONE` | `Asia/Singapore` | Default statistics/streak timezone; override with `/tracker-timezone`. |
+| `DISCORD_DEV_GUILD_ID` | Unset | Optional immediate development-server command sync. |
+| `IMDB_RATINGS_DB_PATH` | `data/imdb_ratings.db` | Generated episode ratings database location. |
 
-Create a Discord application/bot and invite it with the `bot` and `applications.commands` scopes. Allow **View Channel, Send Messages, Embed Links, Attach Files and Read Message History** in the activity channel.
+## Troubleshooting
 
-Copy `.env.example` to `.env` and configure:
+- **No activity:** confirm the selected source, linked account, posting channel and permissions. The first history import is intentionally quiet.
+- **Missing ratings or artwork:** metadata may be unavailable, especially individual episode ratings. The bot does not substitute a show's score for an episode score.
+- **Provider errors or quota delays:** inspect `/tracker-status`. Account backoff avoids repeatedly hitting provider limits.
+- **No active SIMKL targets:** expected when members select WeTrakr or MDBList.
+- **Missing slash commands:** verify the invitation includes `applications.commands`. Global command registration can take time; the optional development guild setting supports immediate server sync.
 
-| Variable | Purpose |
+## Development
+
+| Directory | Contents |
 | --- | --- |
-| `DISCORD_BOT_TOKEN` | Required Discord bot secret. |
-| `SIMKL_CLIENT_ID` | Required SIMKL application ID. Startup currently requires it even if members select another provider. |
-| `TMDB_API_KEY` | Required TMDB metadata/artwork key. |
-| `WETRAKR_API_KEY` | Host application key enabling WeTrakr integration. |
-| `MDBLIST_CLIENT_ID` | Host OAuth application ID enabling MDBList tracking. Register your application at [MDBList Developer](https://mdblist.com/developer/) with device authorization. |
-| `MDBLIST_CLIENT_SECRET` | Set only if your registered MDBList application requires it for refresh. |
-| `MDBLIST_API_KEY` | Optional IMDb/MAL metadata enrichment; separate from member OAuth tracking. |
-| `POLL_INTERVAL_MINUTES` | Shared scheduled polling interval for all providers; default `60`. |
-| `POLL_CONCURRENCY` | SIMKL user polling concurrency; default `5`. |
-| `HISTORY_BACKFILL_CONCURRENCY` | SIMKL history backfill concurrency; default `2`. |
-| `SIMKL_DEFAULT_TIMEZONE` | Default statistics/streak timezone, retaining its legacy variable name; default `Asia/Singapore`. Override per server with `/tracker-timezone`. |
-| `DISCORD_DEV_GUILD_ID` | Optional development server ID for immediate slash-command synchronization. |
-| `IMDB_RATINGS_DB_PATH` | Optional generated IMDb episode-rating database path; default `data/imdb_ratings.db`. |
+| `trackerbot/core/` | Storage, mapping, watch delivery and progression. |
+| `trackerbot/integrations/` | Provider adapters, authentication and sync clients. |
+| `trackerbot/metadata/` | Catalog, artwork and ratings resolution. |
+| `trackerbot/presentation/` | Embeds, cards and member pagination. |
+| `trackerbot/validation/` | Read-only live audit tooling. |
+| `tests/` | Automated coverage. |
+| `docs/` | Architecture, provider integration and live checks. |
 
-**Members authorize their own accounts through `/tracker-link`; they do not need the host's API credentials.** Each self-hoster supplies their own application credentials. Keep `.env`, OAuth tokens and the persistent data directory private; never commit them or share diagnostic dumps containing secrets.
+The root `bot.py` is the launch entry point. For provider development and validation:
 
-### Docker Compose
-
-```yaml
-services:
-  trackerbot:
-    image: ghcr.io/donnyfly/simkltrackerbot:experimental
-    restart: unless-stopped
-    env_file: .env
-    volumes:
-      - ./data:/app/data
-```
-
-Start with:
-
-```bash
-docker compose pull
-docker compose up -d
-docker compose logs -f
-```
-
-Keep the data volume across upgrades: it stores linked accounts, sync positions, mapping/occurrence state and progression. Back it up privately before upgrading. After changing `.env`, recreate the container so it receives the new values.
-
-### Run from source
-
-The Docker image uses Python 3.13. For a matching local environment:
-
-```bash
-git clone --branch experimental https://github.com/donnyfly/SIMKLTrackerBot.git
-cd SIMKLTrackerBot
-python3.13 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-# Fill in .env before starting.
-python bot.py
-```
-
-### First use
-
-1. An administrator runs `/tracker-setchannel` and configures `/tracker-features` and `/tracker-timezone` as desired.
-2. Each member runs `/tracker-link` for their provider and `/tracker-source` to select it.
-3. Run `/tracker-checknow` to seed history quietly. Mark a new watch **after** that baseline, then wait for polling or check again.
-4. Review `/tracker-stats`, `/tracker-status` and `/tracker-mapping` to confirm the account, source and import state.
-
-Missing activity? Check the selected source, account authorization, channel permissions and import health first. An initial quiet baseline is expected. Missing artwork or episode ratings can reflect unavailable metadata. A “no active SIMKL targets” log is normal when everyone selects another provider. Quota backoff or provider errors appear in sync health; avoid repeatedly forcing checks during a quota delay.
-
-## Development and validation
-
-Implementation lives in `trackerbot/`: shared tracking/progression in `core/`, provider clients and sync in `integrations/`, metadata resolution in `metadata/`, and embeds/cards in `presentation/`. The root `bot.py` remains the launch entry point.
-
-- [Multi-tracker architecture and identity mapping](docs/multi-tracker-design.md)
-- [Adding another provider: interface, capabilities and parity checklist](docs/adding-provider.md)
-- [MDBList integration details and limitations](docs/mdblist-integration.md)
-- [Multi-tracker live validation checklist](docs/testing-multi-tracker.md)
+- [Multi-tracker architecture](docs/multi-tracker-design.md)
+- [Adding a provider](docs/adding-provider.md)
+- [MDBList integration and limitations](docs/mdblist-integration.md)
 - [WeTrakr API review](docs/wetrakr-api-review.md)
+- [Live validation checklist](docs/testing-multi-tracker.md)
 
-The shared interface and mapping ledger provide the foundation for future providers. Adding one still requires an adapter, authentication, API-specific reconciliation and capability validation; the bot does not promise automatic parity for features a provider cannot supply. Recent shared delivery and MDBList updates have automated coverage; the linked checklist records the live account/Discord checks still required.
+Additional providers require an adapter, authentication and API-specific validation. Capabilities depend on what each provider exposes.
 
 ## License
 
