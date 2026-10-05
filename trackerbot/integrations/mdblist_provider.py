@@ -8,6 +8,7 @@ import discord
 
 from trackerbot.core.providers import BUILTIN_TRACKERS, ProviderAccount, ProviderPage, WatchChange
 from trackerbot.core.tracker_mapping import identity_from_play
+from trackerbot.core.watch_delivery import current_cycle
 from .provider_adapters import BaseProvider, matches_filter
 from .mdblist_tracking_client import MDBListTrackingError
 
@@ -87,7 +88,7 @@ class MDBListProvider(BaseProvider):
         await interaction.response.send_message('MDBList unlinked from this server.' if result else 'MDBList is not linked here.',ephemeral=True)
 
     def profile_url(self, account):
-        return f'https://mdblist.com/lists/{quote(account.username,safe="")}'
+        return f'https://mdblist.com/@{quote(account.username.lstrip("@"),safe="")}'
 
     def title_url(self, media_type, title_ids):
         native=title_ids.get('mdblist')
@@ -185,6 +186,72 @@ class MDBListProvider(BaseProvider):
             seen.add(play['source_event_id'])
         return plays
 
+    async def _incremental_history(self,account,token,state,activities):
+        """Journal invalidates title histories; never manufacture plays from rows."""
+        if not state.get('seeded') or not hasattr(self.app.mdblist_tracking,'journal'):
+            return await self._history(account,token),[],False
+        old=(state.get('status_snapshot') or {}).get('activities') or {}
+        if all(activities.get(key)==old.get(key) for key in ('journal_at','watched_at','season_watched_at','episode_watched_at')):
+            return await self.app.storage.get_provider_plays(account.discord_user_id,provider='mdblist'),[],False
+        rows=[]
+        since=(datetime.fromisoformat(state['checkpoint'].replace('Z','+00:00'))-timedelta(seconds=1)).isoformat()
+        try:
+            async for page in self.app.mdblist_tracking.journal(token,since):rows.extend(page['journal'])
+        except MDBListTrackingError as exc:
+            if exc.code=='FULL_SYNC_REQUIRED':return await self._history(account,token),[],True
+            raise
+        saved=await self.app.storage.get_provider_plays(account.discord_user_id,provider='mdblist')
+        saved=[p for p in saved if str(p.get('account_id',account.account_id))==account.account_id]
+        dirty={};completions=[]
+        for row in rows:
+            if row.get('category')!='watched':continue
+            kind=row.get('item_type');ids=row.get('ids') or {}
+            if kind not in {'movie','episode','season','show'} or row.get('status') not in {'added','removed','partial'}:
+                raise MDBListTrackingError(200,'INVALID_JOURNAL_ROW')
+            anchor=next(((name,ids[name]) for name in ('tmdb','mdblist') if ids.get(name)),None)
+            if not anchor:raise MDBListTrackingError(200,'MISSING_TITLE_IDS')
+            dirty[('movie' if kind=='movie' else 'show',anchor[0],str(anchor[1]))]=ids
+            if kind=='show' and row['status']=='added':completions.append(row)
+        old=(state.get('status_snapshot') or {}).get('activities') or {}
+        changed=any(activities.get(key)!=old.get(key) for key in ('watched_at','season_watched_at','episode_watched_at'))
+        if changed and not dirty:
+            # A stamp without matching journal rows may reflect propagation lag.
+            # A complete snapshot is safe; acknowledging an empty journal isn't.
+            return await self._history(account,token),completions,False
+        if len(dirty)>4:return await self._history(account,token),completions,False
+        replacements=[]
+        for (kind,provider,native),ids in dirty.items():
+            try:history=await self.app.mdblist_tracking.item_plays(token,kind,provider,native)
+            except MDBListTrackingError as exc:
+                if exc.code=='INCOMPLETE_PLAY_HISTORY':return await self._history(account,token),completions,False
+                raise
+            for row in history['plays']:
+                payload={**row,('movie' if kind=='movie' else 'show'):{'ids':ids}}
+                replacements.append(await self.resolve_play(normalize_play(payload,'movie' if kind=='movie' else 'episode')))
+        def affected(play):
+            movie='movie' in play['media_type']
+            return any((kind=='movie')==movie and str((play.get('ids') or {}).get(provider))==native for kind,provider,native in dirty)
+        plays=[p for p in saved if not affected(p)]+replacements
+        if len({p['source_event_id'] for p in plays})!=len(plays):raise MDBListTrackingError(200,'DUPLICATE_PLAY_ID')
+        return plays,completions,False
+
+    async def _completion_items(self,account,rows):
+        result={}
+        for row in rows:
+            ids=row['ids'];data=await self.title('shows',ids)
+            # A watched show means all currently aired episodes. Continuing
+            # productions are caught up, never falsely reported as finished.
+            ended=data.get('status') in {'Ended','Canceled'}
+            status='completed' if ended else 'caught_up'
+            anime=await self.app.is_wetrakr_anime(data,ids.get('tmdb'))
+            poster=data.get('poster_path')
+            item={'title':data.get('name') or 'Untitled','ids':ids,'media_type':'anime' if anime else 'shows',
+                  'anime':anime,'poster':'https://image.tmdb.org/t/p/w500'+poster if poster else None,
+                  'url':self.title_url('shows',ids),'status':status}
+            key=str(ids.get('mdblist') or ids.get('tmdb'))+':'+str(row.get('action_at'))
+            result[key]=item
+        return result
+
     def _change(self, account, play, action='added'):
         return WatchChange('mdblist',account.account_id,play['source_event_id'],
             play['source_event_id']+':'+play['watched_at'],action,
@@ -211,7 +278,8 @@ class MDBListProvider(BaseProvider):
     async def _lists(self, account, status, token=None):
         token=token or await self._token(account)
         stream=(self.app.mdblist_tracking.watching(token) if status=='watching' else
-                self.app.mdblist_tracking.planning(token) if status=='planning' else self.app.mdblist_tracking.dropped(token))
+                self.app.mdblist_tracking.planning(token) if status=='planning' else
+                self.app.mdblist_tracking.paused(token) if status=='paused' else self.app.mdblist_tracking.dropped(token))
         result=[]
         async for page in stream:
             buckets=(('shows',page['items']),) if status=='watching' else tuple((key,page.get(key,[])) for key in ('movies','shows'))
@@ -227,15 +295,35 @@ class MDBListProvider(BaseProvider):
                     if poster and str(poster).startswith('/'): poster='https://image.tmdb.org/t/p/w500'+poster
                     next_episode=row.get('next_episode') or {}
                     latest=None
-                    if next_episode.get('number') and next_episode.get('season'):
-                        latest=f'Next: S{next_episode["season"]}E{next_episode["number"]:02}'
+                    number=next_episode.get('number',next_episode.get('episode_number'))
+                    season=next_episode.get('season',next_episode.get('season_number'))
+                    if number is not None and season is not None:
+                        if anime:
+                            tvdb=ids.get('tvdb') or await self.app.tmdb.get_tvdb_id_for_tmdb(ids.get('tmdb'))
+                            air_date=next_episode.get('air_date')
+                            if tvdb and not air_date and ids.get('tmdb'):
+                                details=await self.app.tmdb.get_episode_details(ids['tmdb'],season,number)
+                                air_date=(details or {}).get('air_date')
+                            mapped=await self.app.tmdb.map_anime_episode_to_tvmaze(tvdb,air_date=air_date,title=next_episode.get('title')) if tvdb else None
+                            if mapped:season,number=mapped
+                        latest=(None,season,number,next_episode.get('title'))
                     result.append({'media_type':'movies' if bucket=='movies' else 'anime' if anime else 'shows',
                         'anime':anime,'title':metadata['title'],'ids':ids,'url':self.title_url(bucket,ids),
-                        'poster':poster,'genres':data.get('genres') or [],'latest':latest,
-                        'episode_count':data.get('number_of_episodes'),'added_at':row.get('added_at')})
+                        'poster':poster,'genres':data.get('genres') or [],'latest':latest,'latest_is_next':bool(latest),
+                        'episode_count':data.get('number_of_episodes'),'added_at':row.get('added_at'),
+                        'status_key':str(row.get('id'))+':'+str(row.get('paused_at')) if status=='paused' else None})
         return result
 
-    async def watching(self, account): return await self._lists(account,'watching')
+    async def watching(self, account):
+        items=await self._lists(account,'watching')
+        # Up-next is show-only. Playback sessions provide in-progress movies
+        # and paused rewatches whose shows may have no unwatched next episode.
+        if hasattr(self.app.mdblist_tracking,'paused'):
+            known={(item['media_type']=='movies',str(item['ids'].get('tmdb') or item['ids'].get('mdblist'))) for item in items}
+            for item in await self._lists(account,'paused'):
+                key=(item['media_type']=='movies',str(item['ids'].get('tmdb') or item['ids'].get('mdblist')))
+                if key not in known:items.append(item);known.add(key)
+        return items
     async def planning(self, account): return await self._lists(account,'planning')
 
     async def recommendation_sources(self, account, media_filter):
@@ -253,7 +341,7 @@ class MDBListProvider(BaseProvider):
                     'anime':anime,'media_type':'movies' if kind=='movie' else 'anime' if anime else 'shows',
                     'rating':None,'genres':play.get('genres') or []})
         for status in ('watching','planning','dropped'):
-            for item in await self._lists(account,status):
+            for item in await (self.watching(account) if status=='watching' else self._lists(account,status)):
                 if item['ids'].get('tmdb'):
                     excluded.add(('movie' if item['media_type']=='movies' else 'tv',int(item['ids']['tmdb'])))
         return self.app.select_sources(sources),excluded
@@ -262,13 +350,15 @@ class MDBListProvider(BaseProvider):
         if not self.app.mdblist_tracking: return 0
         async with self.lock:
             posted=0
-            for target in await self.app.storage.get_provider_targets('mdblist',guild_id,active_only=True):
+            targets=await self.app.storage.get_provider_targets('mdblist',guild_id,active_only=True)
+            async def process_target(target):
+                nonlocal posted
                 gid,uid=target['guild_id'],target['discord_user_id']
                 link=target['user_data']['mdblist'];account_id=str(link['account_id'])
                 health=target['guild_user_data']['mdblist_sync'].get('health') or {}
-                if not manual and int(health.get('consecutive_failures',0))>=self.app.MAX_CONSECUTIVE_FAILURES:continue
-                if self.paused_until.get(account_id,0)>time.monotonic():continue
-                if not target.get('channel_id'): continue
+                if not manual and int(health.get('consecutive_failures',0))>=self.app.MAX_CONSECUTIVE_FAILURES:return
+                if self.paused_until.get(account_id,0)>time.monotonic():return
+                if not target.get('channel_id'): return
                 try:
                     posted+=await self._poll_target(target)
                 except MDBListTrackingError as exc:
@@ -277,8 +367,12 @@ class MDBListProvider(BaseProvider):
                         'error':exc.code,'consecutive_failures':int(health.get('consecutive_failures',0))+1,
                         'retry_at':(datetime.now(timezone.utc)+timedelta(seconds=exc.retry_after)).isoformat() if exc.retry_after else None})
                     self.app.log.warning('MDBList sync blocked user %s guild %s: %s',uid,gid,exc.code)
-                except Exception:
+                except Exception as exc:
+                    await self.app.storage.save_provider_sync(gid,uid,account_id,provider='mdblist',health={
+                        'error':type(exc).__name__,'consecutive_failures':int(health.get('consecutive_failures',0))+1})
                     self.app.log.exception('MDBList polling failed user %s guild %s.',uid,gid)
+            cycle=current_cycle.get()
+            await cycle.join([process_target(target) for target in targets]) if cycle else await asyncio.gather(*(process_target(target) for target in targets))
             return posted
 
     async def _poll_target(self, target):
@@ -287,7 +381,7 @@ class MDBListProvider(BaseProvider):
         state=target['guild_user_data']['mdblist_sync']
         activities=await self.app.mdblist_tracking.last_activities(token)
         # Activity stamps are invalidations, never an assumed item event stream.
-        signature={key:activities.get(key) for key in ('journal_at','watched_at','season_watched_at','episode_watched_at','watchlisted_at','dropped_at')}
+        signature={key:activities.get(key) for key in ('journal_at','watched_at','season_watched_at','episode_watched_at','watchlisted_at','dropped_at','paused_at','episode_paused_at')}
         saved_signature=(state.get('status_snapshot') or {}).get('activities')
         if state['seeded'] and signature==saved_signature:
             await self.app.storage.save_provider_sync(gid,uid,account.account_id,provider='mdblist',health={})
@@ -300,14 +394,21 @@ class MDBListProvider(BaseProvider):
             if not simkl_user.get('simkl_token'):raise ValueError('Legacy statistics require their original history rebuild')
             simkl_token=await self.app.valid_token(uid,simkl_user)
             await self.app.reconcile_watch_progression(gid,uid,simkl_user,simkl_token,set(self.app.MEDIA_TYPES))
-        plays=await self._history(account,token)
-        planning=await self._lists(account,'planning',token)
-        dropped=await self._lists(account,'dropped',token)
+        plays,completion_rows,expired=await self._incremental_history(account,token,state,activities)
+        previous=state.get('status_snapshot') or {}
+        old=previous.get('activities') or {}
+        planning=(await self._lists(account,'planning',token) if not state['seeded'] or activities.get('watchlisted_at')!=old.get('watchlisted_at') else list((previous.get('planning') or {}).values()))
+        dropped=(await self._lists(account,'dropped',token) if not state['seeded'] or activities.get('dropped_at')!=old.get('dropped_at') else list((previous.get('dropped') or {}).values()))
         statuses={status:{str(item['ids'].get('mdblist') or item['ids'].get('tmdb') or ''):item for item in items}
                   for status,items in (('planning',planning),('dropped',dropped))}
+        if hasattr(self.app.mdblist_tracking,'paused'):
+            paused=(await self._lists(account,'paused',token) if 'paused' not in previous or any(activities.get(key)!=old.get(key) for key in ('paused_at','episode_paused_at')) else list((previous.get('paused') or {}).values()))
+            statuses['paused']={item['status_key']:item for item in paused}
+        completions=await self._completion_items(account,completion_rows)
+        statuses['completion']=completions
         if any('' in rows for rows in statuses.values()): raise MDBListTrackingError(200,'MISSING_TITLE_IDS')
         store=self.app.storage
-        if not state['seeded']:
+        if not state['seeded'] or expired:
             await store.reconcile_provider_plays(gid,uid,plays,complete=True,account_id=account.account_id,provider='mdblist')
             await self.app.evaluate_achievements(gid,uid,notify_channel=None)
             await store.claim_prestige_notifications(uid)
@@ -351,16 +452,21 @@ class MDBListProvider(BaseProvider):
         prior=state.get('status_snapshot') or {}
         for status,items in statuses.items():
             known=dict(prior.get(status) or {})
+            # On upgrade, seed newly introduced paused snapshots quietly.
+            if status=='paused' and status not in prior:continue
             for key,item in items.items():
                 if key in known:continue
                 if await store.get_activity_provider(gid,uid)!='mdblist':raise ValueError('MDBList source changed during status delivery')
-                if not await self.app.deliver_mdblist_status(channel,gid,uid,name,member,self,account,status,item):
+                if not await self.app.deliver_mdblist_status(channel,gid,uid,name,member,self,account,item.get('status',status),item):
                     await rewards();return count
                 known[key]=item
                 prior[status]=known
                 if not await store.save_provider_sync(gid,uid,account.account_id,status_snapshot=prior,provider='mdblist'):
                     raise ValueError('MDBList selection changed during status delivery')
                 count+=1
+        statuses['completion']={**(prior.get('completion') or {}),**completions}
+        if len(statuses['completion'])>1000:
+            statuses['completion']=dict(list(statuses['completion'].items())[-1000:])
         await store.reconcile_provider_plays(gid,uid,plays,complete=True,notify=True,account_id=account.account_id,provider='mdblist')
         await rewards()
         await store.refresh_watch_occurrences(uid)

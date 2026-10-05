@@ -84,7 +84,7 @@ Configure `MDBLIST_CLIENT_ID` (and client secret if required by your registered 
 4. Mark that same watch in SIMKL or WeTrakr after switching to that provider. Check XP does not increase for the matched occurrence. Switch back; history catch-up stays quiet.
 5. Remove the watch on one provider: XP remains while another observation supports it. After both sources have synced their removals, the final support removal reverses XP. A genuine later rewatch remains a separate occurrence.
 6. Check `/tracker-watching`, `/tracker-random`, `/tracker-recommend`, stats, leaderboard and reward cards use MDBList data and shared progression. Verify a new eligible watch can trigger achievement/challenge/prestige notifications.
-7. Restart the bot and check again: no replay or duplicate XP. Check `/tracker-status` reports authorization/quota failures without exposing tokens. MDBList paused/completion-only notices remain outside this beta.
+7. Restart the bot and check again: no replay or duplicate XP. Check `/tracker-status` reports authorization/quota failures without exposing tokens. Test paused notices and Completed versus Caught up; they are now implemented.
 
 Optional read-only audit: `python3 -m trackerbot.validation.live --help`, then use its `--provider mdblist` option with your persisted store and account selection. The audit does not refresh tokens or mutate XP. Share only redacted report/log output when a live payload fails; never share the store or credentials.
 
@@ -102,4 +102,17 @@ All 24 registered `/tracker-*` commands have a selected-source or shared-data pa
 | debug | Shared level, rank, prestige and achievement preview; no provider API needed | Existing rendered notification tests |
 | features, timezone, style, style-server, setchannel | Server/member settings independent of provider | Existing settings tests |
 
-MDBList paused/completion-only activity notices and cross-member watched-together delivery are not covered by this command audit. Anime lists and recommendation destinations should be verified with real MDBList up-next/watchlist responses before claiming full parity. Live reward delivery also depends on enabled server feature settings and the bot's channel permissions.
+Paused/completion notices and cross-member watched-together delivery now have automated coverage; they still need live validation. Anime lists and recommendation destinations should be verified with real MDBList up-next/watchlist responses before claiming full parity. Live reward delivery also depends on enabled server feature settings and the bot's channel permissions.
+
+
+## Live acceptance after shared delivery and journal updates
+
+Use two members in the same posting channel and enable Watched Together through `/tracker-features`. Both accounts must already be seeded.
+
+1. Mark the same new movie or exactly matching episode range within 30 minutes, then run one `/tracker-checknow`. Try WeTrakr + WeTrakr, MDBList + MDBList, and one mixed-provider pair. Expect one Watched Together embed with both members and provider labels; each member's XP is independent. Different seasons and different episode ranges must stay separate.
+2. Mark a paused session in MDBList. Expect one poster-only Paused notice, correct source/profile links, and no watch XP. Mark the last available episode of an ongoing series: expect Caught up, not Completed. Complete an ended series: expect Completed. Series status notices may include MAL; episode watch notices must not.
+3. Check `/tracker-watching`, `/tracker-random` and `/tracker-recommend` with anime and anime movies. Anime up-next labels must use shared seasonal numbering while metadata lookups retain source coordinates.
+4. Verify new eligible activity triggers enabled achievement/challenge/prestige notifications. Delete a credited watch and sync each supporting source; only the final support removal reverses watch XP. Source switches and silent imports must not replay reward animations.
+5. Check logs after a normal single-title watch: journal + item history should replace full scans. A truncated item history or an expired journal must use a safe full fallback. Never share OAuth tokens or the persisted store when reporting results.
+
+Automated tests cannot validate a live OAuth account or Discord channel here; record these acceptance results before calling the integration full parity.

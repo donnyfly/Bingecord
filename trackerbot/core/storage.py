@@ -1051,11 +1051,11 @@ class Storage:
                     # anime coordinates. Update the observation without
                     # replaying XP or posting historical activity.
                     changed_metadata = False
-                    for field in ("item_key", "ids", "title", "media_type", "genres"):
+                    for field in ("item_key", "ids", "title", "media_type", "genres", "season", "episode", "source_season", "source_episode", "show_id", "show_ids"):
                         value = play.get(field)
                         if field == "genres" and value:
                             value = _genre_names(value)
-                        if value and value != previous.get(field):
+                        if (value or value == 0) and value != previous.get(field):
                             previous[field] = copy.deepcopy(value)
                             changed_metadata = True
                     if changed_metadata:

@@ -47,3 +47,18 @@ def test_seasonal_display_keeps_source_metadata_coordinates(monkeypatch):
         await bot.deliver_mdblist_play(object(),'1','42','Viewer',None,provider,object(),play)
         assert send.await_args.args[1].thumbnail.url.endswith('logo.png')
     asyncio.run(run())
+
+
+def test_status_verbs_use_poster_and_anime_title_ratings(monkeypatch):
+    async def run():
+        monkeypatch.setattr(bot,'prefs',AsyncMock(return_value={'style':'rich','show_imdb':True,'show_mal':True}))
+        monkeypatch.setattr(bot.tmdb,'get_tv_logo',AsyncMock(return_value='https://example.com/logo.png'))
+        sender=AsyncMock(return_value=True);monkeypatch.setattr(bot,'send_embed',sender)
+        provider=SimpleNamespace(ratings=AsyncMock(return_value={'imdb':8.5,'mal':8.1}),profile_url=lambda _:'https://mdblist.com/@viewer')
+        item={'media_type':'anime','anime':True,'title':'Anime','ids':{'tmdb':100},'poster':'https://example.com/poster.jpg','url':'https://mdblist.com/show/test'}
+        for status,verb in [('paused','Paused'),('completed','Completed'),('caught_up','Caught up with')]:
+            await bot.deliver_mdblist_status(object(),'1','42','Viewer',None,provider,object(),status,item)
+            embed=sender.await_args.args[1]
+            assert embed.description.startswith(verb) and 'MAL 8.10' in embed.description
+            assert embed.image.url.endswith('poster.jpg') and embed.author.url.endswith('@viewer')
+    asyncio.run(run())

@@ -13,7 +13,7 @@ from trackerbot.integrations.wetrakr_sync import WeTrakrSync
 from trackerbot.integrations.mdblist_tracking_client import MDBListTrackingClient, MDBListTrackingError
 from trackerbot.integrations.mdblist_provider import MDBListProvider
 from trackerbot.core.storage import DEFAULT_FEATURES, EPOCH_ISO, storage
-from trackerbot.core.watch_delivery import WatchActivity, WatchBatch
+from trackerbot.core.watch_delivery import WatchActivity, WatchBatch, WatchCycle, current_cycle, watch_key, deliver_watch
 from trackerbot.core.achievements import ACHIEVEMENTS, all_achievements
 from trackerbot.core.progression import RANKS, challenges_for, challenge_progress, level_progress, rank_for_level, xp_for_level, xp_for_watch
 from trackerbot.presentation.level_visuals import accent_for_tier, prestige_style, render_achievement_gif, render_level_up_gif, render_prestige_gif
@@ -653,10 +653,10 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
                 if started:
                     await storage.update_activity_state(g,uid,statuses={f"{t}:{sid}":"watching"})
             if batch is not None:
-                # SIMKL identity plus its mapped season prevents unrelated anime
-                # seasons or colliding third-party IDs from grouping together.
+                # Verified provider-neutral title IDs plus canonical coordinates
+                # keep grouping independent of the selected account.
                 batch.add(WatchActivity(str(g),str(uid),t,ch,
-                    ("episode",t,str(sid),sn,tuple(x["episode_number"] for x in grp)),
+                    watch_key("episode",grp[0].get("ids") or {},sn,tuple(x["episode_number"] for x in grp),"simkl",sid),
                     tuple(x["watched_dt"] for x in grp),e,
                     f"**{format_episode_range(sn,grp[0]['episode_number'],grp[-1]['episode_number'])}** of **{title}**",
                     commit,started=started,rewatched=kind=="rewatched",count=len(grp)))
@@ -765,7 +765,7 @@ async def process_movies(ch,g,uid,name,member,items,since,profile,batch=None,sco
             await storage.record_activity_batch(g,uid,[k],{k:wr},[record])
         if batch is not None:
             batch.add(WatchActivity(str(g),str(uid),scope,ch,
-                ("movie",scope,str(sid)),(dt,),e,f"**{title}**",commit,
+                watch_key("movie",ids,provider="simkl",native=sid),(dt,),e,f"**{title}**",commit,
                 rewatched=bool(rw),movie=True))
         elif await send_embed(ch,e,"movie"):
             await commit()
@@ -1711,7 +1711,16 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
     embed = build_embed(embed_type, desc, stamp, name, member, image, profile_url, title,
                         title_url=title_url, poster=poster, logo=logo, preferences=p,
                         status_activity=bool(status), provider="WeTrakr")
-    sent = await send_embed(ch, embed, "WeTrakr activity")
+    if not status and await feature_enabled(gid,'watched_together'):
+        movie=media_type=='movie'
+        numbers=tuple(range(int(number),int(end_number if episode_end else number)+1)) if not movie else ()
+        activity=WatchActivity(str(gid),str(uid),embed_type,ch,
+            watch_key('movie' if movie else 'episode',ids,None if movie else int(season),numbers,'wetrakr',change.get('show_id') or change.get('wetrakr_id')),
+            (stamp,)*max(1,len(numbers)),embed,f"**{title}**" if movie else f"{label} of **{title}**",None,
+            started=False if movie else started,rewatched=desc.startswith('Rewatched'),movie=movie,count=max(1,len(numbers)))
+        sent=await deliver_watch(send_embed,activity)
+    else:
+        sent = await send_embed(ch, embed, "WeTrakr activity")
     if sent and media_type == "episode":
         started_ids.discard(str(change.get("show_id")))
     return sent
@@ -1726,16 +1735,17 @@ async def poll_wetrakr_all(g=None):
         targets = await storage.get_provider_targets("wetrakr", g, active_only=True)
         posted = 0
         checked = 0
-        for target in targets:
+        async def process_target(target):
+            nonlocal posted,checked
             gid, uid = target["guild_id"], target["discord_user_id"]
             channel_id = target["channel_id"]
             if not channel_id:
-                continue
+                return
             try:
                 ch = bot.get_channel(int(channel_id)) or await bot.fetch_channel(int(channel_id))
                 member, name = await resolve_member(gid, uid)
                 if not member:
-                    continue
+                    return
                 if await storage.needs_watch_statistics_rebuild(gid, uid):
                     simkl_user = target["user_data"]
                     if not simkl_user.get("simkl_token"):
@@ -1786,6 +1796,8 @@ async def poll_wetrakr_all(g=None):
                 await storage.refresh_watch_occurrences(uid)
             except Exception:
                 log.exception("WeTrakr polling failed for user %s in guild %s.", uid, gid)
+        cycle=current_cycle.get()
+        await cycle.join([process_target(target) for target in targets]) if cycle else await asyncio.gather(*(process_target(target) for target in targets))
         request_delta = wetrakr.request_counts - requests_before
         log.info("WeTrakr polling complete: %d target(s), %d checked, %d activity item(s), %.2fs; "
                  "API requests: last_activities=%d, journal=%d, episodes=%d, shows=%d, movies=%d, history=%d.",
@@ -3218,7 +3230,7 @@ async def simkl_watching(i,type: app_commands.Choice[str] | None = None):
             if item.get('latest'):
                 _, season, episode, episode_title = item['latest']
                 if episode is not None:
-                    line += ' — ' + format_episode_display(season, int(episode), int(episode))
+                    line += ' — ' + ('Next: ' if item.get('latest_is_next') else '') + format_episode_display(season, int(episode), int(episode))
                 if episode_title:
                     line += f" · {episode_title}"
             lines.append(line)
@@ -3871,12 +3883,22 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
     # A missing still must not suppress an independently available title logo.
     if logo and p.get('style','rich')!='minimal' and p.get('artwork','auto') in {'auto','backdrop'}:
         embed.set_thumbnail(url=logo)
+    if await feature_enabled(gid,'watched_together'):
+        end=last_play or play
+        numbers=tuple(range(play['episode'],end['episode']+1)) if not movie else ()
+        activity=WatchActivity(str(gid),str(uid),media,ch,watch_key('movie' if movie else 'episode',ids,
+            None if movie else play['season'],numbers,'mdblist',play.get('show_id')),
+            (parse_iso(play['watched_at']),)*max(1,len(numbers)),embed,
+            f"**{title}**" if movie else f"{label} of **{title}**",None,
+            started=started,rewatched=rewatch,movie=movie,count=max(1,len(numbers)))
+        return await deliver_watch(send_embed,activity)
     return await send_embed(ch,embed,'MDBList activity')
 
 
 async def deliver_mdblist_status(ch,gid,uid,name,member,provider,account,status,item):
     media=item['media_type'];movie=media=='movies';anime=item.get('anime')
-    description=f"{'Planned to watch' if status=='planning' else 'Dropped'} **{item['title']}**"
+    verb={'planning':'Planned to watch','dropped':'Dropped','paused':'Paused','completed':'Completed','caught_up':'Caught up with'}[status]
+    description=f"{verb} **{item['title']}**"
     ratings=await provider.ratings(account,movie,item['ids'])
     p=await prefs(gid,uid)
     if ratings:
@@ -4219,11 +4241,18 @@ async def selected_provider(guild_id, uid):
     return provider, await provider.link(str(uid))
 
 
+provider_cycle_lock=asyncio.Lock()
+
 async def poll_providers(guild_id=None, *, manual=False):
-    posted = {}
-    for manifest in provider_registry.manifests():
-        posted[manifest.name] = await provider_registry.get(manifest.name).poll(guild_id, manual=manual)
-    return posted
+    async with provider_cycle_lock:
+        manifests=provider_registry.manifests()
+        cycle=WatchCycle(send_embed)
+        calls=[]
+        for manifest in manifests:
+            call=provider_registry.get(manifest.name).poll(guild_id,manual=manual)
+            calls.append(cycle.run(call))
+        results=await cycle.execute(calls)
+        return {manifest.name:count for manifest,count in zip(manifests,results)}
 
 if __name__ == "__main__":
     bot.run(DISCORD_BOT_TOKEN, log_handler=None)

@@ -32,7 +32,7 @@ class MDBListTrackingClient:
             await self._session.close()
         self._session = None
 
-    async def _request(self, method, path, token=None, *, params=None, form=None):
+    async def _request(self, method, path, token=None, *, params=None, form=None, allow_list=False):
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
         headers={'Accept':'application/json','User-Agent':'SIMKLTrackerBot/experimental'}
@@ -51,8 +51,13 @@ class MDBListTrackingClient:
                 data=await response.json(content_type=None)
             except (ValueError,aiohttp.ContentTypeError):
                 raise MDBListTrackingError(response.status,'INVALID_RESPONSE') from None
+            if allow_list and response.status<300 and isinstance(data,list):
+                if any(not isinstance(row,dict) for row in data):raise MDBListTrackingError(200,'INVALID_RESPONSE')
+                return data
             if not isinstance(data,dict):
                 raise MDBListTrackingError(response.status,'INVALID_RESPONSE')
+            if data.get('requires_full_sync') is True:
+                raise MDBListTrackingError(response.status,'FULL_SYNC_REQUIRED')
             if response.status >= 300 or data.get('error'):
                 known={'authorization_pending','slow_down','expired_token','access_denied','invalid_grant','invalid_client','invalid_token'}
                 error=data.get('error')
@@ -163,3 +168,14 @@ class MDBListTrackingClient:
         if media_type not in {'movie','show'}:
             raise ValueError('Unsupported media type')
         return await self._request('GET',f'/tmdb/{media_type}/{int(tmdb_id)}/',token)
+
+    async def paused(self,token):
+        rows=await self._request('GET','/sync/playback',token,allow_list=True)
+        if not isinstance(rows,list):raise MDBListTrackingError(200,'INVALID_RESPONSE')
+        result={'movies':[],'shows':[]}
+        for row in rows:
+            if not row.get('paused_at'):continue
+            kind=row.get('type')
+            if kind not in {'movie','episode'}:raise MDBListTrackingError(200,'INVALID_RESPONSE')
+            result['movies' if kind=='movie' else 'shows'].append(row)
+        yield result

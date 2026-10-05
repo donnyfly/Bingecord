@@ -17,7 +17,7 @@ class API:
         self.movies=[];self.episodes=[];self.planned=[];self.dropped_rows=[];self.revision=0
         self.history_reads=0
     async def last_activities(self,token):
-        return {'server_time':STAMP,'journal_at':str(self.revision)}
+        return {'server_time':STAMP,'journal_at':str(self.revision),'watchlisted_at':str(self.revision),'dropped_at':str(self.revision)}
     async def history(self,token,*,media_type):
         self.history_reads+=1
         yield {'movies':copy.deepcopy(self.movies)} if media_type=='movie' else {'episodes':copy.deepcopy(self.episodes)}
@@ -218,4 +218,90 @@ def test_absolute_anime_number_maps_by_episode_identity(tmp_path,monkeypatch):
         assert (mapped['season'],mapped['episode'])==(2,1)
         assert (mapped['source_season'],mapped['source_episode'])==(1,25)
         app.tmdb.map_anime_episode_to_tvmaze.assert_awaited_once_with(200,air_date='2023-07-06',title=None)
+    asyncio.run(run())
+
+
+def test_incremental_item_history_completion_and_expiry(tmp_path,monkeypatch):
+    async def run():
+        store,api,app,provider=await setup(tmp_path,monkeypatch)
+        api.movies=[movie()]
+        await provider.poll('1')
+        initial_reads=api.history_reads
+        rows=[{'category':'watched','item_type':'movie','ids':{'tmdb':50,'mdblist':'film'},'status':'added','action_at':STAMP}]
+        async def journal(token,since):yield {'journal':rows}
+        api.journal=journal
+        api.item_plays=AsyncMock(return_value={'truncated':False,'plays':[{'play_id':1,'watched_at':STAMP},{'play_id':2,'watched_at':'2026-10-06T10:00:00Z'}]})
+        api.revision+=1
+        assert await provider.poll('1')==1
+        assert api.history_reads==initial_reads
+        assert len(await store.get_provider_plays('42',provider='mdblist'))==2
+        api.item_plays.return_value={'truncated':False,'plays':[{'play_id':2,'watched_at':'2026-10-06T10:00:00Z'}]}
+        api.revision+=1
+        await provider.poll('1')
+        assert len(await store.get_provider_plays('42',provider='mdblist'))==1
+        # Truncated and expired windows use full snapshots; expiry is quiet.
+        api.item_plays.side_effect=MDBListTrackingError(200,'INCOMPLETE_PLAY_HISTORY')
+        api.movies=[movie(2,'2026-10-06T10:00:00Z')];api.revision+=1
+        await provider.poll('1');assert api.history_reads>initial_reads
+        async def expired(token,since):
+            raise MDBListTrackingError(200,'FULL_SYNC_REQUIRED')
+            yield
+        api.journal=expired;api.movies.append(movie(3,'2026-10-07T10:00:00Z'));api.revision+=1
+        calls=app.deliver_mdblist_play.await_count
+        await provider.poll('1')
+        assert app.deliver_mdblist_play.await_count==calls
+        assert len(await store.get_provider_plays('42',provider='mdblist'))==2
+        app.tmdb._get_series_details.return_value={'name':'Series','status':'Ended','poster_path':'/poster.jpg'}
+        completed=await provider._completion_items(await provider.link('42'),[{'ids':{'tmdb':100},'action_at':STAMP}])
+        assert next(iter(completed.values()))['status']=='completed'
+        provider.metadata.clear();app.tmdb._get_series_details.return_value={'name':'Series','status':'Returning Series'}
+        caught=await provider._completion_items(await provider.link('42'),[{'ids':{'tmdb':100},'action_at':STAMP}])
+        assert next(iter(caught.values()))['status']=='caught_up'
+    asyncio.run(run())
+
+
+def test_new_paused_status_is_posted_once_without_watch_xp(tmp_path,monkeypatch):
+    async def run():
+        store,api,app,provider=await setup(tmp_path,monkeypatch)
+        sessions=[]
+        async def paused(token):yield {'movies':sessions,'shows':[]}
+        api.paused=paused
+        api.last_activities=AsyncMock(return_value={'server_time':STAMP,'journal_at':'0','paused_at':'0'})
+        await provider.poll('1')
+        before=(await store.get_progression('42'))['xp']
+        sessions.append({'id':99,'paused_at':STAMP,'movie':{'title':'Film','ids':{'tmdb':50}}})
+        api.last_activities.return_value={'server_time':STAMP,'journal_at':'0','paused_at':'1'}
+        assert await provider.poll('1')==1
+        assert app.deliver_mdblist_status.await_args.args[-2]=='paused'
+        assert (await store.get_progression('42'))['xp']==before
+        assert await provider.poll('1')==0
+        assert app.deliver_mdblist_status.await_count==1
+    asyncio.run(run())
+
+
+def test_anime_upnext_uses_shared_seasons_and_public_profile(tmp_path,monkeypatch):
+    async def run():
+        _,api,app,provider=await setup(tmp_path,monkeypatch)
+        app.is_wetrakr_anime.return_value=True
+        app.tmdb.map_anime_episode_to_tvmaze=AsyncMock(return_value=(2,1))
+        async def watching(token):
+            yield {'items':[{'show':{'title':'Anime','ids':{'tmdb':100,'tvdb':200,'mdblist':'anime'}},'next_episode':{'season':1,'number':25,'air_date':'2023-07-06','title':'Hidden Inventory'}}],'has_more':False}
+        api.watching=watching
+        account=await provider.link('42')
+        items=await provider.watching(account)
+        assert items[0]['latest'][1:3]==(2,1) and items[0]['media_type']=='anime'
+        assert provider.profile_url(account)=='https://mdblist.com/@Viewer'
+    asyncio.run(run())
+
+
+def test_paused_movies_appear_in_watching_and_recommendation_exclusions(tmp_path,monkeypatch):
+    async def run():
+        _,api,app,provider=await setup(tmp_path,monkeypatch)
+        async def paused(token):yield {'movies':[{'id':1,'paused_at':STAMP,'movie':{'title':'Film','ids':{'tmdb':50,'mdblist':'film'}}}],'shows':[]}
+        api.paused=paused
+        account=await provider.link('42')
+        items=await provider.watching(account)
+        assert len(items)==1 and items[0]['media_type']=='movies'
+        _,excluded=await provider.recommendation_sources(account,'all')
+        assert ('movie',50) in excluded
     asyncio.run(run())

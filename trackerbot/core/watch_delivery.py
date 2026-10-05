@@ -61,6 +61,8 @@ def together_embed(activities):
     if rewatchers and not all_rewatched:
         noun = 'movie' if first.movie else ('episodes' if first.count > 1 else 'episode')
         lines.append(f'🔁 {mentions(rewatchers)} rewatched {"these" if noun == "episodes" else "this"} {noun}.')
+    providers=list(dict.fromkeys((item.embed.footer.text or '').split(' · ')[-1] for item in activities))
+    if providers:embed.set_footer(text='Watched Together · '+ ' + '.join(providers))
     embed.description = '\n'.join(lines)
     return embed
 
@@ -106,6 +108,18 @@ class WatchBatch:
             yield from clusters
 
     async def deliver(self):
+        cycle=current_cycle.get()
+        if cycle is not None:
+            # Submit the whole SIMKL batch together; never acknowledge a post
+            # merely because it has been queued for another provider to join.
+            commits=[item.commit for item in self.activities]
+            accepted=await cycle.submit(self.activities) if self.activities else []
+            for item,commit,sent in zip(self.activities,commits,accepted):
+                item.delivered=False
+                if sent:
+                    await commit();item.delivered=True
+            for finalize in self.finalizers:await finalize()
+            return
         for group in self.groups():
             embed = together_embed(group) if len(group) > 1 else group[0].embed
             try:
@@ -126,3 +140,113 @@ class WatchBatch:
                 await finalize()
             except Exception:
                 log.exception('Could not finalize polling target.')
+
+# One coordinator per complete multi-provider polling cycle. Waiting for Discord
+# delivery keeps every provider's existing post-before-acknowledge contract.
+import asyncio
+from contextvars import ContextVar
+
+current_cycle = ContextVar('watch_delivery_cycle', default=None)
+
+
+def watch_key(kind, ids, season=None, episodes=(), provider=None, native=None):
+    anchor=next(((name,str(ids[name])) for name in ('tmdb','tvdb','imdb','mal') if ids.get(name)),None)
+    if anchor is None:anchor=(provider or 'unknown',str(native))
+    return (kind,anchor,season,tuple(episodes)) if kind=='episode' else (kind,anchor)
+
+
+class WatchCycle:
+    def __init__(self,sender):
+        self.sender=sender
+        self.scheduled=0
+        self.running=set()
+        self.blocked=set()
+        self.pending=[]
+        self.owners={}
+        self.changed=asyncio.Event()
+
+    def run(self,awaitable):
+        # Register synchronously, before the new coroutine gets CPU time.
+        self.scheduled+=1;self.changed.set()
+        async def worker():
+            task=asyncio.current_task();self.scheduled-=1
+            self.running.add(task);self.changed.set()
+            try:return await awaitable
+            finally:self.running.discard(task);self.blocked.discard(task);self.changed.set()
+        return worker()
+
+    async def join(self,awaitables):
+        task=asyncio.current_task()
+        workers=[self.run(a) for a in awaitables]
+        self.blocked.add(task);self.changed.set()
+        try:return await asyncio.gather(*workers)
+        finally:self.blocked.discard(task);self.changed.set()
+
+    async def submit(self,activities):
+        task=asyncio.current_task()
+        futures=[]
+        for activity in activities:
+            future=asyncio.get_running_loop().create_future()
+            self.pending.append((activity,future));futures.append(future)
+            self.owners[future]=task
+        self.blocked.add(task);self.changed.set()
+        try:return await asyncio.gather(*futures)
+        finally:self.blocked.discard(task);self.changed.set()
+
+    def finish(self,future,sent):
+        if not future.done():future.set_result(sent)
+        owner=self.owners.get(future)
+        if owner and all(f.done() for f,t in self.owners.items() if t is owner):
+            self.blocked.discard(owner)
+        self.changed.set()
+
+    async def flush(self):
+        pending,self.pending=self.pending,[]
+        probe=WatchBatch(self.sender)
+        for activity,_ in pending:probe.add(activity)
+        matched={id(item) for group in probe.groups() if len(group)>1 for item in group}
+        if matched:
+            # Release matched participants first so their next native activity
+            # can join another SIMKL item already waiting in the same cycle.
+            self.pending=[pair for pair in pending if id(pair[0]) not in matched]
+            pending=[pair for pair in pending if id(pair[0]) in matched]
+        batch=WatchBatch(self.sender)
+        for activity,future in pending:
+            async def accept(future=future):
+                self.finish(future,True)
+            # Original commits stay in their provider, after submit returns.
+            activity.commit=accept
+            batch.add(activity)
+        token=current_cycle.set(None)
+        try:await batch.deliver()
+        finally:current_cycle.reset(token)
+        for _,future in pending:
+            self.finish(future,False)
+
+    async def execute(self,awaitables):
+        token=current_cycle.set(self)
+        roots=[asyncio.create_task(a) for a in awaitables]
+        for root in roots:root.add_done_callback(lambda _:self.changed.set())
+        try:
+            while not all(root.done() for root in roots):
+                self.changed.clear()
+                # Let provider wrappers register their leaf workers first.
+                await asyncio.sleep(0)
+                if self.pending and not self.scheduled and self.running and self.running<=self.blocked:
+                    await self.flush()
+                elif not all(root.done() for root in roots):
+                    await self.changed.wait()
+            return await asyncio.gather(*roots)
+        finally:
+            for root in roots:
+                if not root.done():root.cancel()
+            await asyncio.gather(*roots,return_exceptions=True)
+            for _,future in self.pending:
+                if not future.done():future.cancel()
+            current_cycle.reset(token)
+
+
+async def deliver_watch(sender,activity):
+    cycle=current_cycle.get()
+    if cycle is None:return await sender(activity.channel,activity.embed,'watch')
+    return (await cycle.submit([activity]))[0]

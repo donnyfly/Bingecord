@@ -179,3 +179,22 @@ def test_mdblist_shared_challenges_and_mapping_commands(tmp_path,monkeypatch):
         assert 'Verified cross-tracker matches' in message
         assert i.response.send_message.await_args.kwargs['ephemeral']
     asyncio.run(run())
+
+
+def test_mdblist_watching_command_consumes_real_adapter_upnext_shape(tmp_path,monkeypatch):
+    async def run():
+        await setup_store(tmp_path,monkeypatch,'mdblist')
+        adapter=bot.provider_registry.get('mdblist')
+        monkeypatch.setattr(adapter,'metadata',{})
+        async def watching(token):
+            yield {'items':[{'show':{'title':'Anime','ids':{'tmdb':100,'tvdb':200,'mdblist':'anime'}},'next_episode':{'season':1,'number':25,'air_date':'2023-07-06','title':'Hidden Inventory'}}],'has_more':False}
+        monkeypatch.setattr(bot,'mdblist_tracking',SimpleNamespace(watching=watching))
+        monkeypatch.setattr(bot,'mdblist_auth',SimpleNamespace(access_token=AsyncMock(return_value='token')))
+        monkeypatch.setattr(bot.tmdb,'_get_series_details',AsyncMock(return_value={'name':'Anime'}))
+        monkeypatch.setattr(bot.tmdb,'map_anime_episode_to_tvmaze',AsyncMock(return_value=(2,1)))
+        monkeypatch.setattr(bot,'is_wetrakr_anime',AsyncMock(return_value=True))
+        i=interaction();await bot.simkl_watching.callback(i)
+        embed=i.followup.send.await_args.kwargs['embed']
+        assert 'Next: **S2E01**' in embed.description and 'Hidden Inventory' in embed.description
+        assert 'MDBList' in embed.footer.text
+    asyncio.run(run())

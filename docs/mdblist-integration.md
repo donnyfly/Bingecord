@@ -19,7 +19,7 @@ MDBList is now a **selectable experimental tracker**. Device linking, token refr
 2. Deploy the experimental image after its build succeeds, preserving the existing data volume. Select `/tracker-source provider:MDBList`, then `/tracker-checknow`. The first complete import is quiet.
 3. Mark one new episode or movie in MDBList and check again. Verify the activity, selected-source statistics and shared progression. Follow `docs/testing-multi-tracker.md` for duplicate, removal and discovery checks.
 
-Polling follows the bot's shared polling interval. Unchanged activity stamps skip expensive history/list reads. Changed stamps trigger complete paginated movie/episode snapshots, plus planned/dropped lists. Quota errors pause that account until its retry delay expires and are visible in `/tracker-status`. This correctness-first implementation does not yet use the journal to narrow invalidations.
+Polling follows the bot's shared polling interval. Unchanged activity stamps skip expensive history/list reads. Watched/journal changes invalidate affected title histories. Up to four titles use bounded per-title histories; larger batches or truncated histories use complete paginated movie/episode snapshots. Planned, dropped and paused lists are read only when their own invalidation stamps change. Expired journals reimport quietly. Quota errors pause that account until its retry delay expires and are visible in `/tracker-status`. The journal is an invalidation feed, never a source of invented play IDs or watch XP.
 
 ## Authentication
 
@@ -43,7 +43,7 @@ The separate authorization-code flow requires PKCE and a redirect URI. A device 
 | `/upnext` | In-progress shows with next episode; offset pagination and `has_more` | Basis for watching list, not equivalent to paused playback alone. |
 | `/watchlist/items` | Planned movies/shows and cursor pagination | Basis for random picks and source-specific recommendation exclusions. |
 
-Dropped endpoints exist. A paused activity stamp exists, but the exact paused list and status-notification semantics remain to verify. Series completion also needs an explicit distinction between ended/completed and currently caught-up entries. Activity links use native movie/show IDs. The account link currently opens the member’s public MDBList lists page; dedicated profile deep links need live verification. Anime classification uses shared metadata and crosswalks. Episode IMDb ratings use exact episode metadata; watched episodes omit MAL.
+Paused notices come from `/sync/playback` rows with a non-null `paused_at`. Watched-show journal rows produce Completed for ended/cancelled productions and Caught up for other productions. Partial show/season rows never remove all child watches. Activity links use native movie/show IDs. Account links use the verified public `/@username` profile route. Anime classification uses shared metadata and crosswalks. Episode IMDb ratings use exact episode metadata; watched episodes omit MAL.
 
 ## Quotas
 
@@ -53,6 +53,14 @@ Official docs give a free-account daily limit of 1,000 calls, plus fixed five-mi
 
 - Validate our registered OAuth device grant and real `plays=all` movie/episode payloads, including rewatches and removals. The official schema does not completely describe individual play rows; unsupported shapes stop reconciliation safely.
 - Verify native title/account destinations, calendar-numbered anime and anime movies against live accounts.
-- Add paused and completion-only activity semantics after verifying the API contracts. These notices are not implemented in this beta.
-- Optimize changed-account scans with journal invalidations and safe truncated-history fallbacks. Full snapshots currently avoid relying on the journal's retention window.
+- Live-check paused, Completed and Caught up notices against the registered account. Newly introduced paused snapshots are seeded quietly on upgrade.
+- Measure quota usage with real large libraries. Targeted journal reconciliation, changed-list invalidation and safe truncated/expired fallbacks are implemented.
 - Complete the provider-only and mixed-server live checklist before describing the integration as 1:1 parity.
+
+## Shared watched-together delivery
+
+All three providers submit watch embeds to one polling-cycle coordinator when the server's Watched Together feature is enabled. Grouping uses a shared title ID, matching canonical movie/episode coordinates, the same server/channel, different Discord members and the existing 30-minute watch-time window. Exact episode ranges must match; overlapping but different ranges remain separate. Missing shared IDs remain separate rather than grouping by title text. The footer names the participating trackers and descriptions mention at most five members.
+
+Providers keep their existing post-before-acknowledgement contract: a failed grouped post leaves its observations/checkpoints pending. A global cycle lock prevents manual and scheduled multi-provider checks from acquiring provider locks in conflicting orders. Source-specific direct adapter tests remain usable outside a coordinated cycle.
+
+Public profile route evidence: https://mdblist.com/@official and https://mdblist.com/@apollocat. Additional API contracts were verified from `https://api.mdblist.com/schema/?format=json`: `/sync/playback` returns an array; expired `/sync/journal` can respond HTTP 409 with `requires_full_sync=true`; per-title histories are capped at 200 plays.

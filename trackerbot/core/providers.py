@@ -44,8 +44,8 @@ BUILTIN_TRACKERS = (
     ProviderManifest("wetrakr", "WeTrakr", True, True, True, True, True, True, True,
                      "https://wetrakr.com/{id}", "https://wetrakr.com/tmdb/{type}/{id}"),
     ProviderManifest("mdblist", "MDBList", True, True, True, True, True, True, True,
-                     "https://mdblist.com/lists/{id}", "https://mdblist.com/{type}/{id}",
-                     ("Experimental: full play snapshots on changed buckets; paused status and completion-only notices pending live validation.",)),
+                     "https://mdblist.com/@{id}", "https://mdblist.com/{type}/{id}",
+                     ("Experimental: targeted journal reconciliation with full snapshot fallback; live mixed-provider grouping and status checks remain required.",)),
 )
 
 

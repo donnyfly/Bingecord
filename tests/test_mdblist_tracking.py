@@ -83,3 +83,17 @@ def test_truncated_play_history_cannot_establish_removals():
         else:
             raise AssertionError('Truncated data is not a complete removal snapshot')
     asyncio.run(run())
+
+
+def test_expired_journal_409_and_playback_array():
+    async def run():
+        client=MDBListTrackingClient('app',session=Session([Response({'requires_full_sync':True,'reason':'sync_window_expired'},status=409)]))
+        try:_=[p async for p in client.journal('token','2026-01-01T00:00:00Z')]
+        except MDBListTrackingError as exc:assert exc.code=='FULL_SYNC_REQUIRED'
+        else:raise AssertionError('Expired journal must request a full snapshot')
+        paused={'id':1,'type':'episode','paused_at':'2026-10-05T00:00:00Z','show':{'ids':{'tmdb':100}}}
+        active={'id':2,'type':'movie','paused_at':None,'movie':{'ids':{'tmdb':200}}}
+        client=MDBListTrackingClient('app',session=Session([Response([paused,active])]))
+        pages=[page async for page in client.paused('token')]
+        assert pages==[{'movies':[],'shows':[paused]}]
+    asyncio.run(run())
