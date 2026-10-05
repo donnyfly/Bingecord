@@ -204,3 +204,18 @@ def test_nested_episode_show_and_explicit_flat_parent_ids():
     assert nested['ids']['tmdb']==100 and nested['episode_ids']['tmdb']==200
     flat=normalize_play({**base,'show_tmdb_id':100,'season_num':1,'episode_num':2},'episode')
     assert flat['ids']=={'tmdb':100}
+
+
+def test_absolute_anime_number_maps_by_episode_identity(tmp_path,monkeypatch):
+    async def run():
+        _,_,app,provider=await setup(tmp_path,monkeypatch)
+        app.is_wetrakr_anime.return_value=True
+        app.tmdb.get_episode_details=AsyncMock(return_value={'air_date':'2023-07-06'})
+        app.tmdb.map_anime_episode_to_tvmaze=AsyncMock(return_value=(2,1))
+        app.tmdb.map_anime_calendar_episode=AsyncMock(return_value=None)
+        play=normalize_play({'play_id':25,'watched_at':STAMP,'show':{'title':'Jujutsu Kaisen','ids':{'tmdb':100,'tvdb':200}},'episode':{'season':1,'number':25}},'episode')
+        mapped=await provider.resolve_play(play)
+        assert (mapped['season'],mapped['episode'])==(2,1)
+        assert (mapped['source_season'],mapped['source_episode'])==(1,25)
+        app.tmdb.map_anime_episode_to_tvmaze.assert_awaited_once_with(200,air_date='2023-07-06',title=None)
+    asyncio.run(run())

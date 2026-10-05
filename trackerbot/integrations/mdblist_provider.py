@@ -48,6 +48,8 @@ def normalize_play(row, kind):
         except (TypeError,ValueError):
             raise MDBListTrackingError(200,'MISSING_EPISODE_COORDINATES') from None
         result['episode_ids']=episode.get('ids') or {}
+        result['episode_title']=episode.get('title') or episode.get('name')
+        result['air_date']=episode.get('air_date') or row.get('air_date')
     return result
 
 
@@ -147,7 +149,15 @@ class MDBListProvider(BaseProvider):
         if anime and kind=='episode':
             tvdb=play['ids'].get('tvdb') or await self.app.tmdb.get_tvdb_id_for_tmdb(play['ids'].get('tmdb'))
             if tvdb:
-                mapped=await self.app.tmdb.map_anime_calendar_episode(tvdb,play['season'],play['episode'])
+                # MDBList may return TMDB's absolute anime numbering. Match the
+                # source episode by air date/title to the shared seasonal layout.
+                air_date=play.get('air_date')
+                if not air_date and play['ids'].get('tmdb'):
+                    episode=await self.app.tmdb.get_episode_details(play['ids']['tmdb'],play['season'],play['episode'])
+                    air_date=(episode or {}).get('air_date')
+                mapped=await self.app.tmdb.map_anime_episode_to_tvmaze(tvdb,air_date=air_date,title=play.get('episode_title'))
+                if not mapped:
+                    mapped=await self.app.tmdb.map_anime_calendar_episode(tvdb,play['season'],play['episode'])
                 if mapped: result['season'],result['episode']=mapped
         native=play['ids'].get('mdblist') or play['ids'].get('tmdb') or play['ids'].get('imdb')
         result['item_key']=f'mdblist:movie:{native}' if kind=='movie' else f'mdblist:episode:{native}:{result["season"]}:{result["episode"]}'

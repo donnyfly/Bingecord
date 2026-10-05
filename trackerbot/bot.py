@@ -3828,7 +3828,8 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
     metadata=await provider.title('movies' if movie else 'shows',ids)
     poster=metadata.get('poster_path')
     if poster:poster='https://image.tmdb.org/t/p/w500'+poster
-    image=None;episode_title=None;rating=None
+    image=None;episode_title=None;rating=None;started=False
+    logo=await (tmdb.get_movie_logo(tmdb_id) if movie else tmdb.get_tv_logo(tmdb_id)) if tmdb_id else None
     previous=await storage.get_provider_plays(uid,provider='mdblist')
     rewatch=any(old.get('item_key')==play['item_key'] and old.get('source_event_id')!=play['source_event_id'] for old in previous)
     if movie:
@@ -3844,7 +3845,7 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
         description=f"{'Rewatched' if rewatch else 'Watched'} {label} of **{title}**"
         if episode_title:description+=f"\n*{episode_title}*"
         if play['season']==1 and play['episode']==1 and not any(old.get('show_id')==play.get('show_id') and 'episode' in old.get('media_type','') for old in previous):
-            description+="\n🆕 Started watching this series."
+            started=True
         ratings={'imdb':rating}
         if last_play:
             last_entry={**entry,'episode_number':last_play['episode']}
@@ -3858,8 +3859,9 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
     if ratings:
         if p.get('show_imdb',True) and ratings.get('imdb') is not None:description+=f"\n⭐ IMDb {ratings['imdb']:.1f}/10"
         if movie and anime and p.get('show_mal',True) and ratings.get('mal') is not None:description+=f" · 🌸 MAL {ratings['mal']:.2f}/10"
+    if started:description+='\n\n🆕 Started watching this series.'
     embed=build_embed(media,description,parse_iso(play['watched_at']),name,member,image,provider.profile_url(account),
-        title=title,title_url=provider.title_url('movies' if movie else 'shows',ids),poster=poster,preferences=p,provider='MDBList')
+        title=title,title_url=provider.title_url('movies' if movie else 'shows',ids),poster=poster,logo=logo,preferences=p,provider='MDBList')
     return await send_embed(ch,embed,'MDBList activity')
 
 
@@ -3871,8 +3873,10 @@ async def deliver_mdblist_status(ch,gid,uid,name,member,provider,account,status,
     if ratings:
         if p.get('show_imdb',True) and ratings.get('imdb') is not None:description+=f"\n⭐ IMDb {ratings['imdb']:.1f}/10"
         if anime and p.get('show_mal',True) and ratings.get('mal') is not None:description+=f" · 🌸 MAL {ratings['mal']:.2f}/10"
+    tmdb_id=item['ids'].get('tmdb')
+    logo=await (tmdb.get_movie_logo(tmdb_id) if movie else tmdb.get_tv_logo(tmdb_id)) if tmdb_id else None
     embed=build_embed(media,description,datetime.now(timezone.utc),name,member,None,provider.profile_url(account),
-        title=item['title'],title_url=item.get('url'),poster=item.get('poster'),preferences=p,status_activity=True,provider='MDBList')
+        title=item['title'],title_url=item.get('url'),poster=item.get('poster'),logo=logo,preferences=p,status_activity=True,provider='MDBList')
     return await send_embed(ch,embed,'MDBList status')
 
 
