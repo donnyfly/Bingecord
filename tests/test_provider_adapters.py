@@ -25,6 +25,8 @@ async def setup_store(tmp_path, monkeypatch, source):
     monkeypatch.setattr(bot, 'storage', store)
     await store.link_user('1', '42', 'token', None, 'viewer', '2026-09-28T00:00:00Z', simkl_account_id=123)
     await store.link_wetrakr('1', '42', {'access_token': 'a', 'refresh_token': 'r'}, {'id': 7, 'username': 'viewer'})
+    if source=='mdblist':
+        await store.link_provider_account('1','42',{'access_token':'a','refresh_token':'r'},{'id':8,'username':'viewer'},provider='mdblist')
     await store.set_activity_provider('1', '42', source)
     return store
 
@@ -46,11 +48,17 @@ def fixtures(monkeypatch):
 
 
 @pytest.mark.parametrize('source,label,title_url', [('simkl', 'SIMKL', 'https://simkl.com/movies/9'),
-                                                    ('wetrakr', 'WeTrakr', 'https://wetrakr.com/tmdb/movie/10')])
+                                                    ('wetrakr', 'WeTrakr', 'https://wetrakr.com/tmdb/movie/10'),
+                                                    ('mdblist', 'MDBList', 'https://mdblist.com/movie/film')])
 def test_selected_source_discovery_cards(tmp_path, monkeypatch, source, label, title_url):
     async def run():
         await setup_store(tmp_path, monkeypatch, source)
         fixtures(monkeypatch)
+        if source=='mdblist':
+            adapter=bot.provider_registry.get('mdblist')
+            item={'title':'Anime Film','media_type':'movies','anime':True,'ids':{'tmdb':10},'genres':['Drama'],'url':title_url}
+            monkeypatch.setattr(adapter,'watching',AsyncMock(return_value=[item]))
+            monkeypatch.setattr(adapter,'planning',AsyncMock(return_value=[item]))
         i = interaction()
         await bot.simkl_watching.callback(i, SimpleNamespace(value='anime'))
         sent = i.followup.send.await_args.kwargs
@@ -154,4 +162,20 @@ def test_native_tracking_rows_keep_every_page(monkeypatch):
         monkeypatch.setattr(bot, 'wetrakr', SimpleNamespace(tracking=tracking))
         monkeypatch.setattr(bot, 'wetrakr_sync', SimpleNamespace(auth=SimpleNamespace(access_token=AsyncMock(return_value='token'))))
         assert await bot.wetrakr_tracking_rows('42', 'watching', ('shows',)) == [('shows', {'id': 1}), ('shows', {'id': 2})]
+    asyncio.run(run())
+
+
+def test_mdblist_shared_challenges_and_mapping_commands(tmp_path,monkeypatch):
+    async def run():
+        await setup_store(tmp_path,monkeypatch,'mdblist')
+        i=interaction()
+        await bot.simkl_challenges.callback(i)
+        embed=i.response.send_message.await_args.kwargs['embed']
+        assert embed.title=='Tracker Challenges'
+        assert [field.name for field in embed.fields]==['Daily','Weekly']
+        i=interaction()
+        await bot.tracker_mapping.callback(i)
+        message=i.response.send_message.await_args.args[0]
+        assert 'Verified cross-tracker matches' in message
+        assert i.response.send_message.await_args.kwargs['ephemeral']
     asyncio.run(run())

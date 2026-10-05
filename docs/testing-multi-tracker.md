@@ -87,3 +87,19 @@ Configure `MDBLIST_CLIENT_ID` (and client secret if required by your registered 
 7. Restart the bot and check again: no replay or duplicate XP. Check `/tracker-status` reports authorization/quota failures without exposing tokens. MDBList paused/completion-only notices remain outside this beta.
 
 Optional read-only audit: `python3 -m trackerbot.validation.live --help`, then use its `--provider mdblist` option with your persisted store and account selection. The audit does not refresh tokens or mutate XP. Share only redacted report/log output when a live payload fails; never share the store or credentials.
+
+## MDBList command audit (2026-10-05)
+
+All 24 registered `/tracker-*` commands have a selected-source or shared-data path; none requires an active SIMKL account for an MDBList member. This is a code/fixture audit, not proof of every live endpoint or account configuration.
+
+| Commands | MDBList path | Validation |
+| --- | --- | --- |
+| link, unlink, source, status, checknow | MDBList OAuth, account-scoped storage and selected-source snapshot poller | Adapter/storage tests; live linking and activity reported successful |
+| watching, random, recommend | Selected adapter's up-next, watchlist and history/exclusions; MDBList destination IDs | Command fixtures for watching/random; adapter fixtures for recommendation inputs; real discovery payloads still need live checks |
+| stats, leaderboard, server-stats, weekly-recap | Selected-source watch projections, shared XP and mixed-server aggregation | Storage/projection and summary tests; live MDBList summary cards still need checking |
+| achievements, challenges, community | Shared ledger/reward events and server progression | Reward/storage tests; challenge command uses neutral branding |
+| mapping, user-reset | Shared occurrence audit; provider-aware server reset and quiet reimport | Command audit and reset/restart/duplicate/removal fixtures |
+| debug | Shared level, rank, prestige and achievement preview; no provider API needed | Existing rendered notification tests |
+| features, timezone, style, style-server, setchannel | Server/member settings independent of provider | Existing settings tests |
+
+MDBList paused/completion-only activity notices and cross-member watched-together delivery are not covered by this command audit. Anime lists and recommendation destinations should be verified with real MDBList up-next/watchlist responses before claiming full parity. Live reward delivery also depends on enabled server feature settings and the bot's channel permissions.

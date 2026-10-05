@@ -2480,7 +2480,7 @@ async def simkl_challenges(i):
             out.append(f'{mark} **{ch["name"]}** — {progress}/{ch["target"]} · +{ch["xp"]:,} XP')
         return "\n".join(out)
 
-    e = discord.Embed(title="SIMKL Challenges", color=0x5865F2)
+    e = discord.Embed(title="Tracker Challenges", color=0x5865F2)
     daily_reset=datetime(today.year,today.month,today.day,tzinfo=timezone.utc)+timedelta(days=1)
     weekly_reset=datetime(monday.year,monday.month,monday.day,tzinfo=timezone.utc)+timedelta(days=7)
     e.add_field(name="Daily", value=f"Resets {discord.utils.format_dt(daily_reset,style='R')} · {discord.utils.format_dt(daily_reset,style='F')}\n"+lines(daily,daily_key,ds,de), inline=False)
