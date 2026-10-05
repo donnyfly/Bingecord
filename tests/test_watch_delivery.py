@@ -80,6 +80,7 @@ def test_movies_and_large_groups():
         item.subject='**Movie**'
         batch.add(item)
     groups=list(batch.groups())
-    assert len(groups)>1
+    assert len(groups)==1
+    assert len(groups[0])==200
     assert sum(map(len,groups))==200
     assert all(len(together_embed(g).description)<=4096 for g in groups)

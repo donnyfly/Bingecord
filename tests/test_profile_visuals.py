@@ -51,7 +51,7 @@ def test_empty_genre_state_and_leaderboard_card():
     board=render_leaderboard_png("Server","XP progression",[
         {"name":"Viewer","prestige":1,"level":9,"xp":500,"total":5},
     ])
-    assert Image.open(board).size==(1080,845)
+    assert Image.open(board).size==(1080,296)
     assert _short(ImageDraw.Draw(Image.new("RGB",(100,100))),0,ImageFont.load_default(),80)=="0"
     for heading in ("weekly recap","server statistics"):
         card=render_summary_png("Server",heading,"This week",[("Episodes",32),("Movies",4)],[("Top watcher","Viewer · 12 watches")])

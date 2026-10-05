@@ -22,6 +22,7 @@ from trackerbot.metadata.mdblist_client import MdbListClient
 from trackerbot.metadata.imdb_client import ImdbClient
 from trackerbot.presentation.recommendation_engine import rating_value, select_sources, source_weight, rank_candidates, recommendation_lineup
 from trackerbot.presentation.recommendation_ui import RecommendationView
+from trackerbot.presentation.member_pages import MemberPages, PAGE_SIZE
 from trackerbot.core.providers import BUILTIN_TRACKERS, ProviderRegistry
 from trackerbot.integrations.provider_adapters import SimklProvider, WeTrakrProvider, matches_filter
 
@@ -2153,15 +2154,17 @@ async def notify_community_rewards(guild_id_value,channel,notification):
     ]
     if not members:
         return True
-    for offset in range(0,len(members),20):
+    for offset in range(0,min(len(members),PAGE_SIZE),PAGE_SIZE):
         lines=[]
-        for uid in members[offset:offset+20]:
+        for uid in members[offset:offset+PAGE_SIZE]:
             if notification["initial"]:
                 watches=notification["contributions"].get(uid,0)
                 lines.append(f"<@{uid}> · {watches:,} {unit}{'s' if watches!=1 else ''} · **+{int(notification['awards'].get(uid,0)):,} XP**")
             else:
                 delta=int(notification["deltas"][uid])
                 lines.append(f"<@{uid}> · **{delta:+,} XP**")
+        if len(members)>PAGE_SIZE:
+            lines.append(f"and {len(members)-PAGE_SIZE:,} others · rewards applied to every qualifying member")
         embed=discord.Embed(
             title="Community Challenge Completed" if notification["initial"] else "Community Challenge Rewards Updated",
             description=(
@@ -2258,6 +2261,8 @@ def build_weekly_recap(rows, start, end, guild_name, period_label, *, with_visua
         for index,(total,uid) in enumerate(user_rows[:5]):
             prefix=medals[index] if index<3 else f"**{index+1}.**"
             lines.append(f"{prefix} <@{uid}> — **{total:,}** watch{'es' if total != 1 else ''}")
+        if len(user_rows)>PAGE_SIZE:
+            lines.append(f"and {len(user_rows)-PAGE_SIZE:,} others")
         description += "\n\n**Top Watchers**\n" + "\n".join(lines)
     else:
         description += "\n\nNo watch activity was recorded during this period."
@@ -2498,7 +2503,9 @@ async def simkl_community(i):
     bar="█"*filled+"░"*(20-filled)
     ends=datetime.fromisoformat(state["end"])
     contributors=sorted(state["contributions"].items(),key=lambda item:(-item[1],item[0]))
-    rows=[f"<@{uid}> · **{count:,}** {unit}{'s' if count!=1 else ''}" for uid,count in contributors[:10]]
+    rows=[f"<@{uid}> · **{count:,}** {unit}{'s' if count!=1 else ''}" for uid,count in contributors[:PAGE_SIZE]]
+    if len(contributors)>PAGE_SIZE:
+        rows.append(f"and {len(contributors)-PAGE_SIZE:,} others")
     description=(f"**{challenge['name']}: {target:,} {unit}s together this week**\n{bar}\n"
                  f"**{total:,} / {target:,}** {unit}s · **{state['pool']:,} XP pool**\n"
                  f"Ends {discord.utils.format_dt(ends,style='R')} · {discord.utils.format_dt(ends,style='F')}\n\n"
@@ -2825,21 +2832,31 @@ async def simkl_leaderboard(i,category: app_commands.Choice[str] | None = None):
     labels={"total":"Total watches","episodes":"Episodes","movies":"Movies","anime":"Anime","xp":"XP progression","level":"Level","prestige":"Prestige"}
     if not progression_enabled:
         values.sort(key=lambda row:(-row[category],row["name"].casefold()))
-        embed=discord.Embed(title=f"{i.guild.name} · {labels[category]}",color=0xEFBE69,
-                            description="\n".join(f"**{n}.** {row['name']} · **{row[category]:,}**" for n,row in enumerate(values[:10],1)))
-        await i.followup.send(embed=embed)
-        return
-    embed=discord.Embed(title=f"{i.guild.name} · {labels[category]}",color=0xEFBE69)
-    embed.set_footer(text="Server watch counts · Global XP and prestige · Top 10")
-    try:
-        image=await asyncio.to_thread(render_leaderboard_png,i.guild.name,labels[category],values[:10])
-        embed.set_image(url="attachment://leaderboard.png")
-        await i.followup.send(embed=embed,file=discord.File(image,filename="leaderboard.png"))
-    except Exception:
-        log.exception("Could not send leaderboard image for guild %s; sending embed fallback.",g)
-        embed.set_image(url=None)
-        embed.description="\n".join(f"**{n}.** <@{r['discord_user_id']}> · P{r['prestige']} L{r['level']} · {r['xp']:,} XP · {r['total']:,} watches" for n,r in enumerate(values[:10],1))
-        await i.followup.send(embed=embed)
+
+    async def render_page(page_rows, start, page, pages):
+        embed=discord.Embed(title=f"{i.guild.name} · {labels[category]}",color=0xEFBE69)
+        embed.set_footer(text=f"Page {page}/{pages} · {len(values):,} members · Server watch counts · Global XP and prestige" if progression_enabled
+                         else f"Page {page}/{pages} · {len(values):,} members · Server watch counts")
+        if progression_enabled:
+            try:
+                image=await asyncio.to_thread(render_leaderboard_png,i.guild.name,labels[category],page_rows,rank_offset=start)
+                embed.set_image(url="attachment://leaderboard.png")
+                return embed,discord.File(image,filename="leaderboard.png")
+            except Exception:
+                log.exception("Could not render leaderboard page for guild %s; using embed fallback.",g)
+        embed.description="\n".join(
+            f"**{n}.** <@{row['discord_user_id']}> · " +
+            (f"P{row['prestige']} L{row['level']} · {row['xp']:,} XP · {row['total']:,} watches"
+             if progression_enabled else f"**{row[category]:,}**")
+            for n,row in enumerate(page_rows,start+1))
+        return embed,None
+
+    view=MemberPages(i.user.id,values,render_page)
+    embed,file=await view.render()
+    kwargs={"embed":embed,"view":view,"allowed_mentions":discord.AllowedMentions.none()}
+    if file:
+        kwargs["file"]=file
+    view.message=await i.followup.send(**kwargs,wait=True)
 
 
 def build_server_stats(rows, guild_name, *, with_visual=False):
@@ -3909,10 +3926,12 @@ async def simkl_setchannel(i,channel:discord.TextChannel=None):
     if not g or not is_admin(i): await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True); return
     target=channel or i.channel; await storage.set_channel(g,target.id); await i.response.send_message(f"Watch activity for this server will now be posted in {target.mention}.",ephemeral=True)
 
-@bot.tree.command(name="tracker-status",description="(Admin) Show this server's configuration and linked accounts.")
-async def simkl_status(i):
+@bot.tree.command(name="tracker-status",description="(Admin) Show server tracker status or check one member.")
+@app_commands.describe(user="Check this member instead of the server summary")
+async def simkl_status(i,user: discord.Member | None = None):
     g=guild_id(i)
     if not g or not is_admin(i): await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True); return
+    await i.response.defer(ephemeral=True)
     d=await storage.get_all()
     sg=(d.get("guilds") or {}).get(str(g),{})
     users=sg.get("users") or {}
@@ -3924,9 +3943,10 @@ async def simkl_status(i):
     guild=i.guild
     current_count=0
     stale_count=0
-    for uid, gu in users.items():
+    status_users={str(user.id):users[str(user.id)]} if user and str(user.id) in users else ({} if user else users)
+    for uid, gu in list(status_users.items())[:PAGE_SIZE]:
         try:
-            member=guild.get_member(int(uid))
+            member=user or guild.get_member(int(uid))
             if member is None:
                 member=await guild.fetch_member(int(uid))
         except (discord.NotFound, discord.Forbidden, ValueError):
@@ -3984,15 +4004,18 @@ async def simkl_status(i):
         import_state="complete" if gu.get("history_seeded") else "pending"
         lines.append(identity+f" · SIMKL token: **{token_state}**"
                      f" · history: **{import_state}** ({watches:,} watches)\n  {health}")
-    linked="\n".join(lines) if lines else "No currently linked accounts."
+    lines=[line[:650] for line in lines]
+    if not user and len(users)>PAGE_SIZE:
+        lines.append(f"and up to {len(users)-PAGE_SIZE:,} other tracking records · use `/tracker-status user:@username` to check a member")
+    linked="\n".join(lines) if lines else ("This member has no tracker linked in this server." if user else "No currently linked accounts.")
     tracking_total=len(users)
     stale_note=f" · **{stale_count} stale record(s)**" if stale_count else ""
-    await i.response.send_message(
+    await i.followup.send(embed=discord.Embed(title="Tracker Status",color=0x5865F2,description=
         f"**Posting channel:** {text}\n"
         f"**Poll interval:** every {POLL_INTERVAL_MINUTES} minute(s)\n"
-        f"**Tracking records:** {tracking_total} · **Current members:** {current_count}{stale_note}\n\n"
-        f"**Linked accounts in this server:**\n{linked}",
-        ephemeral=True,
+        f"**Tracking records:** {tracking_total} · **Members checked:** {current_count}{stale_note}\n\n"
+        f"**{'Selected member' if user else 'Linked accounts (up to five)'}:**\n{linked}"),
+        ephemeral=True,allowed_mentions=discord.AllowedMentions.none(),
     )
 
 @bot.tree.command(name="tracker-checknow",description="(Admin) Check selected tracker activity in this server.")

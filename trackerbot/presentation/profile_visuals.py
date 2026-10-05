@@ -167,8 +167,8 @@ def render_profile_png(name, data):
     return output
 
 
-def render_leaderboard_png(guild_name, category, rows):
-    image=Image.new("RGB",(1080,845),BG)
+def render_leaderboard_png(guild_name, category, rows, *, rank_offset=0):
+    image=Image.new("RGB",(1080,235+min(len(rows),10)*61),BG)
     draw=ImageDraw.Draw(image)
     accent=(239,190,105)
     draw.text((48,35),"TRACKER / LEADERBOARD",font=_font(19),fill=accent)
@@ -181,7 +181,7 @@ def render_leaderboard_png(guild_name, category, rows):
     for index,row in enumerate(rows[:10]):
         y=207+index*61
         _panel(draw,(48,y,1032,y+54))
-        draw.text((67,y+10),f"{index+1:02}",font=_font(25),fill=accent if index<3 else MUTED)
+        draw.text((67,y+10),f"{rank_offset+index+1:02}",font=_font(25),fill=accent if rank_offset+index<3 else MUTED)
         draw.text((125,y+11),_short(draw,row["name"],_font(22),335),font=_font(22),fill=WHITE)
         draw.text((488,y+13),f"P{row['prestige']}  /  L{row['level']}",font=_font(19),fill=WHITE)
         draw.text((755,y+7),f"{row['xp']:,} XP",font=_font(19),fill=accent)

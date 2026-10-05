@@ -385,7 +385,7 @@ def test_consolidated_xp_leaderboard_orders_prestige_then_xp(monkeypatch):
         ]
         monkeypatch.setattr(bot.storage,"get_guild_leaderboard_snapshot",AsyncMock(return_value=rows))
         captured=[]
-        def render(guild,category,values):
+        def render(guild,category,values,**kwargs):
             captured.extend(row["discord_user_id"] for row in values)
             from io import BytesIO
             return BytesIO(b"preview")

@@ -65,3 +65,10 @@ Delivery still uses the native sync/checkpoint engines behind the adapter interf
 4. Repeat the existing cross-source duplicate and both-provider removal tests. New compact `show_ids` should support mapping even when a metadata response omits a parent external ID.
 
 Series-level watched rollups alone currently do not produce completion notifications, because the API now uses those rows for both completion and caught-up settings. Individual watch embeds remain enabled.
+
+## Server member lists
+
+- `/tracker-status` remains an admin-only, ephemeral server summary. It displays at most five tracking records. `/tracker-status user:@username` inspects just that member; an unlinked member produces an explicit empty result.
+- `/tracker-leaderboard` displays five members per page with Previous/Next buttons controlled by the command author. Rank numbers continue across pages, and both image and fallback text paths paginate.
+- Community summaries, community reward announcements and watched-together mentions display at most five members followed by an additional-member count. Weekly recaps retain their top-five summary. Every member still participates in accounting, delivery acknowledgement and rewards.
+- Live check: use a server with more than five linked members, inspect a member outside the summary, browse all leaderboard pages, and confirm group reward/watch totals include members omitted from display.

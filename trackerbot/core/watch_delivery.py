@@ -26,7 +26,12 @@ class WatchActivity:
 
 
 def mentions(users):
-    names = [f'<@{user}>' for user in users]
+    users = list(dict.fromkeys(users))
+    names = [f'<@{user}>' for user in users[:5]]
+    if len(users)>5:
+        names.append(f'{len(users)-5:,} others')
+    if not names:
+        return ''
     return names[0] if len(names) == 1 else ', '.join(names[:-1]) + ' and ' + names[-1]
 
 
