@@ -4,7 +4,7 @@ This is the standing specification for future integrations. A request such as â€
 
 ## Before writing code
 
-Read `docs/multi-tracker-design.md`, `trackerbot/core/providers.py`, `trackerbot/core/tracker_mapping.py`, and the current `/tracker-*` handlers. Verify X's official authentication, watch history, changes/removals, pagination, rate limits, statuses, rewatches, and list endpoints. Record API evidence and unavailable capabilities here. A title/ratings metadata service without user watch history is an enrichment source, not a watch tracker.
+Read `docs/multi-tracker-design.md`, `trackerbot/core/providers.py`, `trackerbot/core/tracker_mapping.py`, and the current `/bingecord â€¦` handlers. Verify X's official authentication, watch history, changes/removals, pagination, rate limits, statuses, rewatches, and list endpoints. Record API evidence and unavailable capabilities here. A title/ratings metadata service without user watch history is an enrichment source, not a watch tracker.
 
 ## Implementation contract
 
@@ -12,7 +12,7 @@ Read `docs/multi-tracker-design.md`, `trackerbot/core/providers.py`, `trackerbot
 2. Return `WatchChange` objects with stable provider/account/event/change IDs, observed and watched timestamps, movie or episode kind, scoped title IDs, and source episode coordinates. Validate pages with `ProviderPage.validate`. Preserve raw source IDs for audit and removals. Never substitute another provider's API when a capability is unavailable.
 3. Import history silently and checkpoint it durably before live posts. Make duplicate pages and retries idempotent. Treat edits, removals, rewatches, journal expiry, and a switch during activity as first-class cases. Maintain each account's cursor independently.
 4. Feed observations to the shared mapping and occurrence ledger. Prefer verified media-scoped TMDB/TVDB/IMDb/MAL IDs and explicit episode crosswalks. Preserve uncertain matches separately; never merge on a conflicting ID. One watch earns XP once. A deletion revokes XP only if no linked provider still confirms that occurrence.
-5. Wire the same commands and cards as SIMKL: `/tracker-link`, `unlink`, `source`, `status`, `checknow`, `stats`, `achievements`, `challenges`, `community`, `leaderboard`, `server-stats`, `weekly-recap`, `watching`, `random`, `recommend`, `style`, `style-server`, `features`, `setchannel`, `timezone`, `user-reset`, and `debug`. Source-specific titles, profiles, poster/backdrop, IMDb/MAL ratings, first-episode text, anime film counts, ranges, and shared progression notifications must render correctly.
+5. Wire the same commands and cards as SIMKL: `/bingecord link`, `unlink`, `source`, `status`, `checknow`, `stats`, `achievements`, `challenges`, `community`, `leaderboard`, `server-stats`, `weekly-recap`, `watching`, `random`, `recommend`, `style`, `style-server`, `features`, `setchannel`, `timezone`, `user-reset`, and `debug`. Source-specific titles, profiles, poster/backdrop, IMDb/MAL ratings, first-episode text, anime film counts, ranges, and shared progression notifications must render correctly.
 6. Test a provider-only user, a SIMKL-only user, a mixed server, linked accounts with overlapping watches and rewatches, switches in both directions, deletions from either account, reimports, invalid tokens, failed posts, rate limits, and normal and anime movies/episodes. Assert persisted XP and statistics as well as card output. Run `python3 -m pytest -q`.
 
 ## Release gate

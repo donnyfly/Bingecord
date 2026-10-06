@@ -107,7 +107,7 @@ class TmdbClient:
             self._session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=15),
                 headers={
-                    "User-Agent": "watchrelaybot/1.0.0",
+                    "User-Agent": "bingecord/1.0.0",
                     "Accept": "application/json",
                 },
             )

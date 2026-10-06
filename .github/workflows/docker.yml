@@ -10,7 +10,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: donnyfly/watchrelaybot
+  IMAGE_NAME: donnyfly/bingecord
 
 jobs:
   build-and-push:
@@ -40,6 +40,6 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ github.ref_type == 'tag' && format('ghcr.io/donnyfly/watchrelaybot:{0}', github.ref_name) || (github.ref_name == 'experimental' && 'ghcr.io/donnyfly/watchrelaybot:experimental' || 'ghcr.io/donnyfly/watchrelaybot:test') }}
-            ${{ github.ref_type == 'tag' && contains(github.ref_name, '-') && 'ghcr.io/donnyfly/watchrelaybot:nightly' || format('ghcr.io/donnyfly/watchrelaybot:{0}', github.sha) }}
-            ${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') && 'ghcr.io/donnyfly/watchrelaybot:latest' || '' }}
+            ${{ github.ref_type == 'tag' && format('ghcr.io/donnyfly/bingecord:{0}', github.ref_name) || (github.ref_name == 'experimental' && 'ghcr.io/donnyfly/bingecord:experimental' || 'ghcr.io/donnyfly/bingecord:test') }}
+            ${{ github.ref_type == 'tag' && contains(github.ref_name, '-') && 'ghcr.io/donnyfly/bingecord:nightly' || format('ghcr.io/donnyfly/bingecord:{0}', github.sha) }}
+            ${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') && 'ghcr.io/donnyfly/bingecord:latest' || '' }}

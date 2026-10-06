@@ -1,1 +1,1 @@
-"""WatchRelayBot application package."""
+"""Bingecord application package."""

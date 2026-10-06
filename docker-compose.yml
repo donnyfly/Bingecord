@@ -1,7 +1,7 @@
 services:
-  watchrelaybot:
-    image: ghcr.io/donnyfly/watchrelaybot:experimental
-    container_name: watchrelaybot
+  bingecord:
+    image: ghcr.io/donnyfly/bingecord:experimental
+    container_name: bingecord
     restart: unless-stopped
     env_file:
       - .env

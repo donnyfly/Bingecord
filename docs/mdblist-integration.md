@@ -15,11 +15,11 @@ MDBList is now a **selectable experimental tracker**. Device linking, token refr
 
 ## Configure and test
 
-1. Register your own MDBList OAuth application with device authorization enabled. Set `MDBLIST_CLIENT_ID` on the bot host; set `MDBLIST_CLIENT_SECRET` only if your application requires it. Members authorize through `/tracker-link provider:MDBList`, without supplying API keys. Keep host credentials and persisted member tokens private.
-2. Deploy the experimental image after its build succeeds, preserving the existing data volume. Select `/tracker-source provider:MDBList`, then `/tracker-checknow`. The first complete import is quiet.
+1. Register your own MDBList OAuth application with device authorization enabled. Set `MDBLIST_CLIENT_ID` on the bot host; set `MDBLIST_CLIENT_SECRET` only if your application requires it. Members authorize through `/bingecord link provider:MDBList`, without supplying API keys. Keep host credentials and persisted member tokens private.
+2. Deploy the experimental image after its build succeeds, preserving the existing data volume. Select `/bingecord source provider:MDBList`, then `/bingecord checknow`. The first complete import is quiet.
 3. Mark one new episode or movie in MDBList and check again. Verify the activity, selected-source statistics and shared progression. Follow `docs/testing-multi-tracker.md` for duplicate, removal and discovery checks.
 
-Polling follows the bot's shared polling interval. Unchanged activity stamps skip expensive history/list reads. Watched/journal changes invalidate affected title histories. Up to four titles use bounded per-title histories; larger batches or truncated histories use complete paginated movie/episode snapshots. Planned, dropped and paused lists are read only when their own invalidation stamps change. Expired journals reimport quietly. Quota errors pause that account until its retry delay expires and are visible in `/tracker-status`. The journal is an invalidation feed, never a source of invented play IDs or watch XP.
+Polling follows the bot's shared polling interval. Unchanged activity stamps skip expensive history/list reads. Watched/journal changes invalidate affected title histories. Up to four titles use bounded per-title histories; larger batches or truncated histories use complete paginated movie/episode snapshots. Planned, dropped and paused lists are read only when their own invalidation stamps change. Expired journals reimport quietly. Quota errors pause that account until its retry delay expires and are visible in `/bingecord status`. The journal is an invalidation feed, never a source of invented play IDs or watch XP.
 
 ## Authentication
 

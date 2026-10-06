@@ -81,7 +81,7 @@ def test_failures_accumulate_then_skip_and_dm_only_once(monkeypatch,tmp_path):
         assert valid_token.await_count==bot.MAX_CONSECUTIVE_FAILURES
         user.send.assert_awaited_once()
         assert 'Test Server' in user.send.await_args.args[0]
-        assert '/tracker-link' in user.send.await_args.args[0]
+        assert '/bingecord link' in user.send.await_args.args[0]
         assert health(store,BROKEN)['failure_notified'] is True
 
         # The flag survives a restart, so a reboot doesn't re-send the DM.

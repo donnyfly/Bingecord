@@ -38,7 +38,7 @@ class ImdbClient:
             self._session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=300),
                 headers={
-                    "User-Agent": "watchrelaybot/1.0.0",
+                    "User-Agent": "bingecord/1.0.0",
                     "Accept": "*/*",
                 },
             )

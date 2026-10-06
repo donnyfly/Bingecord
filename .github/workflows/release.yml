@@ -18,7 +18,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: donnyfly/watchrelaybot
+  IMAGE_NAME: donnyfly/bingecord
 
 jobs:
   release:
@@ -54,15 +54,15 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/donnyfly/watchrelaybot:${{ inputs.version }}
-            ghcr.io/donnyfly/watchrelaybot:${{ github.sha }}
-            ghcr.io/donnyfly/watchrelaybot:latest
+            ghcr.io/donnyfly/bingecord:${{ inputs.version }}
+            ghcr.io/donnyfly/bingecord:${{ github.sha }}
+            ghcr.io/donnyfly/bingecord:latest
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.version }}
-          name: WatchRelayBot ${{ inputs.version }}
+          name: Bingecord ${{ inputs.version }}
           target_commitish: main
           body: ${{ inputs.description }}
           generate_release_notes: true

@@ -8,12 +8,18 @@ from test_notification_preview import bot
 
 def test_command_names_are_general_and_link_routes_to_selected_provider(monkeypatch):
     async def run():
-        names = {command.name for command in bot.bot.tree.get_commands()}
-        assert "tracker-link" in names
-        assert "tracker-unlink" in names
-        assert "tracker-setchannel" in names
-        assert "tracker-checknow" in names
-        assert not any(name.startswith(("simkl-", "wetrakr-")) for name in names)
+        commands = bot.bot.tree.get_commands()
+        assert [command.name for command in commands] == ["bingecord"]
+        group = commands[0]
+        expected = {"link", "unlink", "source", "status", "checknow", "stats", "mapping",
+                    "achievements", "challenges", "leaderboard", "server-stats", "community",
+                    "watching", "random", "recommend", "style", "user-reset", "setchannel",
+                    "style-server", "features", "timezone", "weekly-recap", "debug"}
+        assert {command.name for command in group.commands} == expected
+        assert all(command.qualified_name == "bingecord " + command.name for command in group.commands)
+        payload = group.to_dict(bot.bot.tree)
+        assert payload["name"] == "bingecord" and len(payload["options"]) == 23
+        assert all(option["type"] == 1 for option in payload["options"])
         simkl = AsyncMock()
         wetrakr = AsyncMock()
         monkeypatch.setattr(bot, "simkl_link", simkl)

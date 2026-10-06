@@ -23,7 +23,7 @@ class MemberPages(discord.ui.View):
     async def interaction_check(self, interaction):
         if interaction.user.id == self.owner_id:
             return True
-        await interaction.response.send_message('Run /tracker-leaderboard to browse your own pages.', ephemeral=True)
+        await interaction.response.send_message('Run /bingecord leaderboard to browse your own pages.', ephemeral=True)
         return False
 
     async def render(self):

@@ -1,4 +1,4 @@
-# WatchRelayBot
+# Bingecord
 
 A self-hosted Discord bot that turns your **SIMKL, WeTrakr, or MDBList watch activity** into clean Discord updates for **TV shows, anime, and movies**.
 
@@ -33,47 +33,47 @@ It supports automatic provider syncing, episode grouping, artwork and ratings, p
 
 | Command | Who can use it | Purpose |
 | --- | --- | --- |
-| `/tracker-link` | Everyone | Link a SIMKL, WeTrakr or MDBList account |
-| `/tracker-source` | Everyone | Select the linked account used in this server |
-| `/tracker-mapping` | Everyone | Privately inspect cross-provider matches and possible duplicate awards |
-| `/tracker-unlink` | Everyone | Unlink a provider account |
-| `/tracker-stats` | Everyone | View your watch/progression profile |
-| `/tracker-achievements` | Everyone | View achievements and XP rewards |
-| `/tracker-challenges` | Everyone | View daily and weekly challenges |
-| `/tracker-leaderboard` | Everyone | View server leaderboards |
-| `/tracker-server-stats` | Everyone | View server watch statistics |
-| `/tracker-community` | Everyone | View the rotating weekly cooperative watch goal |
-| `/tracker-watching` | Everyone | View your selected account's watching list and next episodes where available |
-| `/tracker-random` | Everyone | Pick from your selected account's planned list |
-| `/tracker-recommend` | Everyone | Get recommendations using selected-source history and exclusions |
-| `/tracker-style` | Everyone | Change personal activity-post preferences |
-| `/tracker-user-reset` | Everyone | Reset your tracking history for the current server |
-| `/tracker-setchannel` | Manage Server | Choose the activity channel |
-| `/tracker-style-server` | Manage Server | Set server-wide style defaults |
-| `/tracker-features` | Manage Server | Enable or disable optional feature groups |
-| `/tracker-timezone` | Manage Server | Set the server timezone |
-| `/tracker-weekly-recap` | Manage Server | Post/test a weekly recap |
-| `/tracker-status` | Manage Server | View configuration and sync health; optionally check `user: @username` |
-| `/tracker-checknow` | Manage Server | Check selected providers immediately |
-| `/tracker-debug` | Manage Server | Preview progression notifications without changing XP |
+| `/bingecord link` | Everyone | Link a SIMKL, WeTrakr or MDBList account |
+| `/bingecord source` | Everyone | Select the linked account used in this server |
+| `/bingecord mapping` | Everyone | Privately inspect cross-provider matches and possible duplicate awards |
+| `/bingecord unlink` | Everyone | Unlink a provider account |
+| `/bingecord stats` | Everyone | View your watch/progression profile |
+| `/bingecord achievements` | Everyone | View achievements and XP rewards |
+| `/bingecord challenges` | Everyone | View daily and weekly challenges |
+| `/bingecord leaderboard` | Everyone | View server leaderboards |
+| `/bingecord server-stats` | Everyone | View server watch statistics |
+| `/bingecord community` | Everyone | View the rotating weekly cooperative watch goal |
+| `/bingecord watching` | Everyone | View your selected account's watching list and next episodes where available |
+| `/bingecord random` | Everyone | Pick from your selected account's planned list |
+| `/bingecord recommend` | Everyone | Get recommendations using selected-source history and exclusions |
+| `/bingecord style` | Everyone | Change personal activity-post preferences |
+| `/bingecord user-reset` | Everyone | Reset your tracking history for the current server |
+| `/bingecord setchannel` | Manage Server | Choose the activity channel |
+| `/bingecord style-server` | Manage Server | Set server-wide style defaults |
+| `/bingecord features` | Manage Server | Enable or disable optional feature groups |
+| `/bingecord timezone` | Manage Server | Set the server timezone |
+| `/bingecord weekly-recap` | Manage Server | Post/test a weekly recap |
+| `/bingecord status` | Manage Server | View configuration and sync health; optionally check `user: @username` |
+| `/bingecord checknow` | Manage Server | Check selected providers immediately |
+| `/bingecord debug` | Manage Server | Preview progression notifications without changing XP |
 
 ### Prefer the simple tracker experience?
 
 Admins can use:
 
 ```text
-/tracker-features preset: Activity only
+/bingecord features preset: Activity only
 ```
 
 This keeps the core activity tracker while disabling optional progression, achievements, challenges, recaps, community goals, leaderboards, and similar extras.
 
-**Watched Together:** matching movies, episodes, or identical episode ranges in the same channel combine when each watch timestamp is within 30 minutes of the others. Mentions do not ping. Everyone keeps their own XP and history. Matching requires a shared title identity and the same movie or episode/range in the same server. Partial-overlap ranges remain separate. Group descriptions display up to five member mentions. Admins can toggle it with `/tracker-features feature: Watched Together enabled: False`. Watches beginning at S1E1, including ranges starting there, include “🆕 Started watching this series.” on the last line after the ratings and a blank line.
+**Watched Together:** matching movies, episodes, or identical episode ranges in the same channel combine when each watch timestamp is within 30 minutes of the others. Mentions do not ping. Everyone keeps their own XP and history. Matching requires a shared title identity and the same movie or episode/range in the same server. Partial-overlap ranges remain separate. Group descriptions display up to five member mentions. Admins can toggle it with `/bingecord features feature: Watched Together enabled: False`. Watches beginning at S1E1, including ranges starting there, include “🆕 Started watching this series.” on the last line after the ratings and a blank line.
 
 
 Use:
 
 ```text
-/tracker-features preset: All features
+/bingecord features preset: All features
 ```
 
 to restore the full experience.
@@ -111,7 +111,7 @@ Allow **View Channel, Send Messages, Embed Links, Attach Files and Read Message 
 
 Create an application in the SIMKL developer settings and copy its **Client ID**.
 
-Individual Discord users will connect their own SIMKL accounts later with `/tracker-link provider: SIMKL`.
+Individual Discord users will connect their own SIMKL accounts later with `/bingecord link provider: SIMKL`.
 
 Leave `SIMKL_CLIENT_ID` blank to disable SIMKL. It is not required for WeTrakr or MDBList. Each provider is enabled independently by its own host credentials.
 
@@ -127,8 +127,8 @@ The optional `MDBLIST_API_KEY` supplies additional IMDb/MyAnimeList ratings. It 
 
 1. Register or obtain a WeTrakr application key through its developer/API access process. See the [official API documentation](https://api.wetrakr.com/#/authentication) for authentication requirements.
 2. Set `WETRAKR_API_KEY` in the host's `.env`. This is the application's client ID, sent as the WeTrakr API key; it is not a member's account token.
-3. Start or recreate the bot. Each member runs `/tracker-link provider: WeTrakr`, follows the private authorization instructions, and approves with their own WeTrakr account.
-4. Select `/tracker-source provider: WeTrakr`.
+3. Start or recreate the bot. Each member runs `/bingecord link provider: WeTrakr`, follows the private authorization instructions, and approves with their own WeTrakr account.
+4. Select `/bingecord source provider: WeTrakr`.
 
 The host configures the application once. Members do not need individual API keys. Private account data uses their separate OAuth tokens.
 
@@ -136,8 +136,8 @@ The host configures the application once. Members do not need individual API key
 
 1. Register your own OAuth application at [MDBList Developer](https://mdblist.com/developer/), with device authorization available and read access for the bot.
 2. Set `MDBLIST_CLIENT_ID` in `.env`. Set `MDBLIST_CLIENT_SECRET` only if your registered application requires it for refresh.
-3. Start or recreate the bot. Each member runs `/tracker-link provider: MDBList` and approves the device authorization with their own MDBList account.
-4. Select `/tracker-source provider: MDBList`.
+3. Start or recreate the bot. Each member runs `/bingecord link provider: MDBList` and approves the device authorization with their own MDBList account.
+4. Select `/bingecord source provider: MDBList`.
 
 `MDBLIST_CLIENT_ID` enables **tracking**. `MDBLIST_API_KEY` enables optional **ratings enrichment**. They serve different purposes; the ratings key does not replace member OAuth authorization. See [MDBList integration details](docs/mdblist-integration.md) for provider limitations and validation.
 
@@ -146,17 +146,17 @@ Enable any combination of SIMKL, WeTrakr and MDBList. None is the primary provid
 ### 5. Create the Docker setup
 
 ```bash
-mkdir -p ~/watchrelaybot
-cd ~/watchrelaybot
+mkdir -p ~/bingecord
+cd ~/bingecord
 ```
 
 Create `docker-compose.yml`:
 
 ```yaml
 services:
-  watchrelaybot:
-    image: ghcr.io/donnyfly/watchrelaybot:experimental
-    container_name: watchrelaybot
+  bingecord:
+    image: ghcr.io/donnyfly/bingecord:experimental
+    container_name: bingecord
     restart: unless-stopped
     env_file:
       - .env
@@ -200,11 +200,11 @@ docker compose logs -f
 
 Once the bot is online:
 
-1. Run `/tracker-setchannel` to choose where activity should be posted.
-2. Each member runs `/tracker-link` for their provider, then `/tracker-source` to select it.
-3. An admin runs `/tracker-checknow` to import the initial history quietly.
-4. Mark a new watch after that import. Wait for scheduled polling or run `/tracker-checknow` again.
-5. Use `/tracker-stats` and `/tracker-status` to verify the selected account and sync health.
+1. Run `/bingecord setchannel` to choose where activity should be posted.
+2. Each member runs `/bingecord link` for their provider, then `/bingecord source` to select it.
+3. An admin runs `/bingecord checknow` to import the initial history quietly.
+4. Mark a new watch after that import. Wait for scheduled polling or run `/bingecord checknow` again.
+5. Use `/bingecord stats` and `/bingecord status` to verify the selected account and sync health.
 
 ---
 
@@ -213,8 +213,8 @@ Once the bot is online:
 Docker is recommended, but the bot can also run directly with Python 3.13, matching the Docker image.
 
 ```bash
-git clone --branch experimental https://github.com/donnyfly/WatchRelayBot.git
-cd WatchRelayBot
+git clone --branch experimental https://github.com/donnyfly/Bingecord.git
+cd Bingecord
 
 python -m venv venv
 ```
@@ -269,18 +269,18 @@ The main settings live in `.env`. Use `.env.example` as the complete template; l
 | `DISCORD_DEV_GUILD_ID` | No | — | Optional immediate development-server command sync |
 | `IMDB_RATINGS_DB_PATH` | No | `data/imdb_ratings.db` | Generated episode-rating database path |
 
-Server admins can override the timezone with `/tracker-timezone`.
+Server admins can override the timezone with `/bingecord timezone`.
 
 ## Activity customization
 
-Users can run `/tracker-style` to choose:
+Users can run `/bingecord style` to choose:
 
 - **Rich** or **Minimal** embeds
 - Automatic, poster, or backdrop artwork
 - Short or detailed activity text
 - Rating visibility
 
-Server admins can set defaults with `/tracker-style-server`. Personal settings override server defaults.
+Server admins can set defaults with `/bingecord style-server`. Personal settings override server defaults.
 
 Titles and activity headers link to the provider entry and member profile when available. Status activities use posters. Episode watches can use episode stills/backdrops and show individual episode IMDb ratings. They omit MAL and do not substitute the whole show's rating for a missing episode rating. Anime movies and anime status activities can show title-level IMDb and MAL scores.
 
@@ -296,8 +296,8 @@ When enabled, the bot adds a progression layer on top of normal watch tracking.
 - Movies award watch XP
 - Achievements and challenges can award bonus XP
 - Users progress through levels, ranks, and prestige tiers
-- `/tracker-stats` shows watch history, XP, streaks, achievements, recent activity, and more
-- `/tracker-leaderboard` compares server members across watch/progression categories
+- `/bingecord stats` shows watch history, XP, streaks, achievements, recent activity, and more
+- `/bingecord leaderboard` compares server members across watch/progression categories
 - Weekly recaps summarize recent server activity
 
 These systems are optional. Servers that only want activity posts can use the **Activity only** feature preset.
@@ -310,18 +310,18 @@ XP, levels, ranks and prestige remain shared for the Discord user. Initial impor
 
 A shared watch ledger matches confirmed cross-provider occurrences using catalog IDs and episode identities. The same matched watch earns XP once; genuine rewatches remain separate. Uncertain matches remain separate for review. A watch removal reverses its contribution only when no other imported provider observation supports it; inactive-account changes become known when that source syncs again.
 
-`/tracker-mapping` privately shows matches, unpaired watches and possible duplicate awards without changing XP. `/tracker-user-reset` resets this server's imported tracking state and achievements while retaining links, global XP and personal style; subsequent history import is quiet.
+`/bingecord mapping` privately shows matches, unpaired watches and possible duplicate awards without changing XP. `/bingecord user-reset` resets this server's imported tracking state and achievements while retaining links, global XP and personal style; subsequent history import is quiet.
 
 ---
 
 # Updating
 
-When moving to the renamed project, stop the existing Compose deployment before replacing its configuration so two containers do not poll the same accounts. Keep the same `./data:/app/data` mount and existing `.env`. The new image is `ghcr.io/donnyfly/watchrelaybot:experimental`; pull it after the build finishes. The Discord application's display name can be changed separately in the Developer Portal.
+When moving to the renamed project, stop the existing Compose deployment before replacing its configuration so two containers do not poll the same accounts. Keep the same `./data:/app/data` mount and existing `.env`. The new image is `ghcr.io/donnyfly/bingecord:experimental`; pull it after the build finishes. The Discord application's display name can be changed separately in the Developer Portal.
 
 ## Docker Compose
 
 ```bash
-cd ~/watchrelaybot
+cd ~/bingecord
 docker compose pull
 docker compose up -d
 ```
@@ -335,7 +335,7 @@ python -m pip install -r requirements.txt
 
 Then restart the bot.
 
-Keep your existing data directory when upgrading from SIMKL-only releases. Back it up before a migration; do not unlink accounts or delete state as a routine update step. The unified commands use `/tracker-*` names. After editing `.env`, recreate Docker containers with `docker compose up -d --force-recreate` to load the new values.
+Keep your existing data directory when upgrading from SIMKL-only releases. Back it up before a migration; do not unlink accounts or delete state as a routine update step. The unified commands use `/bingecord …` names. After editing `.env`, recreate Docker containers with `docker compose up -d --force-recreate` to load the new values.
 
 When this branch is promoted and a stable image containing multi-tracker support is published, switch the image tag to `:latest` and remove `--branch experimental` from new source installations.
 
@@ -363,12 +363,12 @@ The IMDb ratings database can be rebuilt automatically and does not normally nee
 
 Check that:
 
-1. You linked your account with `/tracker-link` and selected it with `/tracker-source`.
-2. An activity channel is configured with `/tracker-setchannel`.
+1. You linked your account with `/bingecord link` and selected it with `/bingecord source`.
+2. An activity channel is configured with `/bingecord setchannel`.
 3. The bot can send messages in that channel.
 4. The initial quiet import has finished and there is new provider activity to post.
 
-Admins can run `/tracker-checknow` and `/tracker-status` for an immediate check. Use `/tracker-status user: @username` to inspect one member; server results are paginated in groups of five.
+Admins can run `/bingecord checknow` and `/bingecord status` for an immediate check. Use `/bingecord status user: @username` to inspect one member; server results are paginated in groups of five.
 
 A “no active SIMKL targets” log is normal when everyone selects another provider. Provider quota delays and authorization errors appear in sync health. WeTrakr journal entries can take several seconds to become visible; a check immediately after marking a watch may return zero, with the next poll picking it up.
 
@@ -423,4 +423,4 @@ The shared interface supports adding providers, but each adapter still needs aut
 
 # License
 
-WatchRelayBot is licensed under the MIT License.
+Bingecord is licensed under the MIT License.

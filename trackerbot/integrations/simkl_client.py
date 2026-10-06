@@ -18,7 +18,7 @@ import aiohttp
 
 API_BASE = "https://api.simkl.com"
 
-APP_NAME = "watchrelaybot"
+APP_NAME = "bingecord"
 APP_VERSION = "1.0.0"
 
 USER_AGENT = f"{APP_NAME}/{APP_VERSION}"

@@ -54,7 +54,7 @@ except ZoneInfoNotFoundError:
     DEFAULT_TIMEZONE_NAME = "UTC"
 POLL_CONCURRENCY=positive_int_env("POLL_CONCURRENCY", 5)
 # After this many consecutive failed polls, the automatic background poll stops
-# calling SIMKL for that guild-user until a manual /tracker-checknow succeeds or
+# calling SIMKL for that guild-user until a manual /bingecord checknow succeeds or
 # the user relinks. This avoids burning an API call every cycle on a revoked token.
 MAX_CONSECUTIVE_FAILURES=positive_int_env("MAX_CONSECUTIVE_FAILURES", 5)
 HISTORY_BACKFILL_CONCURRENCY=positive_int_env("HISTORY_BACKFILL_CONCURRENCY", 2)
@@ -89,11 +89,11 @@ FEATURE_LABELS={"watched_together":"Watched Together", "progression":"Levels, ra
                 "challenges":"Daily and weekly challenges", "community":"Community challenges",
                 "weekly_recaps":"Weekly recaps", "leaderboards":"Leaderboards",
                 "statistics":"Statistics cards", "discovery":"Watching, random picks and recommendations"}
-COMMAND_FEATURES={"tracker-challenges":"challenges","tracker-community":"community",
-                  "tracker-achievements":"achievements","tracker-weekly-recap":"weekly_recaps",
-                  "tracker-leaderboard":"leaderboards","tracker-stats":"statistics",
-                  "tracker-server-stats":"statistics","tracker-watching":"discovery",
-                  "tracker-random":"discovery","tracker-recommend":"discovery"}
+COMMAND_FEATURES={"challenges":"challenges","community":"community",
+                  "achievements":"achievements","weekly-recap":"weekly_recaps",
+                  "leaderboard":"leaderboards","stats":"statistics",
+                  "server-stats":"statistics","watching":"discovery",
+                  "random":"discovery","recommend":"discovery"}
 
 async def feature_enabled(g, feature):
     features=await storage.get_features(g)
@@ -101,18 +101,22 @@ async def feature_enabled(g, feature):
 
 class FeatureCommandTree(app_commands.CommandTree):
     async def interaction_check(self, interaction):
-        name=(interaction.data or {}).get("name")
+        data=interaction.data or {}
+        name=data.get("name")
+        if name=="bingecord":
+            options=data.get("options") or []
+            name=options[0].get("name") if options else None
         feature=COMMAND_FEATURES.get(name)
         if feature and interaction.guild_id and not await feature_enabled(interaction.guild_id,feature):
             if interaction.type == discord.InteractionType.autocomplete:
                 await interaction.response.autocomplete([])
                 return False
             await interaction.response.send_message(
-                "This feature is disabled in this server. An admin can enable it with `/tracker-features`.",ephemeral=True)
+                "This feature is disabled in this server. An admin can enable it with `/bingecord features`.",ephemeral=True)
             return False
         return True
 
-class SimklBot(discord.Client):
+class BingecordBot(discord.Client):
     def __init__(self):
         super().__init__(intents=discord.Intents.default()); self.tree=FeatureCommandTree(self)
     async def setup_hook(self):
@@ -155,7 +159,9 @@ class SimklBot(discord.Client):
             except Exception:
                 pass
         await super().close()
-bot=SimklBot()
+bot=BingecordBot()
+bingecord_commands=app_commands.Group(name="bingecord",description="Track watches, discover titles and view your progression.")
+bot.tree.add_command(bingecord_commands)
 
 def to_iso(dt): return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 def now_iso(): return to_iso(datetime.now(timezone.utc))
@@ -424,8 +430,8 @@ def build_embed(t,desc,ts,name,member,image,profile,title=None,title_url=None,po
     color,label=MEDIA_STYLES[t]; p={"style":"rich","artwork":"auto","activity_text":"short","show_imdb":True,"show_mal":True}; p.update(preferences or {})
     e=discord.Embed(title=title,url=title_url,description=desc,color=color,timestamp=ts)
     e.set_author(name=f"{name}'s Activity",url=profile,icon_url=member.display_avatar.url if member else None)
-    # Status activities always use the title poster. /tracker-style and
-    # /tracker-style-server only control watch activities.
+    # Status activities always use the title poster. /bingecord style and
+    # /bingecord style-server only control watch activities.
     if status_activity:
         selected=poster
     elif p["artwork"]=="poster":
@@ -892,11 +898,11 @@ async def notify_poll_failures_exceeded(g,uid,guild_user):
     server=f"**{guild.name}**" if guild else "a server"
     last_error=(guild_user or {}).get("last_error") or "unknown error"
     message=(
-        f"Hi! WatchRelayBot in {server} has failed to check your SIMKL account "
+        f"Hi! Bingecord in {server} has failed to check your SIMKL account "
         f"{MAX_CONSECUTIVE_FAILURES} times in a row, so automatic tracking there is paused.\n"
         f"Last error: `{str(last_error)[:300]}`\n\n"
         "Your SIMKL link probably needs attention (for example, access was revoked). "
-        "Run `/tracker-link` in that server to reconnect; tracking resumes automatically after a successful check."
+        "Run `/bingecord link` in that server to reconnect; tracking resumes automatically after a successful check."
     )
     try:
         user=bot.get_user(int(uid)) or await bot.fetch_user(int(uid))
@@ -1122,7 +1128,7 @@ async def notify_history_backfill(guild_id_value, uid, xp_earned, progression, c
         ),
         color=0x5865F2,
     )
-    embed.set_footer(text="WatchRelayBot · SIMKL Historical XP Backfill")
+    embed.set_footer(text="Bingecord · SIMKL Historical XP Backfill")
 
     try:
         await channel.send(
@@ -1360,7 +1366,7 @@ async def poll_all(g=None, force_reconcile=False, ignore_failure_threshold=False
     """Poll linked users.
 
     The automatic background poll skips guild-users that have reached
-    MAX_CONSECUTIVE_FAILURES. Manual checks (/tracker-checknow) pass
+    MAX_CONSECUTIVE_FAILURES. Manual checks (/bingecord checknow) pass
     ignore_failure_threshold=True so they always attempt every target.
     """
     if not SIMKL_CLIENT_ID:
@@ -1449,7 +1455,7 @@ async def poll_all(g=None, force_reconcile=False, ignore_failure_threshold=False
         for channel_id,(gid,error) in channel_errors.items():
             log.warning("Couldn't access channel %s for guild %s: %s",channel_id,gid,error)
         if skipped:
-            log.info("Skipped %d target(s) with %d+ consecutive poll failures; use /tracker-checknow to retry.",
+            log.info("Skipped %d target(s) with %d+ consecutive poll failures; use /bingecord checknow to retry.",
                      len(skipped),MAX_CONSECUTIVE_FAILURES)
         # Queued counts only become successful after Discord delivery.
         posted=sum(results) if not batch.activities else (
@@ -2359,7 +2365,7 @@ RATING_CHOICES=[app_commands.Choice(name="Show",value="true"),app_commands.Choic
 
 NOT_ADMIN_MESSAGE="You need the Manage Server permission to do that."
 
-@bot.tree.command(name="tracker-features",description="(Admin) Configure optional features or use activity-only mode.")
+@bingecord_commands.command(name="features",description="(Admin) Configure optional features or use activity-only mode.")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.choices(
     preset=[app_commands.Choice(name="Activity only",value="classic"),app_commands.Choice(name="All features",value="all")],
@@ -2385,7 +2391,7 @@ async def simkl_features(i, preset: app_commands.Choice[str] | None = None,
         "\n\nActivity tracking stays available. Challenges and community goals also require progression. "
         "Disabled commands may still appear in Discord's menu. Existing history and global XP are retained and watch XP continues syncing so shared accounts stay consistent.",ephemeral=True)
 
-@bot.tree.command(name="tracker-timezone",description="(Admin) Set or view the server timezone.")
+@bingecord_commands.command(name="timezone",description="(Admin) Set or view the server timezone.")
 @app_commands.describe(timezone="IANA timezone such as Asia/Singapore, or 'reset' to use the environment default")
 async def simkl_timezone(i, timezone: str | None = None):
     g=guild_id(i)
@@ -2434,7 +2440,7 @@ WEEKLY_PERIOD_CHOICES=[
     app_commands.Choice(name="Previous week",value="previous"),
 ]
 
-@bot.tree.command(name="tracker-weekly-recap",description="(Admin) Post a weekly tracker watch recap.")
+@bingecord_commands.command(name="weekly-recap",description="(Admin) Post a weekly tracker watch recap.")
 @app_commands.choices(period=WEEKLY_PERIOD_CHOICES)
 @app_commands.describe(period="Choose the week to generate; use this to test without waiting for the weekly schedule")
 async def simkl_weekly_recap(i, period: app_commands.Choice[str] | None = None):
@@ -2446,7 +2452,7 @@ async def simkl_weekly_recap(i, period: app_commands.Choice[str] | None = None):
         return
     channel_id=await storage.get_channel(g)
     if channel_id is None:
-        await i.response.send_message("No posting channel is configured for this server. Use `/tracker-setchannel` first.",ephemeral=True)
+        await i.response.send_message("No posting channel is configured for this server. Use `/bingecord setchannel` first.",ephemeral=True)
         return
     channel=bot.get_channel(int(channel_id))
     if channel is None:
@@ -2469,7 +2475,7 @@ async def achievement_autocomplete(i, current: str):
 
 
 
-@bot.tree.command(name="tracker-challenges", description="View your current daily and weekly watch challenges.")
+@bingecord_commands.command(name="challenges", description="View your current daily and weekly watch challenges.")
 async def simkl_challenges(i):
     uid = str(i.user.id)
     today = datetime.now(timezone.utc).date()
@@ -2503,7 +2509,7 @@ async def simkl_challenges(i):
     await i.response.send_message(embed=e)
 
 
-@bot.tree.command(name="tracker-community", description="View this server's rotating weekly watch challenge.")
+@bingecord_commands.command(name="community", description="View this server's rotating weekly watch challenge.")
 async def simkl_community(i):
     g=guild_id(i)
     if not g:
@@ -2538,7 +2544,7 @@ async def simkl_community(i):
     e.set_footer(text="Server-local weekly goal · bonus XP is added to normal watch XP")
     await i.followup.send(embed=e,allowed_mentions=discord.AllowedMentions.none())
 
-@bot.tree.command(name="tracker-user-reset",description="Reset your tracker history for this server.")
+@bingecord_commands.command(name="user-reset",description="Reset your tracker history for this server.")
 @app_commands.describe(confirm="Confirm that you want to reset your server-local tracking state")
 async def simkl_user_reset(i, confirm: bool = False):
     g=guild_id(i)
@@ -2556,7 +2562,7 @@ async def simkl_user_reset(i, confirm: bool = False):
         linked = False
     if not linked:
         await i.response.send_message(
-            "You don't have a linked account for your selected source. Use /tracker-link first.",
+            "You don't have a linked account for your selected source. Use /bingecord link first.",
             ephemeral=True,
         )
         return
@@ -2566,7 +2572,7 @@ async def simkl_user_reset(i, confirm: bool = False):
             f"This resets your {adapter.manifest.display_name} server tracking state "
             "and achievements. Your linked accounts, shared XP and personal style stay intact. "
             "The selected account's history will be imported again without old activity posts. "
-            "Run /tracker-user-reset with confirm set to True to continue.",
+            "Run /bingecord user-reset with confirm set to True to continue.",
             ephemeral=True,
         )
         return
@@ -2586,7 +2592,7 @@ async def simkl_user_reset(i, confirm: bool = False):
     )
 
 
-@bot.tree.command(name="tracker-achievements",description="Show your tracker achievements.")
+@bingecord_commands.command(name="achievements",description="Show your tracker achievements.")
 @app_commands.describe(user="Optional server member to view")
 async def simkl_achievements(i,user: discord.Member | None = None):
     g=guild_id(i)
@@ -2642,7 +2648,7 @@ async def simkl_achievements(i,user: discord.Member | None = None):
     await i.response.send_message(embeds=embeds)
 
 
-@bot.tree.command(name="tracker-debug",description="(Admin) Privately preview progression notifications without changing XP.")
+@bingecord_commands.command(name="debug",description="(Admin) Privately preview progression notifications without changing XP.")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.choices(
     feature=[
@@ -2777,7 +2783,7 @@ async def show_profile(i,user):
         await i.followup.send(embed=embed)
 
 
-@bot.tree.command(name="tracker-mapping",description="Privately inspect how your linked trackers match watches and XP.")
+@bingecord_commands.command(name="mapping",description="Privately inspect how your linked trackers match watches and XP.")
 async def tracker_mapping(i):
     g=guild_id(i)
     if not g:
@@ -2786,7 +2792,7 @@ async def tracker_mapping(i):
     uid=str(i.user.id)
     user=await storage.get_user(uid)
     if not user:
-        await i.response.send_message("Link a tracking account with /tracker-link first.",ephemeral=True)
+        await i.response.send_message("Link a tracking account with /bingecord link first.",ephemeral=True)
         return
     audit=await storage.get_mapping_audit(uid)
     await i.response.send_message(
@@ -2801,7 +2807,7 @@ async def tracker_mapping(i):
     )
 
 
-@bot.tree.command(name="tracker-stats",description="Show a visual tracker profile with watches, XP, and achievements.")
+@bingecord_commands.command(name="stats",description="Show a visual tracker profile with watches, XP, and achievements.")
 @app_commands.describe(user="Optional server member to view")
 async def simkl_stats(i,user: discord.Member | None = None):
     await show_profile(i,user)
@@ -2817,7 +2823,7 @@ LEADERBOARD_CHOICES=[
     app_commands.Choice(name="Prestige",value="prestige"),
 ]
 
-@bot.tree.command(name="tracker-leaderboard",description="Show the server's tracker watch leaderboard.")
+@bingecord_commands.command(name="leaderboard",description="Show the server's tracker watch leaderboard.")
 @app_commands.choices(category=LEADERBOARD_CHOICES)
 async def simkl_leaderboard(i,category: app_commands.Choice[str] | None = None):
     g=guild_id(i)
@@ -2992,7 +2998,7 @@ def build_server_stats(rows, guild_name, *, with_visual=False):
     return embed
 
 
-@bot.tree.command(name="tracker-server-stats",description="Show this server's tracker watch statistics.")
+@bingecord_commands.command(name="server-stats",description="Show this server's tracker watch statistics.")
 async def simkl_server_stats(i):
     g=guild_id(i)
     if not g:
@@ -3202,8 +3208,8 @@ async def wetrakr_tracking_rows(uid, status, targets):
     return rows
 
 
-@bot.tree.command(
-    name="tracker-watching",
+@bingecord_commands.command(
+    name="watching",
     description="Show what you're currently watching on your active tracker.",
 )
 @app_commands.choices(type=WATCHING_TYPE_CHOICES)
@@ -3442,8 +3448,8 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
     return rank_candidates(list(candidates.values()))
 
 
-@bot.tree.command(
-    name="tracker-recommend",
+@bingecord_commands.command(
+    name="recommend",
     description="Get personalized recommendations based on your active tracker history.",
 )
 @app_commands.choices(type=[
@@ -3587,7 +3593,7 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
 
     except SimklAuthError:
         await i.followup.send(
-            "Your SIMKL authentication is no longer valid. Please use /tracker-link again.",
+            "Your SIMKL authentication is no longer valid. Please use /bingecord link again.",
             ephemeral=True,
         )
     except Exception as exc:
@@ -3601,7 +3607,7 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
         )
 
 
-@bot.tree.command(name="tracker-random",description="Pick something random from your active tracker's plan to watch list.")
+@bingecord_commands.command(name="random",description="Pick something random from your active tracker's plan to watch list.")
 @app_commands.choices(type=RANDOM_TYPE_CHOICES,genre=RANDOM_GENRE_CHOICES)
 @app_commands.describe(
     type="Choose what kind of title to pick.",
@@ -3687,7 +3693,7 @@ async def simkl_link(i):
             except SimklAuthError: break
             except Exception: log.warning("PIN poll failed.",exc_info=True); continue
             if tokens: break
-        if not tokens: await i.followup.send("The SIMKL linking code expired or was cancelled. Run /tracker-link again.",ephemeral=True); return
+        if not tokens: await i.followup.send("The SIMKL linking code expired or was cancelled. Run /bingecord link again.",ephemeral=True); return
         access=tokens["access_token"]; refresh=tokens.get("refresh_token"); exp=calculate_token_expiry(tokens.get("expires_in")); aid=None
         try:
             settings=await simkl.get_user_settings(access); aid=account_id_from_settings(settings); username=settings.get("user",{}).get("name") or settings.get("account",{}).get("id") or "SIMKL user"
@@ -3705,13 +3711,13 @@ async def simkl_link(i):
             total=int(stats.get("episodes_watched",0))+int(stats.get("movies_watched",0))
             level=level_progress(int(progression.get("xp",0)))[0]
             await i.followup.send(
-                f"History import complete: **{total:,} watches**, **{int(progression.get('xp',0)):,} XP**, Level **{level}**. View `/tracker-stats` for details.",
+                f"History import complete: **{total:,} watches**, **{int(progression.get('xp',0)):,} XP**, Level **{level}**. View `/bingecord stats` for details.",
                 ephemeral=True,
             )
         except Exception:
             log.exception("Initial history import failed for user %s in guild %s; polling will retry.",uid,g)
             await i.followup.send(
-                "Your SIMKL account is linked, but the history import did not finish. The bot will retry automatically; an admin can also run `/tracker-checknow`.",
+                "Your SIMKL account is linked, but the history import did not finish. The bot will retry automatically; an admin can also run `/bingecord checknow`.",
                 ephemeral=True,
             )
     finally: linking_users.discard(key)
@@ -3763,7 +3769,7 @@ async def wetrakr_link(i):
                     break
                 raise
         if not tokens:
-            await i.followup.send("WeTrakr approval expired or was cancelled. Run `/tracker-link` with provider WeTrakr again.",ephemeral=True)
+            await i.followup.send("WeTrakr approval expired or was cancelled. Run `/bingecord link` with provider WeTrakr again.",ephemeral=True)
             return
         account=await wetrakr.account(tokens["access_token"])
         if not isinstance(account,dict) or not account.get("id"):
@@ -3773,7 +3779,7 @@ async def wetrakr_link(i):
         name=account.get("username") or (account.get("info") or {}).get("username") or "WeTrakr user"
         await i.followup.send(
             f"Linked WeTrakr as **{discord.utils.escape_markdown(str(name))}**. "
-            "Use `/tracker-source` to choose which service posts activity in this server. "
+            "Use `/bingecord source` to choose which service posts activity in this server. "
             "Your existing history will import quietly, then new watches can post and earn shared XP.",
             ephemeral=True)
     except Exception as exc:
@@ -3824,12 +3830,12 @@ async def mdblist_link(i):
                 if exc.code in {'expired_token','access_denied'}:break
                 raise
         if not tokens:
-            await i.followup.send("MDBList approval expired or was cancelled. Run `/tracker-link` again.",ephemeral=True);return
+            await i.followup.send("MDBList approval expired or was cancelled. Run `/bingecord link` again.",ephemeral=True);return
         account=await mdblist_tracking.account(tokens['access_token'])
         tokens['expires_at']=(datetime.now(timezone.utc)+timedelta(seconds=int(tokens.get('expires_in',2592000)))).isoformat()
         if not tokens.get('refresh_token'):raise ValueError('Missing renewable account token')
         await storage.link_provider_account(g,uid,tokens,{'id':account['user_id'],'username':account['username']},provider='mdblist')
-        await i.followup.send(f"Linked MDBList as **{discord.utils.escape_markdown(account['username'])}**. Select MDBList with `/tracker-source`; the first check imports history quietly.",ephemeral=True)
+        await i.followup.send(f"Linked MDBList as **{discord.utils.escape_markdown(account['username'])}**. Select MDBList with `/bingecord source`; the first check imports history quietly.",ephemeral=True)
     except Exception as exc:
         log.warning("MDBList link failed user %s guild %s: %s",uid,g,getattr(exc,'code',type(exc).__name__))
         await i.followup.send("MDBList linking failed. Check the registered OAuth app/device grant and try again. No watch history was imported.",ephemeral=True)
@@ -3920,7 +3926,7 @@ TRACKER_CHOICES=[app_commands.Choice(name=manifest.display_name,value=manifest.n
                  for manifest in BUILTIN_TRACKERS]
 
 
-@bot.tree.command(name="tracker-link", description="Link your SIMKL, WeTrakr or MDBList account in this server.")
+@bingecord_commands.command(name="link", description="Link your SIMKL, WeTrakr or MDBList account in this server.")
 @app_commands.choices(provider=TRACKER_CHOICES)
 async def tracker_link(i, provider: app_commands.Choice[str]):
     handler = provider_registry.get(provider.value).authorize if provider.value in {m.name for m in provider_registry.manifests()} else None
@@ -3930,7 +3936,7 @@ async def tracker_link(i, provider: app_commands.Choice[str]):
     await handler(i)
 
 
-@bot.tree.command(name="tracker-unlink", description="Unlink a tracker account from this server.")
+@bingecord_commands.command(name="unlink", description="Unlink a tracker account from this server.")
 @app_commands.choices(provider=TRACKER_CHOICES)
 async def tracker_unlink(i, provider: app_commands.Choice[str]):
     handler = provider_registry.get(provider.value).unlink if provider.value in {m.name for m in provider_registry.manifests()} else None
@@ -3940,7 +3946,7 @@ async def tracker_unlink(i, provider: app_commands.Choice[str]):
     await handler(i)
 
 
-@bot.tree.command(name="tracker-source", description="Choose which linked tracker posts your activity in this server.")
+@bingecord_commands.command(name="source", description="Choose which linked tracker posts your activity in this server.")
 @app_commands.choices(provider=TRACKER_CHOICES)
 async def tracker_source(i, provider: app_commands.Choice[str] | None = None):
     g=guild_id(i)
@@ -3973,7 +3979,7 @@ async def tracker_source(i, provider: app_commands.Choice[str] | None = None):
     await i.response.send_message(f"Activity source set to **{provider.name}**. {detail}",ephemeral=True)
 
 
-@bot.tree.command(name="tracker-style",description="Choose your personal style for episode and movie watch activities.")
+@bingecord_commands.command(name="style",description="Choose your personal style for episode and movie watch activities.")
 @app_commands.choices(style=STYLE_CHOICES,artwork=ARTWORK_CHOICES,activity_text=TEXT_CHOICES,episode_format=EPISODE_FORMAT_CHOICES,show_imdb=RATING_CHOICES,show_mal=RATING_CHOICES)
 @app_commands.describe(reset="Reset your personal choices and follow the server default")
 async def simkl_style(i,style: app_commands.Choice[str] | None = None,artwork: app_commands.Choice[str] | None = None,activity_text: app_commands.Choice[str] | None = None,episode_format: app_commands.Choice[str] | None = None,show_imdb: app_commands.Choice[str] | None = None,show_mal: app_commands.Choice[str] | None = None,reset: bool | None = None):
@@ -4021,7 +4027,7 @@ async def simkl_style(i,style: app_commands.Choice[str] | None = None,artwork: a
         ephemeral=True,
     )
 
-@bot.tree.command(name="tracker-style-server",description="(Admin) Set the default style for episode and movie watch activities.")
+@bingecord_commands.command(name="style-server",description="(Admin) Set the default style for episode and movie watch activities.")
 @app_commands.choices(style=STYLE_CHOICES,artwork=ARTWORK_CHOICES,activity_text=TEXT_CHOICES,episode_format=EPISODE_FORMAT_CHOICES,show_imdb=RATING_CHOICES,show_mal=RATING_CHOICES)
 @app_commands.describe(reset="Reset all server style options to the default settings",force_override="Force everyone to use the server settings, ignoring personal choices")
 async def simkl_style_server(i,style: app_commands.Choice[str] | None = None,artwork: app_commands.Choice[str] | None = None,activity_text: app_commands.Choice[str] | None = None,episode_format: app_commands.Choice[str] | None = None,show_imdb: app_commands.Choice[str] | None = None,show_mal: app_commands.Choice[str] | None = None,force_override: bool | None = None,reset: bool | None = None):
@@ -4071,13 +4077,13 @@ async def simkl_style_server(i,style: app_commands.Choice[str] | None = None,art
     forced=await storage.get_server_embed_force_override(g)
     await i.response.send_message(settings_text(p,"Server default updated:",forced),ephemeral=True)
 
-@bot.tree.command(name="tracker-setchannel",description="(Admin) Set the channel where this server's watch activity is posted.")
+@bingecord_commands.command(name="setchannel",description="(Admin) Set the channel where this server's watch activity is posted.")
 async def simkl_setchannel(i,channel:discord.TextChannel=None):
     g=guild_id(i)
     if not g or not is_admin(i): await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True); return
     target=channel or i.channel; await storage.set_channel(g,target.id); await i.response.send_message(f"Watch activity for this server will now be posted in {target.mention}.",ephemeral=True)
 
-@bot.tree.command(name="tracker-status",description="(Admin) Show server tracker status or check one member.")
+@bingecord_commands.command(name="status",description="(Admin) Show server tracker status or check one member.")
 @app_commands.describe(user="Check this member instead of the server summary")
 async def simkl_status(i,user: discord.Member | None = None):
     g=guild_id(i)
@@ -4144,7 +4150,7 @@ async def simkl_status(i,user: discord.Member | None = None):
         last_error=gu.get("last_error")
         failures=max(int(gu.get("consecutive_failures",0) or 0),0)
         if failures>=MAX_CONSECUTIVE_FAILURES:
-            health_state=f"paused · {failures} consecutive failure(s); automatic polling skipped until `/tracker-checknow` succeeds or the user relinks"
+            health_state=f"paused · {failures} consecutive failure(s); automatic polling skipped until `/bingecord checknow` succeeds or the user relinks"
         elif failures:
             health_state=f"degraded · {failures} consecutive failure(s)"
         elif last_success:
@@ -4163,7 +4169,7 @@ async def simkl_status(i,user: discord.Member | None = None):
                      f" · history: **{import_state}** ({watches:,} watches)\n  {health}")
     lines=[line[:650] for line in lines]
     if not user and len(users)>PAGE_SIZE:
-        lines.append(f"and up to {len(users)-PAGE_SIZE:,} other tracking records · use `/tracker-status user:@username` to check a member")
+        lines.append(f"and up to {len(users)-PAGE_SIZE:,} other tracking records · use `/bingecord status user:@username` to check a member")
     linked="\n".join(lines) if lines else ("This member has no tracker linked in this server." if user else "No currently linked accounts.")
     tracking_total=len(users)
     stale_note=f" · **{stale_count} stale record(s)**" if stale_count else ""
@@ -4175,13 +4181,13 @@ async def simkl_status(i,user: discord.Member | None = None):
         ephemeral=True,allowed_mentions=discord.AllowedMentions.none(),
     )
 
-@bot.tree.command(name="tracker-checknow",description="(Admin) Check selected tracker activity in this server.")
+@bingecord_commands.command(name="checknow",description="(Admin) Check selected tracker activity in this server.")
 async def tracker_checknow(i):
     global last_checknow_at
     g=guild_id(i)
     if not g or not is_admin(i): await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True); return
     if time.monotonic()-last_checknow_at<CHECKNOW_COOLDOWN_SECONDS:
-        await i.response.send_message("Please wait before using /tracker-checknow again.",ephemeral=True); return
+        await i.response.send_message("Please wait before using /bingecord checknow again.",ephemeral=True); return
     if poll_lock.locked() or wetrakr_poll_lock.locked() or provider_registry.get("mdblist").lock.locked():
         await i.response.send_message("An activity check is already running.",ephemeral=True); return
     last_checknow_at=time.monotonic()
@@ -4204,7 +4210,7 @@ async def on_ready():
         await storage.ensure_guild(g.id)
     poll_task = getattr(bot, "_poll_task", None)
     if poll_task is None or poll_task.done():
-        bot._poll_task = bot.loop.create_task(polling_loop(), name="tracker-polling")
+        bot._poll_task = bot.loop.create_task(polling_loop(), name="polling")
 
 async def polling_loop():
     await bot.wait_until_ready()
@@ -4241,11 +4247,11 @@ provider_registry.register(MDBListProvider(_sys.modules[__name__]))
 async def selected_provider(guild_id, uid):
     source = await storage.get_activity_provider(guild_id, uid)
     if not source:
-        raise ValueError('Link your selected tracker in this server with /tracker-link first.')
+        raise ValueError('Link your selected tracker in this server with /bingecord link first.')
     provider = provider_registry.get(source)
     targets = await storage.get_provider_targets(source, str(guild_id), active_only=True)
     if not any(str(target['discord_user_id']) == str(uid) for target in targets):
-        raise ValueError('Link your selected tracker in this server with /tracker-link first.')
+        raise ValueError('Link your selected tracker in this server with /bingecord link first.')
     return provider, await provider.link(str(uid))
 
 

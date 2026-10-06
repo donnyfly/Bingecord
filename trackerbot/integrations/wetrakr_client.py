@@ -82,7 +82,7 @@ class WeTrakrClient:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
         headers = {"wetrakr-api-key": self.app_key, "wetrakr-api-version": "1",
-                   "User-Agent": "WatchRelayBot/experimental"}
+                   "User-Agent": "Bingecord/experimental"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
         if body is not None:
