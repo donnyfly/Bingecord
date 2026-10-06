@@ -1,4 +1,4 @@
-# SIMKLTrackerBot
+# WatchRelayBot
 
 A self-hosted Discord bot that turns your **SIMKL, WeTrakr, or MDBList watch activity** into clean Discord updates for **TV shows, anime, and movies**.
 
@@ -146,17 +146,17 @@ Enable any combination of SIMKL, WeTrakr and MDBList. None is the primary provid
 ### 5. Create the Docker setup
 
 ```bash
-mkdir -p ~/simkl-discord-bot
-cd ~/simkl-discord-bot
+mkdir -p ~/watchrelaybot
+cd ~/watchrelaybot
 ```
 
 Create `docker-compose.yml`:
 
 ```yaml
 services:
-  simkltrackerbot:
-    image: ghcr.io/donnyfly/simkltrackerbot:experimental
-    container_name: simkltrackerbot
+  watchrelaybot:
+    image: ghcr.io/donnyfly/watchrelaybot:experimental
+    container_name: watchrelaybot
     restart: unless-stopped
     env_file:
       - .env
@@ -213,8 +213,8 @@ Once the bot is online:
 Docker is recommended, but the bot can also run directly with Python 3.13, matching the Docker image.
 
 ```bash
-git clone --branch experimental https://github.com/donnyfly/SIMKLTrackerBot.git
-cd SIMKLTrackerBot
+git clone --branch experimental https://github.com/donnyfly/WatchRelayBot.git
+cd WatchRelayBot
 
 python -m venv venv
 ```
@@ -316,10 +316,12 @@ A shared watch ledger matches confirmed cross-provider occurrences using catalog
 
 # Updating
 
+When moving to the renamed project, stop the existing Compose deployment before replacing its configuration so two containers do not poll the same accounts. Keep the same `./data:/app/data` mount and existing `.env`. The new image is `ghcr.io/donnyfly/watchrelaybot:experimental`; pull it after the build finishes. The Discord application's display name can be changed separately in the Developer Portal.
+
 ## Docker Compose
 
 ```bash
-cd ~/simkl-discord-bot
+cd ~/watchrelaybot
 docker compose pull
 docker compose up -d
 ```
@@ -421,4 +423,4 @@ The shared interface supports adding providers, but each adapter still needs aut
 
 # License
 
-SIMKLTrackerBot is licensed under the MIT License.
+WatchRelayBot is licensed under the MIT License.

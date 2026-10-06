@@ -892,7 +892,7 @@ async def notify_poll_failures_exceeded(g,uid,guild_user):
     server=f"**{guild.name}**" if guild else "a server"
     last_error=(guild_user or {}).get("last_error") or "unknown error"
     message=(
-        f"Hi! The SIMKL tracker in {server} has failed to check your SIMKL account "
+        f"Hi! WatchRelayBot in {server} has failed to check your SIMKL account "
         f"{MAX_CONSECUTIVE_FAILURES} times in a row, so automatic tracking there is paused.\n"
         f"Last error: `{str(last_error)[:300]}`\n\n"
         "Your SIMKL link probably needs attention (for example, access was revoked). "
@@ -1122,7 +1122,7 @@ async def notify_history_backfill(guild_id_value, uid, xp_earned, progression, c
         ),
         color=0x5865F2,
     )
-    embed.set_footer(text="SIMKL Tracker · Historical XP Backfill")
+    embed.set_footer(text="WatchRelayBot · SIMKL Historical XP Backfill")
 
     try:
         await channel.send(

@@ -35,7 +35,7 @@ class MDBListTrackingClient:
     async def _request(self, method, path, token=None, *, params=None, form=None, allow_list=False):
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
-        headers={'Accept':'application/json','User-Agent':'SIMKLTrackerBot/experimental'}
+        headers={'Accept':'application/json','User-Agent':'WatchRelayBot/experimental'}
         if token:
             headers['Authorization']=f'Bearer {token}'
         self.request_counts[path] += 1

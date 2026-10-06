@@ -1,4 +1,4 @@
-"""Achievement definitions for SIMKLTrackerBot.
+"""Achievement definitions for WatchRelayBot.
 
 Achievements are intentionally challenging so higher tiers feel meaningful
 rather than being awarded for routine activity.

@@ -18,7 +18,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: donnyfly/simkltrackerbot
+  IMAGE_NAME: donnyfly/watchrelaybot
 
 jobs:
   release:
@@ -54,15 +54,15 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/donnyfly/simkltrackerbot:${{ inputs.version }}
-            ghcr.io/donnyfly/simkltrackerbot:${{ github.sha }}
-            ghcr.io/donnyfly/simkltrackerbot:latest
+            ghcr.io/donnyfly/watchrelaybot:${{ inputs.version }}
+            ghcr.io/donnyfly/watchrelaybot:${{ github.sha }}
+            ghcr.io/donnyfly/watchrelaybot:latest
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.version }}
-          name: SIMKLTrackerBot ${{ inputs.version }}
+          name: WatchRelayBot ${{ inputs.version }}
           target_commitish: main
           body: ${{ inputs.description }}
           generate_release_notes: true

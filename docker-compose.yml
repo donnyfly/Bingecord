@@ -1,7 +1,7 @@
 services:
-  simkltrackerbot:
-    image: ghcr.io/donnyfly/simkltrackerbot:experimental
-    container_name: simkltrackerbot
+  watchrelaybot:
+    image: ghcr.io/donnyfly/watchrelaybot:experimental
+    container_name: watchrelaybot
     restart: unless-stopped
     env_file:
       - .env

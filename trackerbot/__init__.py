@@ -1,1 +1,1 @@
-"""SIMKLTrackerBot application package."""
+"""WatchRelayBot application package."""

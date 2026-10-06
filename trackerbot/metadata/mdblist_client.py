@@ -35,7 +35,7 @@ class MdbListClient:
             self._session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=15),
                 headers={
-                    "User-Agent": "simkl-tracker-bot/1.0.0",
+                    "User-Agent": "watchrelaybot/1.0.0",
                     "Accept": "application/json",
                 },
             )
