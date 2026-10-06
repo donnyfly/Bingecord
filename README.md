@@ -90,7 +90,7 @@ You will need:
 
 - A machine that can run Docker
 - A Discord bot token
-- A SIMKL Client ID
+- A SIMKL Client ID if you want SIMKL tracking
 - A TMDB API key
 - A WeTrakr application key if you want WeTrakr tracking
 - An MDBList OAuth Client ID if you want MDBList tracking
@@ -107,13 +107,13 @@ When inviting it to your server, include:
 
 Allow **View Channel, Send Messages, Embed Links, Attach Files and Read Message History** in the channel you choose.
 
-### 2. Create a SIMKL application
+### 2. Enable SIMKL tracking (optional)
 
 Create an application in the SIMKL developer settings and copy its **Client ID**.
 
 Individual Discord users will connect their own SIMKL accounts later with `/tracker-link provider: SIMKL`.
 
-**Current startup requirement:** `SIMKL_CLIENT_ID` is still required even if your members use only WeTrakr or MDBList.
+Leave `SIMKL_CLIENT_ID` blank to disable SIMKL. It is not required for WeTrakr or MDBList. Each provider is enabled independently by its own host credentials.
 
 ### 3. Get a TMDB API key
 
@@ -141,7 +141,7 @@ The host configures the application once. Members do not need individual API key
 
 `MDBLIST_CLIENT_ID` enables **tracking**. `MDBLIST_API_KEY` enables optional **ratings enrichment**. They serve different purposes; the ratings key does not replace member OAuth authorization. See [MDBList integration details](docs/mdblist-integration.md) for provider limitations and validation.
 
-You can enable either additional provider or both. Leave unused provider credentials blank.
+Enable any combination of SIMKL, WeTrakr and MDBList. None is the primary provider; leave unused provider credentials blank.
 
 ### 5. Create the Docker setup
 
@@ -168,9 +168,9 @@ Create `.env`:
 
 ```env
 DISCORD_BOT_TOKEN=your_discord_bot_token_here
-SIMKL_CLIENT_ID=your_simkl_client_id_here
 TMDB_API_KEY=your_tmdb_api_key_here
-# Optional additional trackers:
+# Optional tracking providers (configure only those you use):
+SIMKL_CLIENT_ID=
 WETRAKR_API_KEY=
 MDBLIST_CLIENT_ID=
 MDBLIST_CLIENT_SECRET=
@@ -256,7 +256,7 @@ The main settings live in `.env`. Use `.env.example` as the complete template; l
 | Setting | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `DISCORD_BOT_TOKEN` | Yes | — | Discord bot token |
-| `SIMKL_CLIENT_ID` | Yes | — | SIMKL application Client ID |
+| `SIMKL_CLIENT_ID` | For SIMKL | — | Host application ID enabling SIMKL tracking |
 | `TMDB_API_KEY` | Yes | — | Artwork and media metadata |
 | `WETRAKR_API_KEY` | For WeTrakr | — | Host application key for WeTrakr tracking |
 | `MDBLIST_CLIENT_ID` | For MDBList tracking | — | Host OAuth application ID |

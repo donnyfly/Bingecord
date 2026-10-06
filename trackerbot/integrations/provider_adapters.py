@@ -35,6 +35,8 @@ class SimklProvider(BaseProvider):
         super().__init__(app, BUILTIN_TRACKERS[0])
 
     async def link(self, discord_user_id):
+        if not self.app.SIMKL_CLIENT_ID:
+            raise ValueError("SIMKL is not configured on this bot. Set SIMKL_CLIENT_ID first.")
         user = await self.app.storage.get_user(discord_user_id)
         if not user or not user.get('simkl_token'):
             raise ValueError('Link SIMKL first')

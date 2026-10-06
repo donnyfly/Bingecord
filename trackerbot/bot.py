@@ -41,7 +41,7 @@ def positive_int_env(name, default, minimum=1):
     return value
 
 DISCORD_BOT_TOKEN=os.getenv("DISCORD_BOT_TOKEN")
-SIMKL_CLIENT_ID=os.getenv("SIMKL_CLIENT_ID")
+SIMKL_CLIENT_ID=os.getenv("SIMKL_CLIENT_ID", "").strip()
 WETRAKR_API_KEY=os.getenv("WETRAKR_API_KEY", "").strip()
 TMDB_API_KEY=os.getenv("TMDB_API_KEY")
 MDBLIST_API_KEY=os.getenv("MDBLIST_API_KEY")
@@ -59,8 +59,8 @@ POLL_CONCURRENCY=positive_int_env("POLL_CONCURRENCY", 5)
 MAX_CONSECUTIVE_FAILURES=positive_int_env("MAX_CONSECUTIVE_FAILURES", 5)
 HISTORY_BACKFILL_CONCURRENCY=positive_int_env("HISTORY_BACKFILL_CONCURRENCY", 2)
 history_backfill_semaphore=asyncio.Semaphore(HISTORY_BACKFILL_CONCURRENCY)
-if not DISCORD_BOT_TOKEN or not SIMKL_CLIENT_ID:
-    raise SystemExit("Missing DISCORD_BOT_TOKEN or SIMKL_CLIENT_ID.")
+if not DISCORD_BOT_TOKEN:
+    raise SystemExit("Missing DISCORD_BOT_TOKEN.")
 if not TMDB_API_KEY:
     raise SystemExit("Missing TMDB_API_KEY.")
 
@@ -1363,6 +1363,8 @@ async def poll_all(g=None, force_reconcile=False, ignore_failure_threshold=False
     MAX_CONSECUTIVE_FAILURES. Manual checks (/tracker-checknow) pass
     ignore_failure_threshold=True so they always attempt every target.
     """
+    if not SIMKL_CLIENT_ID:
+        return 0
     started = time.monotonic()
 
     async with poll_lock:
@@ -3666,6 +3668,9 @@ async def simkl_random(
 
 
 async def simkl_link(i):
+    if not SIMKL_CLIENT_ID:
+        await i.response.send_message("SIMKL is not configured on this bot. Set SIMKL_CLIENT_ID first.",ephemeral=True)
+        return
     g=guild_id(i)
     if not g: await i.response.send_message("This command must be used in a server.",ephemeral=True); return
     uid=str(i.user.id); key=f"{g}:{uid}"
@@ -3947,6 +3952,9 @@ async def tracker_source(i, provider: app_commands.Choice[str] | None = None):
         source=await storage.get_activity_provider(g,uid)
         active=provider_registry.get(source).manifest.display_name if source else "none"
         await i.response.send_message(f"Your activity source here is **{active}**. Choose a provider to change it.",ephemeral=True)
+        return
+    if provider.value=="simkl" and not SIMKL_CLIENT_ID:
+        await i.response.send_message("SIMKL is not configured on this bot. Set SIMKL_CLIENT_ID first.",ephemeral=True)
         return
     if provider.value=="wetrakr" and not wetrakr_sync:
         await i.response.send_message("WeTrakr is not configured on this bot.",ephemeral=True)
