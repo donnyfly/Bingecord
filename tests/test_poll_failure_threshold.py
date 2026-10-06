@@ -10,8 +10,8 @@ os.environ.setdefault('DISCORD_BOT_TOKEN','test-token')
 os.environ.setdefault('SIMKL_CLIENT_ID','test-client')
 os.environ.setdefault('TMDB_API_KEY','test-key')
 import bot  # noqa: E402
-import storage as storage_module  # noqa: E402
-from simkl_client import SimklAuthError  # noqa: E402
+import trackerbot.core.storage as storage_module  # noqa: E402
+from trackerbot.integrations.simkl_client import SimklAuthError  # noqa: E402
 
 GUILD='123'
 BROKEN='41'
@@ -81,7 +81,7 @@ def test_failures_accumulate_then_skip_and_dm_only_once(monkeypatch,tmp_path):
         assert valid_token.await_count==bot.MAX_CONSECUTIVE_FAILURES
         user.send.assert_awaited_once()
         assert 'Test Server' in user.send.await_args.args[0]
-        assert '/simkl-link' in user.send.await_args.args[0]
+        assert '/bingecord link' in user.send.await_args.args[0]
         assert health(store,BROKEN)['failure_notified'] is True
 
         # The flag survives a restart, so a reboot doesn't re-send the DM.
@@ -139,14 +139,18 @@ def test_manual_check_still_attempts_and_success_resets(monkeypatch,tmp_path):
 def test_checknow_command_bypasses_failure_threshold(monkeypatch):
     async def scenario():
         poll_all=AsyncMock(return_value=0)
+        poll_wetrakr=AsyncMock(return_value=2)
         monkeypatch.setattr(bot,'poll_all',poll_all)
+        monkeypatch.setattr(bot,'poll_wetrakr_all',poll_wetrakr)
         monkeypatch.setattr(bot,'last_checknow_at',0.0)
         monkeypatch.setattr(bot.time,'monotonic',lambda:10**9)
         i=SimpleNamespace(guild_id=1,guild=SimpleNamespace(id=1),
                           user=SimpleNamespace(guild_permissions=SimpleNamespace(manage_guild=True)),
                           response=SimpleNamespace(send_message=AsyncMock()),
                           followup=SimpleNamespace(send=AsyncMock()))
-        await bot.simkl_checknow.callback(i)
+        await bot.tracker_checknow.callback(i)
         poll_all.assert_awaited_once()
+        poll_wetrakr.assert_awaited_once_with(1)
         assert poll_all.await_args.kwargs.get('ignore_failure_threshold') is True
+        assert 'WeTrakr 2' in i.followup.send.await_args.args[0]
     asyncio.run(scenario())

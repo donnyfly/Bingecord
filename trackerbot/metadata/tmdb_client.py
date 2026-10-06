@@ -90,6 +90,9 @@ class TmdbClient:
             tuple[int, int, int],
             dict | None,
         ] = {}
+        self._tvmaze_episode_lists: dict[int, list] = {}
+        self._tvmaze_calendar_coordinates: dict[int, dict[tuple[int, int], tuple[int, int]]] = {}
+        self._tmdb_tvdb_ids: dict[int, int | None] = {}
 
         # Cache the result of the more expensive anime episode resolver.
         self._anime_episode_cache: dict[
@@ -104,7 +107,7 @@ class TmdbClient:
             self._session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=15),
                 headers={
-                    "User-Agent": "simkl-tracker-bot/1.0.0",
+                    "User-Agent": "bingecord/1.0.0",
                     "Accept": "application/json",
                 },
             )
@@ -494,6 +497,83 @@ class TmdbClient:
 
         self._tvmaze_episode_cache[cache_key] = data
         return data
+
+    async def get_tvdb_id_for_tmdb(self, series_id) -> int | None:
+        """Resolve a WeTrakr/TMDB show to the TVDB ID used by anime mapping."""
+        try:
+            series_id = int(series_id)
+        except (TypeError, ValueError):
+            return None
+        if series_id not in self._tmdb_tvdb_ids:
+            data = await self._get_json(f"{API_BASE}/tv/{series_id}/external_ids")
+            try:
+                self._tmdb_tvdb_ids[series_id] = int((data or {}).get("tvdb_id"))
+            except (TypeError, ValueError):
+                self._tmdb_tvdb_ids[series_id] = None
+        return self._tmdb_tvdb_ids[series_id]
+
+    async def map_anime_episode_to_tvmaze(self, tvdb_id, *, air_date=None, title=None):
+        """Match a source episode by identity, never by its absolute index."""
+        try:
+            tvdb_id = int(tvdb_id)
+        except (TypeError, ValueError):
+            return None
+        if tvdb_id not in self._tvmaze_episode_lists:
+            show = await self.find_tvmaze_show_by_tvdb(tvdb_id)
+            if not show or show.get("id") is None:
+                return None
+            episodes = await self._get_tvmaze_json(f"/shows/{show['id']}/episodes")
+            if not isinstance(episodes, list):
+                return None
+            self._tvmaze_episode_lists[tvdb_id] = episodes
+        episodes = self._tvmaze_episode_lists[tvdb_id]
+        date = str(air_date or "")[:10]
+        name = str(title or "").strip().casefold()
+        by_date = [e for e in episodes if date and e.get("airdate") == date]
+        by_name = [e for e in episodes if name and str(e.get("name") or "").strip().casefold() == name]
+        if len(by_date) == 1:
+            match = by_date[0]
+        elif len(by_date) > 1 and name:
+            same = [e for e in by_date if e in by_name]
+            match = same[0] if len(same) == 1 else None
+        else:
+            match = by_name[0] if len(by_name) == 1 else None
+        if not match or match.get("season") is None or match.get("number") is None:
+            return None
+        season, number = int(match["season"]), int(match["number"])
+        # TVMaze groups some continuously numbered anime (notably One Piece)
+        # into calendar-year seasons. Display the episode's position in the
+        # regular run instead of treating the year as a season number.
+        if 1900 <= season <= 2100:
+            return await self.map_anime_calendar_episode(tvdb_id, season, number) or (season, number)
+        return season, number
+
+    async def map_anime_calendar_episode(self, tvdb_id, season, number):
+        """Resolve TVMaze calendar-year seasons to a continuous first season."""
+        try:
+            tvdb_id, season, number = int(tvdb_id), int(season), int(number)
+        except (TypeError, ValueError):
+            return None
+        if not 1900 <= season <= 2100:
+            return None
+        if tvdb_id not in self._tvmaze_episode_lists:
+            show = await self.find_tvmaze_show_by_tvdb(tvdb_id)
+            if not show or show.get("id") is None:
+                return None
+            episodes = await self._get_tvmaze_json(f"/shows/{show['id']}/episodes")
+            if not isinstance(episodes, list):
+                return None
+            self._tvmaze_episode_lists[tvdb_id] = episodes
+        if tvdb_id not in self._tvmaze_calendar_coordinates:
+            regular = [e for e in self._tvmaze_episode_lists[tvdb_id]
+                       if e.get("season") is not None and e.get("number") is not None
+                       and 1900 <= int(e["season"]) <= 2100]
+            regular.sort(key=lambda e: (int(e["season"]), int(e["number"])))
+            self._tvmaze_calendar_coordinates[tvdb_id] = {
+                (int(episode["season"]), int(episode["number"])): (1, absolute)
+                for absolute, episode in enumerate(regular, 1)
+            }
+        return self._tvmaze_calendar_coordinates[tvdb_id].get((season, number))
 
     # ------------------------------------------------------------------
     # Anime-aware episode lookup
@@ -1093,6 +1173,13 @@ class TmdbClient:
     # ------------------------------------------------------------------
     # Movie title
     # ------------------------------------------------------------------
+
+    async def get_movie_details(self, movie_id) -> dict | None:
+        try:
+            movie_id = int(movie_id)
+        except (TypeError, ValueError):
+            return None
+        return await self._get_json(f"{API_BASE}/movie/{movie_id}")
 
     async def get_movie_title(
         self,

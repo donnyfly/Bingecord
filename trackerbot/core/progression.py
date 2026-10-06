@@ -1,4 +1,4 @@
-"""XP, level, rank, prestige, and challenge rules for SIMKLTrackerBot."""
+"""XP, level, rank, prestige, and challenge rules for Bingecord."""
 
 from __future__ import annotations
 

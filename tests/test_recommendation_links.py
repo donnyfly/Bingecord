@@ -2,7 +2,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from simkl_client import SimklClient
+from trackerbot.integrations.simkl_client import SimklClient
 
 
 class Response:

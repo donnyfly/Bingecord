@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import discord
 import pytest
-from watch_delivery import WatchActivity, WatchBatch, together_embed
+from trackerbot.core.watch_delivery import WatchActivity, WatchBatch, together_embed
 
 
 def activity(user, minute=0, *, channel=10, guild='1', key=('episode', 'anime', '99', 2, (3,)), started=False, rewatched=False):
@@ -80,6 +80,7 @@ def test_movies_and_large_groups():
         item.subject='**Movie**'
         batch.add(item)
     groups=list(batch.groups())
-    assert len(groups)>1
+    assert len(groups)==1
+    assert len(groups[0])==200
     assert sum(map(len,groups))==200
     assert all(len(together_embed(g).description)<=4096 for g in groups)

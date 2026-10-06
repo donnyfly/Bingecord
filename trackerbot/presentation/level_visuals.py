@@ -11,7 +11,7 @@ import colorsys
 import math
 
 from PIL import Image, ImageDraw, ImageFont
-from progression import RANKS, rank_for_level
+from trackerbot.core.progression import RANKS, rank_for_level
 
 
 WIDTH = 720
@@ -245,6 +245,7 @@ def render_level_up_gif(
     previous_level: int | None = None,
     previous_rank: str | None = None,
     prestige: int = 0,
+    source_label: str | None = None,
 ) -> BytesIO:
     """Render a compact animated GIF for a level-up notification."""
 
@@ -317,9 +318,9 @@ def render_level_up_gif(
         rank_y = 180
         draw.text((x + 4, rank_y), rank, font=rank_font, fill=_TEXT)
         if rank_up:
-            draw.text((x + 4, rank_y + 32), "NEW RANK", font=small_font, fill=accent)
+            draw.text((x + 4, rank_y + 32), "NEW RANK" + (f" · VIA {source_label.upper()}" if source_label else ""), font=small_font, fill=accent)
         else:
-            draw.text((x + 4, rank_y + 32), "SIMKL TRACKER", font=small_font, fill=_MUTED)
+            draw.text((x + 4, rank_y + 32), f"VIA {source_label.upper()}" if source_label else "TRACKER", font=small_font, fill=_MUTED)
 
         frames.append(image)
 
@@ -386,7 +387,7 @@ def render_achievement_gif(name: str, xp: int) -> BytesIO:
         draw.text((x, 58), "ACHIEVEMENT UNLOCKED", font=title_font, fill=gold)
         draw.text((x, 93), name, font=name_font, fill=_mix(_MUTED, _TEXT, reveal))
         draw.text((x + 4, 175), f"+{xp:,} XP", font=xp_font, fill=gold)
-        draw.text((x + 4, 213), "SIMKL TRACKER", font=small_font, fill=_MUTED)
+        draw.text((x + 4, 213), "TRACKER", font=small_font, fill=_MUTED)
         frames.append(image)
 
     output = BytesIO()

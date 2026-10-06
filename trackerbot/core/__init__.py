@@ -1,0 +1,1 @@
+"""Bingecord application package."""

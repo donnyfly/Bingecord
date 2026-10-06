@@ -33,17 +33,21 @@ def challenge_for_week(week_key: str, member_count: int) -> dict:
     return {"kind":kind,"target":target,"pool":target*challenge["xp_per_watch"]}
 
 
-def watch_contributions(users: dict, member_ids, start: datetime, end: datetime, kind: str = "episodes"):
-    """Count distinct, still-active SIMKL watch events for linked members."""
+def watch_contributions(users: dict, member_ids, start: datetime, end: datetime,
+                        kind: str = "episodes", selected_events: dict | None = None):
+    """Count watches from each member's selected source when supplied."""
     media_types=CHALLENGES.get(kind,CHALLENGES["episodes"])["media_types"]
     counts={}
     for uid in member_ids:
-        events=((users.get(str(uid)) or {}).get("progression") or {}).get("xp_events") or []
+        if selected_events is None or str(uid) not in selected_events:
+            events=((users.get(str(uid)) or {}).get("progression") or {}).get("xp_events") or []
+        else:
+            events=(selected_events.get(str(uid)) or {}).values()
         keys=set()
         for event in events:
             if event.get("media_type") not in media_types:
                 continue
-            stamp=event.get("at")
+            stamp=event.get("at") or event.get("watched_at")
             try:
                 watched=datetime.fromisoformat(str(stamp).replace("Z","+00:00"))
                 if watched.tzinfo is None:

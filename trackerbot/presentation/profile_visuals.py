@@ -6,9 +6,9 @@ from io import BytesIO
 
 from PIL import Image, ImageDraw, ImageFont
 
-from achievements import ACHIEVEMENTS
-from level_visuals import accent_for_tier, draw_prestige_backdrop, prestige_style, _prestige_emblem
-from progression import level_progress, rank_for_level
+from trackerbot.core.achievements import ACHIEVEMENTS
+from trackerbot.presentation.level_visuals import accent_for_tier, draw_prestige_backdrop, prestige_style, _prestige_emblem
+from trackerbot.core.progression import level_progress, rank_for_level
 
 BG=(12,14,20)
 PANEL=(19,22,31)
@@ -102,7 +102,7 @@ def render_profile_png(name, data):
         ImageDraw.Draw(mask).rounded_rectangle((0,0,983,107),radius=20,fill=255)
         image.paste(header,(48,24),mask)
         draw=ImageDraw.Draw(image)
-    draw.text((48,36),"SIMKL / PROFILE",font=_font(19),fill=accent)
+    draw.text((48,36),f"{data.get('provider_label', 'TRACKER').upper()} / PROFILE",font=_font(19),fill=accent)
     badge_left=933 if prestige else 960
     name_width=badge_left-48-28
     draw.text((48,67),_short(draw,name,_font(37),name_width),font=_font(37),fill=WHITE)
@@ -167,11 +167,11 @@ def render_profile_png(name, data):
     return output
 
 
-def render_leaderboard_png(guild_name, category, rows):
-    image=Image.new("RGB",(1080,845),BG)
+def render_leaderboard_png(guild_name, category, rows, *, rank_offset=0):
+    image=Image.new("RGB",(1080,235+min(len(rows),10)*61),BG)
     draw=ImageDraw.Draw(image)
     accent=(239,190,105)
-    draw.text((48,35),"SIMKL / LEADERBOARD",font=_font(19),fill=accent)
+    draw.text((48,35),"TRACKER / LEADERBOARD",font=_font(19),fill=accent)
     draw.text((48,67),_short(draw,guild_name,_font(35),830),font=_font(35),fill=WHITE)
     draw.text((48,112),category.upper(),font=_font(17),fill=MUTED)
     draw.rounded_rectangle((48,149,1032,154),radius=2,fill=accent)
@@ -181,7 +181,7 @@ def render_leaderboard_png(guild_name, category, rows):
     for index,row in enumerate(rows[:10]):
         y=207+index*61
         _panel(draw,(48,y,1032,y+54))
-        draw.text((67,y+10),f"{index+1:02}",font=_font(25),fill=accent if index<3 else MUTED)
+        draw.text((67,y+10),f"{rank_offset+index+1:02}",font=_font(25),fill=accent if rank_offset+index<3 else MUTED)
         draw.text((125,y+11),_short(draw,row["name"],_font(22),335),font=_font(22),fill=WHITE)
         draw.text((488,y+13),f"P{row['prestige']}  /  L{row['level']}",font=_font(19),fill=WHITE)
         draw.text((755,y+7),f"{row['xp']:,} XP",font=_font(19),fill=accent)
@@ -197,7 +197,7 @@ def render_summary_png(guild_name, heading, subtitle, metrics, leaders):
     image=Image.new("RGB",(1080,735),BG)
     draw=ImageDraw.Draw(image)
     accent=(239,190,105)
-    draw.text((48,35),f"SIMKL / {heading.upper()}",font=_font(19),fill=accent)
+    draw.text((48,35),f"TRACKER / {heading.upper()}",font=_font(19),fill=accent)
     draw.text((48,67),_short(draw,guild_name,_font(35),830),font=_font(35),fill=WHITE)
     draw.text((48,112),_short(draw,subtitle,_font(17),940),font=_font(17),fill=MUTED)
     draw.rounded_rectangle((48,149,1032,154),radius=2,fill=accent)

@@ -9,8 +9,8 @@ os.environ.setdefault("SIMKL_CLIENT_ID","test-client")
 os.environ.setdefault("TMDB_API_KEY","test-key")
 
 import bot  # noqa: E402
-import storage as storage_module  # noqa: E402
-from progression import challenges_for  # noqa: E402
+import trackerbot.core.storage as storage_module  # noqa: E402
+from trackerbot.core.progression import challenges_for  # noqa: E402
 
 
 def test_live_challenges_announce_exact_xp_once_and_retry(tmp_path,monkeypatch):
@@ -114,7 +114,7 @@ def test_community_notification_precedes_level_up(monkeypatch):
         monkeypatch.setattr(bot.storage,"claim_prestige_notifications",AsyncMock(return_value=[]))
         monkeypatch.setattr(bot.storage,"flush",AsyncMock())
         async def announce(*args): calls.append("community")
-        async def level(*args): calls.append("level")
+        async def level(*args, **kwargs): calls.append("level")
         monkeypatch.setattr(bot,"notify_community_rewards",announce)
         monkeypatch.setattr(bot,"notify_level_up",level)
         await bot.refresh_community_state("123")

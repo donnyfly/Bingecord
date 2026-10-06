@@ -2,8 +2,8 @@ import asyncio
 from datetime import datetime, timezone
 import tempfile
 
-import storage as storage_module
-from community import challenge_for_week, community_week, split_pool, watch_contributions
+import trackerbot.core.storage as storage_module
+from trackerbot.core.community import challenge_for_week, community_week, split_pool, watch_contributions
 
 
 def test_week_boundaries_and_exact_pool_split():

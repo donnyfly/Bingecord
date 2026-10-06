@@ -8,8 +8,8 @@ os.environ.setdefault("SIMKL_CLIENT_ID", "test-client")
 os.environ.setdefault("TMDB_API_KEY", "test-key")
 
 import bot  # noqa: E402
-from recommendation_engine import recommendation_lineup, select_sources
-from recommendation_ui import RecommendationView, different_candidate, related_candidate
+from trackerbot.presentation.recommendation_engine import recommendation_lineup, select_sources
+from trackerbot.presentation.recommendation_ui import RecommendationView, different_candidate, related_candidate
 
 
 def source(name, ident, rating, media="anime", stamp="2026-09-01"):
@@ -62,6 +62,8 @@ def test_candidate_ranking_uses_rated_matches_and_genres(monkeypatch):
 def test_command_shows_private_card_and_buttons(monkeypatch):
     async def scenario():
         monkeypatch.setattr(bot.storage,"get_user",AsyncMock(return_value={"simkl_token":"token"}))
+        monkeypatch.setattr(bot.storage,"get_activity_provider",AsyncMock(return_value="simkl"))
+        monkeypatch.setattr(bot.storage,"get_provider_targets",AsyncMock(return_value=[{"discord_user_id":"42"}]))
         monkeypatch.setattr(bot,"valid_token",AsyncMock(return_value="token"))
         monkeypatch.setattr(bot,"_recommendation_sources",AsyncMock(return_value=([source("Loved",1,9)],set(),"token")))
         picks=[candidate(ident) for ident in range(1,7)]

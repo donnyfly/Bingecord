@@ -5,10 +5,10 @@ import tempfile
 
 from PIL import Image, ImageDraw, ImageFont
 
-import storage as storage_module
-from level_visuals import accent_for_level, accent_for_tier, prestige_style, render_prestige_gif
-from profile_visuals import _short, profile_snapshot, render_profile_png, render_leaderboard_png, render_summary_png
-from progression import xp_for_level
+import trackerbot.core.storage as storage_module
+from trackerbot.presentation.level_visuals import accent_for_level, accent_for_tier, prestige_style, render_prestige_gif
+from trackerbot.presentation.profile_visuals import _short, profile_snapshot, render_profile_png, render_leaderboard_png, render_summary_png
+from trackerbot.core.progression import xp_for_level
 
 
 def test_profile_recomputes_watch_and_genre_totals_each_view():
@@ -51,7 +51,7 @@ def test_empty_genre_state_and_leaderboard_card():
     board=render_leaderboard_png("Server","XP progression",[
         {"name":"Viewer","prestige":1,"level":9,"xp":500,"total":5},
     ])
-    assert Image.open(board).size==(1080,845)
+    assert Image.open(board).size==(1080,296)
     assert _short(ImageDraw.Draw(Image.new("RGB",(100,100))),0,ImageFont.load_default(),80)=="0"
     for heading in ("weekly recap","server statistics"):
         card=render_summary_png("Server",heading,"This week",[("Episodes",32),("Movies",4)],[("Top watcher","Viewer · 12 watches")])

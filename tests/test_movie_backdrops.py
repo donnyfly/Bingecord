@@ -1,7 +1,7 @@
 import asyncio
 from unittest.mock import AsyncMock
 
-from tmdb_client import TmdbClient
+from trackerbot.metadata.tmdb_client import TmdbClient
 
 
 def test_movie_backdrop_prefers_english_then_falls_back(monkeypatch):

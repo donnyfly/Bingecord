@@ -1,4 +1,4 @@
-"""Achievement definitions for SIMKLTrackerBot.
+"""Achievement definitions for Bingecord.
 
 Achievements are intentionally challenging so higher tiers feel meaningful
 rather than being awarded for routine activity.

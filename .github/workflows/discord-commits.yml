@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - test
+      - experimental
 
 concurrency:
   group: discord-commit-notifications-${{ github.ref_name }}

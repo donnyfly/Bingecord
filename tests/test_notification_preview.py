@@ -14,11 +14,11 @@ os.environ.setdefault("SIMKL_CLIENT_ID", "test-client")
 os.environ.setdefault("TMDB_API_KEY", "test-key")
 
 import bot  # noqa: E402
-import storage as storage_module  # noqa: E402
-from achievements import ACHIEVEMENTS  # noqa: E402
-from level_visuals import accent_for_level, accent_for_tier, prestige_style, render_achievement_gif, render_level_up_gif  # noqa: E402
-from progression import RANKS, rank_for_level  # noqa: E402
-from simkl_client import SimklClient  # noqa: E402
+import trackerbot.core.storage as storage_module  # noqa: E402
+from trackerbot.core.achievements import ACHIEVEMENTS  # noqa: E402
+from trackerbot.presentation.level_visuals import accent_for_level, accent_for_tier, prestige_style, render_achievement_gif, render_level_up_gif  # noqa: E402
+from trackerbot.core.progression import RANKS, rank_for_level  # noqa: E402
+from trackerbot.integrations.simkl_client import SimklClient  # noqa: E402
 
 
 def test_full_history_requests_completed_and_dropped_episode_rows(monkeypatch):
@@ -94,9 +94,9 @@ def test_each_prestige_has_a_rotating_ten_rank_palette():
 
 def test_debug_previews_are_private_and_do_not_write(monkeypatch):
     async def scenario():
-        command=bot.bot.tree.get_command("simkl-debug")
+        command=bot.bingecord_commands.get_command("debug")
         assert command is not None
-        assert bot.bot.tree.get_command("simkl-achievement-test") is None
+        assert bot.bingecord_commands.get_command("achievement-test") is None
         assert command.default_permissions.manage_guild
         forbidden=AsyncMock(side_effect=AssertionError("preview wrote to storage"))
         monkeypatch.setattr(bot.storage, "unlock_achievement", forbidden)
@@ -385,7 +385,7 @@ def test_consolidated_xp_leaderboard_orders_prestige_then_xp(monkeypatch):
         ]
         monkeypatch.setattr(bot.storage,"get_guild_leaderboard_snapshot",AsyncMock(return_value=rows))
         captured=[]
-        def render(guild,category,values):
+        def render(guild,category,values,**kwargs):
             captured.extend(row["discord_user_id"] for row in values)
             from io import BytesIO
             return BytesIO(b"preview")
@@ -393,15 +393,15 @@ def test_consolidated_xp_leaderboard_orders_prestige_then_xp(monkeypatch):
         interaction=_interaction()
         interaction.guild.name="Server"
         interaction.guild.get_member=lambda uid: None
-        command=bot.bot.tree.get_command("simkl-leaderboard")
+        command=bot.bingecord_commands.get_command("leaderboard")
         await command.callback(interaction,app_commands.Choice(name="XP / progression",value="xp"))
         assert captured==["3","2","1"]
         interaction.response.defer.assert_awaited_once()
         assert interaction.followup.send.await_args.kwargs["file"].filename=="leaderboard.png"
         assert interaction.followup.send.await_args.kwargs["embed"].image.url=="attachment://leaderboard.png"
-        assert bot.bot.tree.get_command("simkl-xp-leaderboard") is None
-        assert bot.bot.tree.get_command("simkl-xp") is None
-        assert bot.bot.tree.get_command("simkl-profile") is None
-        assert bot.bot.tree.get_command("simkl-streak") is None
-        assert bot.bot.tree.get_command("simkl-community") is not None
+        assert bot.bingecord_commands.get_command("xp-leaderboard") is None
+        assert bot.bingecord_commands.get_command("xp") is None
+        assert bot.bingecord_commands.get_command("profile") is None
+        assert bot.bingecord_commands.get_command("streak") is None
+        assert bot.bingecord_commands.get_command("community") is not None
     asyncio.run(scenario())

@@ -1,7 +1,7 @@
 services:
-  simkltrackerbot:
-    image: ghcr.io/donnyfly/simkltrackerbot:latest
-    container_name: simkltrackerbot
+  bingecord:
+    image: ghcr.io/donnyfly/bingecord:experimental
+    container_name: bingecord
     restart: unless-stopped
     env_file:
       - .env

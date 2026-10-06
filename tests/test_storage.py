@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-import storage as storage_module
+import trackerbot.core.storage as storage_module
 
 
 def test_removed_watch_reconciles_profile_server_totals_titles_and_streak(tmp_path, monkeypatch):
