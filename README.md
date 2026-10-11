@@ -29,8 +29,11 @@ It supports automatic provider syncing, episode grouping, artwork and ratings, p
 
 ## Commands
 
+The bot displays **Playing /bingecord help**. Use `/bingecord help` for a private command guide and first-time setup instructions.
+
 | Command | Who can use it | Purpose |
 | --- | --- | --- |
+| `/bingecord help` | Everyone | View the command guide and setup steps |
 | `/bingecord link` | Everyone | Link a SIMKL, WeTrakr or MDBList account |
 | `/bingecord source` | Everyone | Select the linked account used in this server |
 | `/bingecord mapping` | Everyone | Privately inspect cross-provider matches and possible duplicate awards |

@@ -118,7 +118,7 @@ class FeatureCommandTree(app_commands.CommandTree):
 
 class BingecordBot(discord.Client):
     def __init__(self):
-        super().__init__(intents=discord.Intents.default()); self.tree=FeatureCommandTree(self)
+        super().__init__(intents=discord.Intents.default(),activity=discord.Game(name="/bingecord help")); self.tree=FeatureCommandTree(self)
     async def setup_hook(self):
         await self.tree.sync()
 
@@ -2364,6 +2364,43 @@ EPISODE_FORMAT_CHOICES=[
 RATING_CHOICES=[app_commands.Choice(name="Show",value="true"),app_commands.Choice(name="Hide",value="false")]
 
 NOT_ADMIN_MESSAGE="You need the Manage Server permission to do that."
+
+@bingecord_commands.command(name="help",description="Show commands and how to get started with Bingecord.")
+async def bingecord_help(i):
+    embed=discord.Embed(title="Bingecord Help",color=0x8957FF,
+        description="Track movies, TV and anime with SIMKL, WeTrakr or MDBList.\n"
+                    "Use `/bingecord` followed by a command below.")
+    embed.add_field(name="Get started",value=
+        "1. Ask an admin to configure `/bingecord setchannel`.\n"
+        "2. Use `/bingecord link` to authorize your account.\n"
+        "3. Choose it with `/bingecord source`.\n"
+        "The first import is quiet; new activity posts after that.",inline=False)
+    embed.add_field(name="Accounts & preferences",value=
+        "`link` / `unlink` — connect or disconnect an account\n"
+        "`source` — choose the provider used in this server\n"
+        "`style` — customize your activity embeds\n"
+        "`mapping` — privately inspect cross-provider watch matches\n"
+        "`user-reset` — reset this server's imported tracking state; keeps links and global XP",inline=False)
+    embed.add_field(name="Discover",value=
+        "`watching` — your current watching list\n"
+        "`random` — pick from your planned list\n"
+        "`recommend` — recommendations using your selected account",inline=False)
+    embed.add_field(name="Progress & community",value=
+        "`stats` — your watches, XP and progression\n"
+        "`achievements` / `challenges` — achievements and daily/weekly goals\n"
+        "`leaderboard` / `server-stats` — server rankings and totals\n"
+        "`community` — the server's cooperative challenge",inline=False)
+    embed.add_field(name="Administration · Manage Server required",value=
+        "`setchannel` — choose the activity channel\n"
+        "`status` — sync health; use the user option to check one member\n"
+        "`checknow` — check selected providers immediately\n"
+        "`features` — optional features or Activity only mode\n"
+        "`style-server` / `timezone` — server defaults\n"
+        "`weekly-recap` — post a weekly recap\n"
+        "`debug` — privately preview progression notifications",inline=False)
+    embed.set_footer(text="Some features may be disabled by your server. Help is always available.")
+    await i.response.send_message(embed=embed,ephemeral=True)
+
 
 @bingecord_commands.command(name="features",description="(Admin) Configure optional features or use activity-only mode.")
 @app_commands.default_permissions(manage_guild=True)
