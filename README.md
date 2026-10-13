@@ -4,6 +4,12 @@ A self-hosted Discord bot that turns your **SIMKL, WeTrakr, or MDBList watch act
 
 It supports automatic provider syncing, episode grouping, artwork and ratings, personal/server statistics, achievements, XP progression, challenges, leaderboards, and optional weekly recaps. All linked-account data is stored locally on your own server.
 
+<img width="500" height="" alt="photo_2026-10-13_13-32-32" src="https://github.com/user-attachments/assets/4589a32a-bc2c-462e-a5e7-2577b092e2cb" />
+<img width="500" height="" alt="photo_2026-10-13_13-32-50" src="https://github.com/user-attachments/assets/ea953ba0-7ae2-46ac-8024-6a31bbcd001e" />
+<img width="500" height="" alt="photo_2026-10-13_13-32-46" src="https://github.com/user-attachments/assets/58ac6edc-d0b7-415e-97b0-913d3cbad894" />
+<img width="500" height="" alt="photo_2026-10-13_13-32-39" src="https://github.com/user-attachments/assets/3677270d-8058-4083-baee-7d94535af417" />
+
+
 ## What you get
 
 - 🎬 Automatic SIMKL, WeTrakr and MDBList activity tracking for TV, anime, and movies
