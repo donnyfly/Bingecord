@@ -1174,6 +1174,36 @@ class TmdbClient:
     # Movie title
     # ------------------------------------------------------------------
 
+    async def get_watch_runtime(self, media_type, ids, *, season=None, episode=None, runtime=None):
+        """Resolve catalog minutes in batches: one cached season tree, not N episode calls."""
+        from trackerbot.core.progression import watch_minutes
+        import math
+        def valid(value):
+            try:
+                return not isinstance(value, bool) and math.isfinite(float(value)) and float(value) > 0
+            except (TypeError, ValueError, OverflowError):
+                return False
+        if valid(runtime):
+            return float(runtime)
+        tmdb_id = (ids or {}).get('tmdb')
+        if tmdb_id:
+            try:
+                if media_type in {'movie', 'anime_movie'}:
+                    data = await self.get_movie_details(tmdb_id) or {}
+                    runtime = data.get('runtime')
+                else:
+                    if season is not None and episode is not None:
+                        data = await self._get_season_details(tmdb_id, season) or {}
+                        runtime = next((row.get('runtime') for row in data.get('episodes') or []
+                                        if str(row.get('episode_number')) == str(episode)), None)
+                    if not valid(runtime):
+                        data = await self._get_series_details(tmdb_id) or {}
+                        runtime = next((value for value in data.get('episode_run_time') or [] if valid(value)), None)
+            except Exception:
+                # Metadata availability must not block delivery or erase progression.
+                runtime = None
+        return watch_minutes(media_type, runtime)
+
     async def get_movie_details(self, movie_id) -> dict | None:
         try:
             movie_id = int(movie_id)

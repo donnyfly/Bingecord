@@ -42,14 +42,14 @@ def test_wetrakr_import_edit_remove_and_source_switch(tmp_path, monkeypatch):
         target = (await store.get_provider_targets("wetrakr", "123", active_only=True))[0]
         assert await sync.poll(target, deliver, resolve_play=resolve) == 0
         assert (await store.get_statistics("123", "42"))["movies_watched"] == 1
-        assert (await store.get_progression("42"))["lifetime_xp"] == 300
+        assert (await store.get_progression("42"))["lifetime_xp"] == 360
         client.rows = [{"entry_id": "edit", "action_at": "2026-09-28T00:01:00Z",
                         "category": "watched", "status": "updated", "type": "movie",
                         "id": 50, "play_id": "play-1", "watched_at": "2024-09-27T13:00:00Z"}]
         target = (await store.get_provider_targets("wetrakr", "123", active_only=True))[0]
         await sync.poll(target, deliver, resolve_play=resolve)
         assert (await store.get_statistics("123", "42"))["movies_watched"] == 1
-        assert (await store.get_progression("42"))["lifetime_xp"] == 300
+        assert (await store.get_progression("42"))["lifetime_xp"] == 360
         client.rows = [{"entry_id": "delete", "action_at": "2026-09-28T00:02:00Z",
                         "category": "watched", "status": "removed", "type": "movie",
                         "id": 50, "play_id": "play-1"}]
@@ -65,7 +65,7 @@ def test_wetrakr_import_edit_remove_and_source_switch(tmp_path, monkeypatch):
         await store.reconcile_wetrakr_plays("123", "42", [await resolve({"source_event_id": "play-2",
                                                  "media_type": "movie", "watched_at": "2024-09-27T14:00:00Z"})])
         await sync.poll(target, deliver, resolve_play=resolve)
-        assert (await store.get_progression("42"))["lifetime_xp"] == 300
+        assert (await store.get_progression("42"))["lifetime_xp"] == 360
 
     asyncio.run(run())
 
@@ -137,9 +137,9 @@ def test_switching_back_to_simkl_transfers_existing_wetrakr_award(tmp_path, monk
         result = await store.award_watch_xp("42", "movie:movies:100:2024-09-27T12:01:00Z",
                                             "movie", "Film", "2024-09-27T12:01:00Z", 300)
         assert not result["awarded"]
-        assert (await store.get_progression("42"))["lifetime_xp"] == 300
+        assert (await store.get_progression("42"))["lifetime_xp"] == 360
         await store.reconcile_watch_xp("42", set(), {"movie"})
-        assert (await store.get_progression("42"))["lifetime_xp"] == 300
+        assert (await store.get_progression("42"))["lifetime_xp"] == 360
 
     asyncio.run(run())
 

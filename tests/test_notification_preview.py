@@ -260,7 +260,7 @@ def test_episode_range_records_stats_xp_and_challenges_as_one_group(monkeypatch)
             assert (count,ok)==(5,True)
             assert (await store.get_statistics("123","42"))["episodes_watched"]==5
             progression=await store.get_progression("42")
-            assert sum(event["amount"] for event in progression["xp_events"])==550
+            assert sum(event["amount"] for event in progression["xp_events"])==580
             assert progression["challenge_completions"]
     asyncio.run(scenario())
 

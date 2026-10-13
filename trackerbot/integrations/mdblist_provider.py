@@ -36,6 +36,7 @@ def normalize_play(row, kind):
     if not ids or not isinstance(ids,dict):
         raise MDBListTrackingError(200,'MISSING_TITLE_IDS')
     result={'source':'mdblist','source_event_id':str(play_id),'media_type':kind,
+            'runtime_minutes':episode.get('runtime') or row.get('runtime') or (media.get('runtime') if kind=='movie' else None),
             'watched_at':stamp,'title':media.get('title') or row.get('title') or '',
             'ids':ids,'show_ids':ids if kind=='episode' else {},
             'show_id':ids.get('mdblist') or ids.get('tmdb'),'genres':media.get('genres') or []}
@@ -147,6 +148,10 @@ class MDBListProvider(BaseProvider):
                else await self.app.is_wetrakr_anime(metadata,play['ids'].get('tmdb')))
         result.update(title=metadata['title'] or 'Untitled',genres=data.get('genres') or play.get('genres') or [])
         result['media_type']=('anime_movie' if kind=='movie' else 'anime_episode') if anime else kind
+        result['runtime_minutes'] = await self.app.tmdb.get_watch_runtime(
+            result['media_type'], play['ids'], season=play.get('source_season',play.get('season')),
+            episode=play.get('source_episode',play.get('episode')),
+            runtime=play.get('runtime_minutes') or (data.get('runtime') if kind=='movie' else None))
         if anime and kind=='episode':
             tvdb=play['ids'].get('tvdb') or await self.app.tmdb.get_tvdb_id_for_tmdb(play['ids'].get('tmdb'))
             if tvdb:

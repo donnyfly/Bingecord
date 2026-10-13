@@ -29,8 +29,11 @@ It supports automatic provider syncing, episode grouping, artwork and ratings, p
 
 ## Commands
 
+The bot displays **Playing /bingecord help**. Use `/bingecord help` for a private command guide and first-time setup instructions.
+
 | Command | Who can use it | Purpose |
 | --- | --- | --- |
+| `/bingecord help` | Everyone | View the command guide and setup steps |
 | `/bingecord link` | Everyone | Link a SIMKL, WeTrakr or MDBList account |
 | `/bingecord source` | Everyone | Select the linked account used in this server |
 | `/bingecord mapping` | Everyone | Privately inspect cross-provider matches and possible duplicate awards |
@@ -299,6 +302,23 @@ When enabled, the bot adds a progression layer on top of normal watch tracking.
 - Weekly recaps summarize recent server activity
 
 These systems are optional. Servers that only want activity posts can use the **Activity only** feature preset.
+
+## Watch XP rewards
+
+All completed **TV episodes, anime episodes, movies and anime movies earn 4 XP per minute** of catalog runtime. Equal watch time earns equal base XP across providers and media types.
+
+| Watch | Runtime | Base XP |
+| --- | --- | --- |
+| Anime episode | 24 minutes | 96 |
+| TV episode | 45 minutes | 180 |
+| Drama episode | 60 minutes | 240 |
+| Drama episode | 72 minutes | 288 |
+| Movie | 90 minutes | 360 |
+| Movie or anime movie | 120 minutes | 480 |
+
+The bot uses the completed item's catalog runtime, not time spent with playback open. Fractional minutes are retained until the final XP is rounded to the nearest integer (halves round up). Three 24-minute episodes and one 72-minute episode each earn **288 XP**.
+
+Episode runtime comes from provider metadata or cached TMDB season details. If an exact episode runtime is unavailable, the series' typical episode runtime is used. If no valid catalog runtime can be found, the fallback is **25 minutes / 100 XP for an episode** or **90 minutes / 360 XP for a movie**. Estimated duration also counts toward minute-based challenges.
 
 ## Multiple providers, one progression
 
