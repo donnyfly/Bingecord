@@ -294,6 +294,10 @@ class WeTrakrProvider(BaseProvider):
                       ids={**(parent_ids or {}),
                            **(metadata.get('ids') or {})}, genres=metadata.get('genres') or [])
         result['media_type'] = ('anime_movie' if kind == 'movie' else 'anime_episode') if anime else kind
+        result['runtime_minutes'] = await self.app.tmdb.get_watch_runtime(
+            result['media_type'], result['ids'], season=result.get('source_season', result.get('season')),
+            episode=result.get('source_episode', result.get('episode')),
+            runtime=result.get('runtime_minutes') or (metadata.get('runtime') if kind == 'movie' else None))
         if anime and kind == 'episode':
             ids = result['ids']
             tvdb_id = ids.get('tvdb') or ids.get('thetvdb')

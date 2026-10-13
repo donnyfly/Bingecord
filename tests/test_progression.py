@@ -8,7 +8,7 @@ from trackerbot.core.achievements import ACHIEVEMENTS
 
 def test_progression_curve():
     assert xp_for_watch("episode") == 100
-    assert xp_for_watch("movie") == 300
+    assert xp_for_watch("movie") == 360
     assert level_from_xp(0) == 1
     assert level_from_xp(xp_for_level(10)) == 10
     assert rank_for_level(1) == "Newcomer"
@@ -17,15 +17,10 @@ def test_progression_curve():
 
 
 def test_activity_based_episode_xp():
-    assert xp_for_watch("episode") == 100
-    assert xp_for_watch("episode", 39) == 100
-    assert xp_for_watch("episode", 40) == 125
-    assert xp_for_watch("episode", 59) == 125
-    assert xp_for_watch("episode", 60) == 150
-    assert xp_for_watch("episode", 90) == 175
-    assert xp_for_watch("episode", 120) == 200
-    assert xp_for_watch("episode", 180) == 250
-    assert xp_for_watch("movie", 140) == 300
+    for media_type in ("episode", "anime_episode", "movie", "anime_movie"):
+        for minutes in (24, 39, 40, 59, 60, 90, 120, 180):
+            assert xp_for_watch(media_type, minutes) == 4 * minutes
+    assert xp_for_watch("episode", 24) * 3 == xp_for_watch("episode", 72)
 
 
 def test_challenge_rotation():

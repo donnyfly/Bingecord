@@ -305,21 +305,24 @@ These systems are optional. Servers that only want activity posts can use the **
 
 ## Watch XP rewards
 
-Movies and anime movies award **300 XP per watch**, regardless of runtime. TV and anime episodes use the same runtime-based rewards:
+All completed **TV episodes, anime episodes, movies and anime movies earn 4 XP per minute** of catalog runtime. Equal watch time earns equal base XP across providers and media types.
 
-| Episode runtime | XP per episode |
-| --- | --- |
-| Under 40 minutes | 100 |
-| 40 to under 60 minutes | 125 |
-| 60 to under 90 minutes | 150 |
-| 90 to under 120 minutes | 175 |
-| 120 to under 150 minutes | 200 |
-| 150 to under 180 minutes | 225 |
-| 180 minutes or more | 250 |
+| Watch | Runtime | Base XP |
+| --- | --- | --- |
+| Anime episode | 24 minutes | 96 |
+| TV episode | 45 minutes | 180 |
+| Drama episode | 60 minutes | 240 |
+| Drama episode | 72 minutes | 288 |
+| Movie | 90 minutes | 360 |
+| Movie or anime movie | 120 minutes | 480 |
 
-Rewards use the **individual episode's runtime**, not the total length of the series. Missing or unusable episode runtime defaults to **100 XP**. For example, a 24-minute anime episode earns 100 XP and a 45-minute TV episode earns 125 XP.
+The bot uses the completed item's catalog runtime, not time spent with playback open. Fractional minutes are retained until the final XP is rounded to the nearest integer (halves round up). Three 24-minute episodes and one 72-minute episode each earn **288 XP**.
 
-These are base watch rewards, shared across all tracking providers. Achievements and challenges can add bonus XP. Confirmed cross-provider duplicates earn watch XP once, as described below.
+Episode runtime comes from provider metadata or cached TMDB season details. If an exact episode runtime is unavailable, the series' typical episode runtime is used. If no valid catalog runtime can be found, the fallback is **25 minutes / 100 XP for an episode** or **90 minutes / 360 XP for a movie**. Estimated duration also counts toward minute-based challenges.
+
+**Existing awards are preserved**, including their original amounts when a watch is removed. Newly credited watches use the minute-based rule; existing history is not retroactively repriced. New, previously uncredited history imports also use this rule and remain quiet. Confirmed cross-provider duplicates earn watch XP once.
+
+Achievements and challenges can add bonus XP. Daily challenge rotations use mainly minutes-watched goals from **14 October 2026 UTC**, and weekly rotations from **19 October 2026 UTC**, with movie-count goals retained for variety. Existing daily/weekly periods keep their definitions and rewards. Legacy events without stored duration are not guessed from their old XP and do not contribute to minute goals. Count-based achievements remain unchanged.
 
 ## Multiple providers, one progression
 

@@ -18,6 +18,7 @@ def normalize_journal_entry(entry: dict) -> dict | None:
             return None
         show = entry.get("show") or {}
         return {
+            "runtime_minutes": entry.get("runtime") or ((entry.get("episode") or {}).get("runtime") if isinstance(entry.get("episode"), dict) else None),
             "source": "wetrakr",
             "source_event_id": str(play_id),
             "change_id": str(entry.get("entry_id") or ""),
@@ -37,7 +38,7 @@ def normalize_journal_entry(entry: dict) -> dict | None:
     if category in {"watching", "waiting", "planning", "dropped", "paused"} and status in {"added", "removed"}:
         if media_type not in {"movie", "show"}:
             return None
-        return {"source": "wetrakr", "change_id": str(entry.get("entry_id") or ""),
+        return {"runtime_minutes": row.get("runtime"), "source": "wetrakr", "change_id": str(entry.get("entry_id") or ""),
                 "action": status, "status": category, "media_type": media_type,
                 "wetrakr_id": entry.get("id"), "ids": entry.get("ids") or {},
                 "title": entry.get("title") or "", "action_at": entry.get("action_at")}
@@ -48,7 +49,7 @@ def normalize_compact_play(row: dict) -> dict | None:
     """Compact history separates title, parent-show and stable play identities."""
     if row.get("type") not in {"movie", "episode"} or not row.get("play_id"):
         return None
-    return {"source": "wetrakr", "source_event_id": str(row["play_id"]),
+    return {"runtime_minutes": row.get("runtime"), "source": "wetrakr", "source_event_id": str(row["play_id"]),
             "media_type": row["type"], "wetrakr_id": row.get("id"),
             "ids": row.get("ids") or {}, "show_id": row.get("show_id"),
             "show_ids": row.get("show_ids") or {},

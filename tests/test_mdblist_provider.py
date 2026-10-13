@@ -39,7 +39,7 @@ async def setup(tmp_path,monkeypatch):
     await store.set_channel('1','9')
     api=API()
     app=SimpleNamespace(storage=store,mdblist_tracking=api,mdblist_auth=SimpleNamespace(access_token=AsyncMock(return_value='a')),
-        tmdb=SimpleNamespace(get_movie_details=AsyncMock(return_value={'title':'Film'}),_get_series_details=AsyncMock(return_value={'name':'Series'})),
+        tmdb=SimpleNamespace(get_watch_runtime=AsyncMock(side_effect=lambda kind, ids, **kw: __import__("trackerbot.core.progression",fromlist=["watch_minutes"]).watch_minutes(kind,kw.get("runtime"))),get_movie_details=AsyncMock(return_value={'title':'Film'}),_get_series_details=AsyncMock(return_value={'name':'Series'})),
         is_wetrakr_anime_movie=AsyncMock(return_value=False),is_wetrakr_anime=AsyncMock(return_value=False),
         bot=SimpleNamespace(get_channel=lambda _:SimpleNamespace(send=AsyncMock())),resolve_member=AsyncMock(return_value=(object(),'Viewer')),
         deliver_mdblist_play=AsyncMock(return_value=True),deliver_mdblist_status=AsyncMock(return_value=True),

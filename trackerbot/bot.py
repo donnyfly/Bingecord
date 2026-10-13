@@ -334,7 +334,7 @@ def iter_show_episodes(t,items):
                 en=ep.get("number")
                 if en is None: continue
                 wr=ep.get("watched_at")
-                yield {"show_title":show.get("title","a show"),"genres":show.get("genres") or item.get("genres") or [],"simkl_id":sid,"tmdb_id":ids.get("tmdb"),"tvdb_id":ids.get("tvdb"),"ids":ids,"slug":ids.get("slug"),"poster":show.get("poster"),"season_num":sn,"original_season_num":original,"mapped_tvdb_season_num":mapped_season,"episode_number":en,"episode_title":ep.get("title"),"watched_raw":wr,"watched_dt":parse_iso(wr) if wr else None,"key":episode_key(t,sid,sn,en)}
+                yield {"show_title":show.get("title","a show"),"genres":show.get("genres") or item.get("genres") or [],"simkl_id":sid,"tmdb_id":ids.get("tmdb"),"tvdb_id":ids.get("tvdb"),"ids":ids,"slug":ids.get("slug"),"poster":show.get("poster"),"season_num":sn,"original_season_num":original,"mapped_tvdb_season_num":mapped_season,"episode_number":en,"episode_title":ep.get("title"),"runtime_minutes":ep.get("runtime") or show.get("runtime"),"watched_raw":wr,"watched_dt":parse_iso(wr) if wr else None,"key":episode_key(t,sid,sn,en)}
 
 def format_episode_range(s,a,b):
     if s is None: return f"E{a:02d}" if a==b else f"E{a:02d}-E{b:02d}"
@@ -591,7 +591,7 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
                 image,ep_title,episode_imdb_id,episode_runtime=await episode_media(t,grp[0])
             except Exception:
                 log.warning("TMDB episode lookup failed for %s.", title, exc_info=True)
-                image,ep_title,episode_imdb_id,episode_runtime=None,grp[0].get("episode_title"),None
+                image,ep_title,episode_imdb_id,episode_runtime=None,grp[0].get("episode_title"),None,None
             label=format_episode_display(sn,grp[0]["episode_number"],grp[-1]["episode_number"],p.get("episode_code", False)); verb=kind.capitalize()
             rating = None
             if len(grp) == 1 and p.get("show_imdb", True):
@@ -630,16 +630,13 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
             # The first episode supplies the artwork/title for the grouped
             # notification. The last episode is resolved as a boundary check,
             # while episodes in between do not need individual TMDB/TVMaze
-            # lookups. Middle episodes fall back to the base episode XP value
-            # when their runtime is not already known.
-            runtime_by_key={grp[0]["key"]: episode_runtime}
-            if len(grp) > 1:
-                last_episode=grp[-1]
-                try:
-                    _,_,_,last_runtime=await episode_media(t,last_episode)
-                    runtime_by_key[last_episode["key"]]=last_runtime
-                except Exception:
-                    runtime_by_key[last_episode["key"]]=None
+            # artwork lookups. Runtime uses cached season metadata for every watch.
+            runtime_by_key={}
+            for watched in grp:
+                runtime_by_key[watched['key']] = await tmdb.get_watch_runtime(
+                    'anime_episode' if t=='anime' else 'episode', watched.get('ids') or {},
+                    season=watched['season_num'], episode=watched['episode_number'],
+                    runtime=watched.get('runtime_minutes') or (episode_runtime if watched is grp[0] else None))
 
             e=build_embed(t,desc,max(x["watched_dt"] for x in grp),name,member,image,profile,title,url,fallback,logo,p)
             keys=[x["key"] for x in grp]
@@ -651,6 +648,7 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
                 "watched_at":watched["watched_raw"],
                 "genres":watched.get("genres"),
                 "ids":watched.get("ids") or {},
+                "runtime_minutes":runtime_by_key[watched["key"]],
                 "amount":xp_for_watch("anime_episode" if t=="anime" else "episode",
                                        runtime_by_key.get(watched["key"])),
             } for watched in grp]
@@ -765,8 +763,9 @@ async def process_movies(ch,g,uid,name,member,items,since,profile,batch=None,sco
             activity_url = simkl_redirect_url(tmdb_movie_id, "movie", title)
         e=build_embed("movies",desc,dt,name,member,image,profile,title,activity_url,poster,logo,p)
         media_type="anime_movie" if anime_movie else "movie"
-        record={"media_type":media_type,"title":title,"item_key":k,"watched_at":wr,
-                "genres":m.get("genres") or x.get("genres"),"ids":ids,"amount":xp_for_watch(media_type)}
+        runtime=await tmdb.get_watch_runtime(media_type,{**ids,"tmdb":tmdb_movie_id},runtime=m.get("runtime"))
+        record={"runtime_minutes":runtime,"media_type":media_type,"title":title,"item_key":k,"watched_at":wr,
+                "genres":m.get("genres") or x.get("genres"),"ids":ids,"amount":xp_for_watch(media_type,runtime)}
         async def commit(k=k, wr=wr, record=record):
             await storage.record_activity_batch(g,uid,[k],{k:wr},[record])
         if batch is not None:
@@ -981,6 +980,7 @@ async def reconcile_watch_progression(g, uid, u, token, changed_types, request_c
                 if full_statistics_snapshot:
                     baseline_entries.append({"media_type":media_type,"item_key":f"movies:{sid}",
                                              "title":movie.get("title") or "Untitled","watched_at":item["last_watched_at"],
+                                             "runtime_minutes":movie.get("runtime"),
                                              "ids":movie.get("ids") or {},
                                              "genres":movie.get("genres") or item.get("genres") or []})
                 media_types.add(media_type)
@@ -1021,10 +1021,21 @@ async def reconcile_watch_progression(g, uid, u, token, changed_types, request_c
                                          "item_key":f"series:{t}:{episode['simkl_id']}:{episode['season_num']}:{episode['episode_number']}",
                                          "title":episode.get("show_title") or "Untitled",
                                          "ids":episode.get("ids") or {},
+                                         "runtime_minutes":episode.get("runtime_minutes"),
+                                         "season":episode["season_num"], "episode":episode["episode_number"],
                                          "watched_at":episode["watched_raw"],"genres":episode.get("genres") or []})
 
     result=await storage.reconcile_watch_xp(uid, active_watch_bases, media_types)
     if full_statistics_snapshot:
+        progression=await storage.get_progression(uid)
+        known_bases={event['event_key'][:-len(event['at'])] for event in progression.get('xp_events', [])
+                     if event.get('event_key') and event.get('at') and event['event_key'].endswith(event['at'])}
+        for entry in baseline_entries:
+            base=f"{entry['media_type']}:{entry['item_key']}:"
+            if base not in known_bases:
+                entry['runtime_minutes']=await tmdb.get_watch_runtime(
+                    entry['media_type'], entry.get('ids') or {}, season=entry.get('season'),
+                    episode=entry.get('episode'), runtime=entry.get('runtime_minutes'))
         restored_xp=await storage.repair_missing_watch_xp(uid,baseline_entries)
         if restored_xp:
             log.info("Restored %d missing historical watch XP for user %s.",restored_xp,uid)
@@ -1066,8 +1077,9 @@ async def seed_progression_history(uid, u, token, request_cache=None):
                 anime_movie = bool(movie.get("anime_type") == "movie" or movie.get("type") == "movie" or ids.get("mal"))
                 media_type = "anime_movie" if anime_movie else "movie"
                 event_key = f"{media_type}:movies:{sid}:{watched_at}"
-                events.append({"event_key":event_key,"media_type":media_type,"title":movie.get("title") or "Untitled",
-                               "at":watched_at,"amount":xp_for_watch(media_type),"ids":ids})
+                runtime=await tmdb.get_watch_runtime(media_type,ids,runtime=movie.get("runtime"))
+                events.append({"runtime_minutes":runtime,"event_key":event_key,"media_type":media_type,"title":movie.get("title") or "Untitled",
+                               "at":watched_at,"amount":xp_for_watch(media_type,runtime),"ids":ids})
             continue
         episode_items = items or []
         movie_items = []
@@ -1081,16 +1093,18 @@ async def seed_progression_history(uid, u, token, request_cache=None):
             if sid is None or not watched_at:
                 continue
             event_key = f"anime_movie:movies:{sid}:{watched_at}"
-            events.append({"event_key":event_key,"media_type":"anime_movie","title":movie.get("title") or "Untitled",
-                           "at":watched_at,"amount":xp_for_watch("anime_movie"),"ids":ids})
+            runtime=await tmdb.get_watch_runtime("anime_movie",ids,runtime=movie.get("runtime"))
+            events.append({"runtime_minutes":runtime,"event_key":event_key,"media_type":"anime_movie","title":movie.get("title") or "Untitled",
+                           "at":watched_at,"amount":xp_for_watch("anime_movie",runtime),"ids":ids})
         for episode in iter_show_episodes(t, episode_items):
             watched_at = episode.get("watched_raw")
             if not watched_at:
                 continue
             media_type = "anime_episode" if t == "anime" else "episode"
             event_key = f"{media_type}:series:{t}:{episode['simkl_id']}:{episode['season_num']}:{episode['episode_number']}:{watched_at}"
-            events.append({"event_key":event_key,"media_type":media_type,"title":episode.get("show_title") or "Untitled",
-                           "at":watched_at,"amount":xp_for_watch(media_type),"ids":episode.get("ids") or {}})
+            runtime=await tmdb.get_watch_runtime(media_type,episode.get("ids") or {},season=episode["season_num"],episode=episode["episode_number"],runtime=episode.get("runtime_minutes"))
+            events.append({"runtime_minutes":runtime,"event_key":event_key,"media_type":media_type,"title":episode.get("show_title") or "Untitled",
+                           "at":watched_at,"amount":xp_for_watch(media_type,runtime),"ids":episode.get("ids") or {}})
     seeded=await storage.seed_progression_batch(uid,events)
     log.info("Historical progression backfill completed for user %s: %d events, +%d XP in %.2fs.",
              uid,len(events),seeded,time.monotonic()-started)
@@ -2534,7 +2548,7 @@ async def simkl_challenges(i):
             done = ch["id"] in completed.get(key, {})
             progress = ch["target"] if done else challenge_progress(events, ch, start, end)
             mark = "✓" if done else "□"
-            out.append(f'{mark} **{ch["name"]}** — {progress}/{ch["target"]} · +{ch["xp"]:,} XP')
+            out.append(f'{mark} **{ch["name"]}** — {progress:g}/{ch["target"]} · +{ch["xp"]:,} XP')
         return "\n".join(out)
 
     e = discord.Embed(title="Tracker Challenges", color=0x5865F2)

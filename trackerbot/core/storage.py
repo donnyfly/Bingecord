@@ -12,7 +12,7 @@ import os
 from collections import defaultdict
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from trackerbot.core.progression import challenges_for, roll_prestige, xp_for_level
+from trackerbot.core.progression import challenges_for, roll_prestige, xp_for_level, xp_for_watch, watch_minutes, event_watch_minutes, WATCH_XP_RULE
 from trackerbot.core.community import challenge_for_week, watch_contributions, split_pool
 from trackerbot.core import watch_ledger
 from trackerbot.core.providers import provider_linked
@@ -278,7 +278,9 @@ def _add_watch_xp_events(progression: dict, events: list[dict]) -> tuple[int,lis
         known[key]=stamp
         added.append({"at":stamp,"amount":xp,"media_type":event["media_type"],
                       "title":event.get("title") or "Untitled","event_key":key,
-                      "ids":copy.deepcopy(event.get("ids") or {})})
+                      "ids":copy.deepcopy(event.get("ids") or {}),
+                      **({"runtime_minutes":event["runtime_minutes"], "xp_rule":WATCH_XP_RULE}
+                         if event.get("runtime_minutes") is not None else {})})
         amount+=xp
     if added:
         progression["xp"]+=amount
@@ -298,8 +300,8 @@ def _complete_watch_challenges(progression: dict, added: list[dict], *, notify: 
     if not touched:
         return
     from datetime import date, timedelta
-    daily=defaultdict(lambda: {"episodes":0,"movies":0,"watches":0})
-    weekly=defaultdict(lambda: {"episodes":0,"movies":0,"watches":0})
+    daily=defaultdict(lambda: {"episodes":0,"movies":0,"watches":0,"minutes":0.0})
+    weekly=defaultdict(lambda: {"episodes":0,"movies":0,"watches":0,"minutes":0.0})
     touched_weeks=set()
     for day in touched:
         parsed=date.fromisoformat(day)
@@ -320,9 +322,11 @@ def _complete_watch_challenges(progression: dict, added: list[dict], *, notify: 
         if day in touched:
             daily[day][kind]+=1
             daily[day]["watches"]+=1
+            daily[day]["minutes"]+=event_watch_minutes(event)
         if week in touched_weeks:
             weekly[week][kind]+=1
             weekly[week]["watches"]+=1
+            weekly[week]["minutes"]+=event_watch_minutes(event)
     now=datetime.now(timezone.utc).isoformat()
     completions=progression["challenge_completions"]
     for day in touched:
@@ -356,8 +360,8 @@ def _complete_watch_challenges(progression: dict, added: list[dict], *, notify: 
 def _revoke_unmet_watch_challenges(progression: dict) -> int:
     """Remove rewards whose watch requirements no longer hold after a deletion."""
     from datetime import date, timedelta
-    daily = defaultdict(lambda: {"episodes": 0, "movies": 0, "watches": 0})
-    weekly = defaultdict(lambda: {"episodes": 0, "movies": 0, "watches": 0})
+    daily = defaultdict(lambda: {"episodes": 0, "movies": 0, "watches": 0, "minutes": 0.0})
+    weekly = defaultdict(lambda: {"episodes": 0, "movies": 0, "watches": 0, "minutes": 0.0})
     for event in progression["xp_events"]:
         kind = event.get("media_type")
         if kind not in {"episode", "anime_episode", "movie", "anime_movie"}:
@@ -371,6 +375,7 @@ def _revoke_unmet_watch_challenges(progression: dict) -> int:
         for counts, key in ((daily, day.isoformat()), (weekly, week.isoformat())):
             counts[key][category] += 1
             counts[key]["watches"] += 1
+            counts[key]["minutes"] += event_watch_minutes(event)
     revoked = 0
     for period, completions in list(progression["challenge_completions"].items()):
         scope, _, day = period.partition(":")
@@ -387,6 +392,10 @@ def _revoke_unmet_watch_challenges(progression: dict) -> int:
             if definition and counts[definition["kind"]] < definition["target"]:
                 revoked += max(0, int(reward.get("xp", 0)))
                 del completions[challenge_id]
+                notification_key = f"{period}:{challenge_id}"
+                progression['pending_challenge_notifications'] = [
+                    row for row in progression.get('pending_challenge_notifications', [])
+                    if row.get('key') != notification_key]
         if not completions:
             del progression["challenge_completions"][period]
     if revoked:
@@ -1078,6 +1087,8 @@ class Storage:
                                        "genres": previous.get("genres") or []}
                         added += 1
                     continue
+                preserved_award = next((copy.deepcopy(award) for award in progression['xp_events']
+                                        if previous and award.get('event_key') == previous.get('xp_key')), None)
                 if previous:
                     revised = True
                     previous_key = f"{provider}:{play_id}:{previous['watched_at']}"
@@ -1103,7 +1114,9 @@ class Storage:
                 amount, added_events = _add_watch_xp_events(progression, [{"event_key": xp_key,
                     "media_type": kind, "title": title, "at": stamp, "item_key": item_key,
                     "ids": play.get("ids") or {},
-                    "amount": 300 if "movie" in kind else 100}])
+                    **({"runtime_minutes":preserved_award["runtime_minutes"]} if preserved_award and "runtime_minutes" in preserved_award
+                       else {} if preserved_award else {"runtime_minutes":watch_minutes(kind, play.get("runtime_minutes"))}),
+                    "amount": preserved_award["amount"] if preserved_award else xp_for_watch(kind, play.get("runtime_minutes"))}])
                 duplicate = not added_events
                 xp_delta += amount
                 challenge_events.extend(added_events)
@@ -1113,6 +1126,7 @@ class Storage:
                                    "show_id": play.get("show_id"),
                                    "show_ids": play.get("show_ids") or {},
                                    "season": play.get("season"), "episode": play.get("episode"),
+                                   "runtime_minutes":play.get("runtime_minutes"),
                                    "source_season": play.get("source_season"), "source_episode": play.get("source_episode"),
                                    "ids": play.get("ids") or {}, "genres": _genre_names(play.get("genres"))}
             if complete:
@@ -1407,7 +1421,7 @@ class Storage:
                                 "media_type":entry["media_type"],"title":entry["title"],
                                 "at":entry["watched_at"],
                                 "ids":entry.get("ids") or {},
-                                "amount":300 if entry["media_type"] in {"movie","anime_movie"} else 100})
+                                "amount":xp_for_watch(entry["media_type"], entry.get("runtime_minutes")), "runtime_minutes":watch_minutes(entry["media_type"], entry.get("runtime_minutes"))})
             amount,_=_add_watch_xp_events(progression,missing)
             if missing:
                 self._dirty=True
@@ -1455,7 +1469,7 @@ class Storage:
                 "media_type":record[0],"title":record[1],"item_key":record[2],
                 "watched_at":record[3],"genres":record[4],
                 "ids":record[5] if len(record)>5 else {},
-                "amount":300 if record[0] in {"movie","anime_movie"} else 100,
+                "amount":xp_for_watch(record[0]), "runtime_minutes":watch_minutes(record[0]),
             } for record in records]
             amount=self._apply_watch_records_locked(guild_user,global_user,watches_to_record,
                                                      guild.get("timezone"))
@@ -1503,7 +1517,9 @@ class Storage:
             xp_events.append({"event_key":f"{media_type}:{item_key}:{watched_at}",
                               "media_type":media_type,"title":title,"at":watched_at,
                               "ids":record.get("ids") or {},
-                              "amount":record["amount"]})
+                              "amount":record["amount"],
+                              **({"runtime_minutes":record["runtime_minutes"]}
+                                 if record.get("runtime_minutes") is not None else {})})
         if records and any(str(key).startswith("wetrakr:")
                            for key in (guild_user["statistics"].get("watch_events") or {})):
             guild_user["statistics"]=_rebuild_watch_statistics(
