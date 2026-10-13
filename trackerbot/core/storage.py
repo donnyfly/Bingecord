@@ -10,10 +10,10 @@ import copy
 import json
 import os
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from trackerbot.core.progression import challenges_for, roll_prestige, xp_for_level, xp_for_watch, watch_minutes, event_watch_minutes, WATCH_XP_RULE
-from trackerbot.core.community import challenge_for_week, watch_contributions, split_pool
+from trackerbot.core.community import challenge_for_week, watch_contributions, split_pool, minute_contributions, watchathon_goal, watchathon_rewards
 from trackerbot.core import watch_ledger
 from trackerbot.core.providers import provider_linked
 from trackerbot.core.tracker_mapping import identity_from_event, identity_from_play, normalized_ids
@@ -2124,7 +2124,14 @@ class Storage:
                 return {}
             records=guild.setdefault("community_challenges", {})
             if week_key not in records:
-                challenge=challenge_for_week(week_key,len(guild.get("users") or {}))
+                member_rows=guild.get('users') or {}
+                if week_key >= '2026-10-19':
+                    providers={uid:member.get('activity_provider','simkl') for uid,member in member_rows.items()}
+                    recent=minute_contributions(self._data['users'],member_rows,
+                                               start-timedelta(days=14),start,providers)
+                    challenge=watchathon_goal(len(recent),len(member_rows))
+                else:
+                    challenge=challenge_for_week(week_key,len(member_rows))
                 records[week_key]={
                     "start":start.isoformat(),"end":end.isoformat(),
                     **challenge,
@@ -2142,6 +2149,11 @@ class Storage:
                 period_start=datetime.fromisoformat(record["start"])
                 period_end=datetime.fromisoformat(record["end"])
                 providers=record.get("providers") or {}
+                if record.get('kind')=='minutes':
+                    source_map={uid:providers.get(uid,member.get('activity_provider','simkl'))
+                                for uid,member in guild.get('users',{}).items()}
+                    return minute_contributions(self._data['users'],record.get('members') or [],
+                                                period_start,period_end,source_map)
                 selected={uid:_statistics_for_provider(member,providers.get(uid,member.get("activity_provider","simkl")),
                                                        guild.get("timezone")).get("watch_events",{})
                           for uid,member in guild.get("users",{}).items()
@@ -2164,8 +2176,8 @@ class Storage:
                     record["notified_awards"]=copy.deepcopy(record.get("awards") or {})
                     self._dirty=True
                 contributions=counts_for(record)
-                desired=(split_pool(contributions,int(record["pool"]))
-                         if sum(contributions.values()) >= int(record["target"]) else {})
+                desired=(watchathon_rewards(contributions,record) if record.get('kind')=='minutes' else
+                         split_pool(contributions,int(record['pool'])) if sum(contributions.values())>=int(record['target']) else {})
                 previous=record.get("awards") or {}
                 if desired==previous:
                     continue
@@ -2205,18 +2217,38 @@ class Storage:
                                 "members":members,"initial":initial})
             contributions=counts_for(current)
             total=sum(contributions.values())
+            qualified=sum(value>=current.get('qualifying_minutes',1) for value in contributions.values())
+            reached=total>=int(current['target']) and qualified>=current.get('required_contributors',1)
+            progress_pct=min(100,total*100/current['target'])
+            milestones=[mark for mark in (25,50,75,100) if progress_pct>=mark and
+                        mark not in current.get('milestones_notified',[])] if current.get('kind')=='minutes' else []
             state={
+                'qualified_contributors':qualified,'contributor_count':len(contributions),
+                'required_contributors':current.get('required_contributors',1),
+                'qualifying_minutes':current.get('qualifying_minutes',1),
+                'active_members':current.get('active_members'),
+                'remaining':max(0,current['target']-total),'pending_milestone':max(milestones,default=0),
                 "key":week_key,"start":current["start"],"end":current["end"],
                 "target":int(current["target"]),"pool":int(current["pool"]),
                 "kind":current.get("kind","episodes"),
                 "contributions":contributions,"total":total,
                 "awards":copy.deepcopy(current.get("awards") or {}),
-                "status":("completed" if current.get("awards") else "missed") if now >= end else ("goal_reached" if total >= int(current["target"]) else "active"),
+                "status":("completed" if current.get("awards") else "missed") if now >= end else ("goal_reached" if reached else "active"),
                 "changes":changes,
                 "pending_notifications":pending,
             }
         await self.flush()
         return state
+
+    async def ack_community_milestone(self, guild_id, week_key, milestone):
+        async with _lock:
+            guild=self._guild(str(guild_id))
+            record=(guild or {}).get('community_challenges',{}).get(week_key)
+            if not record or record.get('kind')!='minutes':return
+            known=record.setdefault('milestones_notified',[])
+            record['milestones_notified']=sorted(set(known)|{mark for mark in (25,50,75,100) if mark<=milestone})
+            self._dirty=True
+        await self.flush()
 
     async def ack_community_notification(self, guild_id: str | int, week_key: str, awards: dict) -> None:
         """Acknowledge only the payout snapshot that was actually delivered."""

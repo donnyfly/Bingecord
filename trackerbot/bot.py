@@ -2188,6 +2188,7 @@ async def notify_challenge_rewards(guild_id_value,uid,channel):
 async def notify_community_rewards(guild_id_value,channel,notification):
     challenge=CHALLENGES.get(notification.get("kind"),CHALLENGES["episodes"])
     unit=challenge["unit"]
+    sharing="50% equally, 50% by minutes" if notification.get("kind")=="minutes" else "by contribution"
     members=notification["members"] if notification["initial"] else [
         uid for uid in notification["members"] if notification["deltas"].get(uid)
     ]
@@ -2208,7 +2209,7 @@ async def notify_community_rewards(guild_id_value,channel,notification):
             title="Community Challenge Completed" if notification["initial"] else "Community Challenge Rewards Updated",
             description=(
                 f"Week of **{notification['key']}** · {challenge['name']} · {notification['target']:,} {unit} goal\n"
-                f"**{notification['pool']:,} XP pool** shared by contribution\n\n"
+                f"**{notification['pool']:,} XP pool** shared {sharing}\n\n"
                 +"\n".join(lines)
             ),
             color=0xC9DCF0,
@@ -2233,6 +2234,17 @@ async def refresh_community_state(guild_id_value):
     channel_id=await storage.get_channel(guild_id_value)
     channel=bot.get_channel(int(channel_id)) if channel_id else None
     if channel:
+        milestone=state.get('pending_milestone',0)
+        if milestone and now < datetime.fromisoformat(state['end']):
+            embed=discord.Embed(title=f"Community Watchathon · {milestone}% milestone",
+                description=f"**{state['total']:,.1f} / {state['target']:,} minutes** watched together.\n"
+                            f"Qualifying contributors: **{state['qualified_contributors']} / {state['required_contributors']}**\n"
+                            f"Remaining: **{state['remaining']:,.1f} minutes**. Rewards settle after the week ends.",color=0x8957FF)
+            try:
+                await channel.send(embed=embed,allowed_mentions=discord.AllowedMentions.none())
+                await storage.ack_community_milestone(guild_id_value,key,milestone)
+            except Exception:
+                log.exception('Community milestone delivery failed for guild %s.',guild_id_value)
         for notification in state.get("pending_notifications",[]):
             await notify_community_rewards(guild_id_value,channel,notification)
     for change in state.get("changes",[]):
@@ -2590,6 +2602,15 @@ async def simkl_community(i):
         description+="\n**Goal reached!** The pool is distributed by contribution after the week ends."
     elif state["status"]=="active":
         description+=f"\nContribute at least one {unit} before the deadline to qualify if the goal is reached."
+    if state['kind']=='minutes':
+        description+=(f"\nQualifying contributors: **{state['qualified_contributors']} / {state['required_contributors']}**"
+                      f" · **{state['remaining']:,.1f} minutes** remaining.\n"
+                      f"Watch at least **{state['qualifying_minutes']} minutes** to qualify. "
+                      "Half the reward pool is shared equally; half is proportional to qualifying members' minutes.")
+        description=description.replace('The pool is distributed by contribution after the week ends.',
+                                        'The pool is distributed after the week ends.').replace(
+                                        'Contribute at least one minute before the deadline to qualify if the goal is reached.',
+                                        'The time target and contributor requirement must both be met.')
     e=discord.Embed(title=f"{i.guild.name} · Community Challenge",description=description,color=0xC9DCF0)
     e.add_field(name="Contributors",value="\n".join(rows) if rows else f"No {unit}s contributed yet.",inline=False)
     e.set_footer(text="Server-local weekly goal · bonus XP is added to normal watch XP")
