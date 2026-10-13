@@ -322,7 +322,7 @@ Episode runtime comes from provider metadata or cached TMDB season details. If a
 
 ## Community Watchathon
 
-From the server-local week beginning **19 October 2026**, new community goals use watch time across TV, anime and movies. Existing stored goals keep their original rules.
+The current community goal switches to watch time across TV, anime and movies immediately after deployment. Unfinished goals for the server-local week beginning **12 October 2026** and future weeks use Watchathon. Already reached or paid legacy goals retain their original rules and rewards.
 
 - The target is **180 minutes per recently active member**, based on the preceding 14 days of credited, selected-source activity. It stays fixed for the week. With no recent duration data, a new server starts with a one- or two-member baseline.
 - Members need **30 minutes** to qualify. The goal requires one to three qualifying contributors, depending on the baseline size; a two-member baseline requires both members.
@@ -331,7 +331,7 @@ From the server-local week beginning **19 October 2026**, new community goals us
 - Progress notices cover 25%, 50%, 75% and 100%, with only the highest new milestone posted per check. A 100% time milestone still needs enough qualifying contributors.
 - `/bingecord community` shows contributors, remaining minutes and the server-timezone reset countdown. New members may contribute without changing the frozen target.
 
-The personal minute-based daily/weekly challenge pools **permanently replace** the old pools after their respective cutover dates; those dates do not indicate an expiry.
+The personal minute-based daily/weekly challenge pools **permanently replace** the old pools immediately for the current periods; this is permanent, not a temporary event.
 
 ## Multiple providers, one progression
 

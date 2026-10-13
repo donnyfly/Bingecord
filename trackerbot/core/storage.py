@@ -12,7 +12,7 @@ import os
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from trackerbot.core.progression import challenges_for, roll_prestige, xp_for_level, xp_for_watch, watch_minutes, event_watch_minutes, WATCH_XP_RULE
+from trackerbot.core.progression import challenge_pool, challenges_for, roll_prestige, xp_for_level, xp_for_watch, watch_minutes, event_watch_minutes, WATCH_XP_RULE
 from trackerbot.core.community import challenge_for_week, watch_contributions, split_pool, minute_contributions, watchathon_goal, watchathon_rewards
 from trackerbot.core import watch_ledger
 from trackerbot.core.providers import provider_linked
@@ -333,7 +333,7 @@ def _complete_watch_challenges(progression: dict, added: list[dict], *, notify: 
         for challenge in challenges_for(date.fromisoformat(day))[0]:
             key=f"daily:{day}"
             if daily[day][challenge["kind"]]>=challenge["target"] and challenge["id"] not in completions.get(key,{}):
-                completions.setdefault(key,{})[challenge["id"]]={"completed_at":now,"xp":challenge["xp"]}
+                completions.setdefault(key,{})[challenge["id"]]={"completed_at":now,"xp":challenge["xp"],"definition":copy.deepcopy(challenge)}
                 if notify:
                     progression.setdefault("pending_challenge_notifications",[]).append({
                         "key":f"{key}:{challenge['id']}","name":challenge["name"],
@@ -346,7 +346,7 @@ def _complete_watch_challenges(progression: dict, added: list[dict], *, notify: 
         for challenge in challenges_for(date.fromisoformat(week))[1]:
             key=f"weekly:{week}"
             if weekly[week][challenge["kind"]]>=challenge["target"] and challenge["id"] not in completions.get(key,{}):
-                completions.setdefault(key,{})[challenge["id"]]={"completed_at":now,"xp":challenge["xp"]}
+                completions.setdefault(key,{})[challenge["id"]]={"completed_at":now,"xp":challenge["xp"],"definition":copy.deepcopy(challenge)}
                 if notify:
                     progression.setdefault("pending_challenge_notifications",[]).append({
                         "key":f"{key}:{challenge['id']}","name":challenge["name"],
@@ -385,10 +385,11 @@ def _revoke_unmet_watch_challenges(progression: dict) -> int:
             definitions = challenges_for(date.fromisoformat(day))[0 if scope == "daily" else 1]
         except ValueError:
             continue
-        requirements = {item["id"]: item for item in definitions}
+        legacy=challenge_pool(scope,date.fromisoformat(day).toordinal())
+        requirements = {item['id']: item for item in legacy+definitions}
         counts = daily[day] if scope == "daily" else weekly[day]
         for challenge_id, reward in list(completions.items()):
-            definition = requirements.get(challenge_id)
+            definition = reward.get("definition") or requirements.get(challenge_id)
             if definition and counts[definition["kind"]] < definition["target"]:
                 revoked += max(0, int(reward.get("xp", 0)))
                 del completions[challenge_id]
@@ -2125,7 +2126,7 @@ class Storage:
             records=guild.setdefault("community_challenges", {})
             if week_key not in records:
                 member_rows=guild.get('users') or {}
-                if week_key >= '2026-10-19':
+                if week_key >= '2026-10-12' and now >= datetime(2026,10,13,tzinfo=timezone.utc):
                     providers={uid:member.get('activity_provider','simkl') for uid,member in member_rows.items()}
                     recent=minute_contributions(self._data['users'],member_rows,
                                                start-timedelta(days=14),start,providers)
@@ -2162,6 +2163,16 @@ class Storage:
                 return watch_contributions(self._data["users"],record.get("members") or [],
                                            period_start,period_end,record.get("kind","episodes"),
                                            selected_events=selected)
+
+            # Replace only unfinished current goals. Reached/paid legacy goals retain their rules.
+            if (current.get('kind')!='minutes' and week_key>='2026-10-12'
+                    and now>=datetime(2026,10,13,tzinfo=timezone.utc) and now<end
+                    and not current.get('awards') and not current.get('notified_awards')
+                    and sum(counts_for(current).values())<current['target']):
+                providers={uid:member.get('activity_provider','simkl') for uid,member in guild.get('users',{}).items()}
+                recent=minute_contributions(self._data['users'],guild.get('users',{}),start-timedelta(days=14),start,providers)
+                current.update(watchathon_goal(len(recent),len(guild.get('users') or {})))
+                self._dirty=True
 
             for key,record in records.items():
                 period_end=datetime.fromisoformat(record["end"])

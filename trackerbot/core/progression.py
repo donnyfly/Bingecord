@@ -119,10 +119,10 @@ def challenge_pool(period: str, day_number: int, *, minutes_based=False) -> list
 
 def challenges_for(day: date) -> tuple[list[dict], list[dict]]:
     ordinal = day.toordinal()
-    daily = challenge_pool("daily", ordinal, minutes_based=day >= date(2026, 10, 14))
+    daily = challenge_pool("daily", ordinal, minutes_based=day >= date(2026, 10, 13))
     # Keep the weekly set stable from Monday through Sunday.
     monday_ordinal = ordinal - day.weekday()
-    weekly = challenge_pool("weekly", monday_ordinal, minutes_based=day >= date(2026, 10, 19))
+    weekly = challenge_pool("weekly", monday_ordinal, minutes_based=monday_ordinal >= date(2026, 10, 12).toordinal())
     return daily, weekly
 
 def challenge_progress(events: list[dict], challenge: dict, start_iso: str, end_iso: str) -> int | float:

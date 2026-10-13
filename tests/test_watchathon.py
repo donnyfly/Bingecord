@@ -94,3 +94,37 @@ def test_milestone_post_failure_retries_and_success_acknowledges(monkeypatch):
         channel.send.side_effect=None
         await bot.refresh_community_state('10');ack.assert_awaited_once()
     asyncio.run(run())
+
+
+def test_current_unfinished_goal_migrates_but_reached_goal_does_not(tmp_path,monkeypatch):
+    async def run():
+        monkeypatch.setattr(storage_module,'DATA_PATH',str(tmp_path/'store.json'))
+        store=storage_module.Storage()
+        now=datetime(2026,10,12,tzinfo=timezone.utc)
+        key,start,end=community_week(now,'UTC')
+        for gid in ('10','20'):
+            await store.link_user(gid,'1','token',None,'Viewer','2026-10-01T00:00:00Z')
+            old=await store.get_community_state(gid,key,start,end,now)
+            assert old['kind']=='all'
+        await store.record_activity_batch('20','1',['watch'],{},[
+            {'media_type':'episode','title':'Show','item_key':'series:shows:1:1:1',
+             'watched_at':'2026-10-13T12:00:00Z','runtime_minutes':60,'amount':240,'ids':{'tmdb':1}}])
+        store._data['guilds']['20']['community_challenges'][key]['target']=1
+        migrated=await store.get_community_state('10',key,start,end,datetime(2026,10,13,13,tzinfo=timezone.utc))
+        retained=await store.get_community_state('20',key,start,end,datetime(2026,10,13,13,tzinfo=timezone.utc))
+        assert migrated['kind']=='minutes' and migrated['target']==180
+        assert retained['kind']=='all' and retained['status']=='goal_reached'
+    asyncio.run(run())
+
+
+def test_completed_legacy_personal_reward_keeps_removal_requirements():
+    stamp='2026-10-13T12:00:00Z'
+    progression={'xp':1000,'lifetime_xp':1000,'xp_events':[
+        {'media_type':'episode','at':stamp,'amount':100} for _ in range(5)],
+        'challenge_completions':{'daily:2026-10-13':{'daily_watches_5':{'xp':500}}},
+        'pending_challenge_notifications':[]}
+    assert storage_module._revoke_unmet_watch_challenges(progression)==0
+    assert progression['xp']==1000
+    progression['xp_events'].pop()
+    assert storage_module._revoke_unmet_watch_challenges(progression)==500
+    assert progression['xp']==500
