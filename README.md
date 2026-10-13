@@ -320,8 +320,6 @@ The bot uses the completed item's catalog runtime, not time spent with playback 
 
 Episode runtime comes from provider metadata or cached TMDB season details. If an exact episode runtime is unavailable, the series' typical episode runtime is used. If no valid catalog runtime can be found, the fallback is **25 minutes / 100 XP for an episode** or **90 minutes / 360 XP for a movie**. Estimated duration also counts toward minute-based challenges.
 
-Achievements and challenges can add bonus XP. Daily challenge rotations use mainly minutes-watched goals from **14 October 2026 UTC**, and weekly rotations from **19 October 2026 UTC**, with movie-count goals retained for variety. Existing daily/weekly periods keep their definitions and rewards. Legacy events without stored duration are not guessed from their old XP and do not contribute to minute goals. Count-based achievements remain unchanged.
-
 ## Multiple providers, one progression
 
 Each member selects one source **per server**. The selected account supplies watch totals, history, watching/planned lists and recommendation exclusions. Servers can combine members using different providers.
