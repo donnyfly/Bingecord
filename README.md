@@ -1,4 +1,4 @@
-# Bingecord
+# <img width="45" height="" alt="Bingecord cinema chat mascot" src="https://github.com/user-attachments/assets/a14ae030-5a54-4d71-bcf2-5d1260f67180" /> Bingecord
 
 A self-hosted Discord bot that turns your **SIMKL, WeTrakr, or MDBList watch activity** into clean Discord updates for **TV shows, anime, and movies**.
 
