@@ -303,6 +303,24 @@ When enabled, the bot adds a progression layer on top of normal watch tracking.
 
 These systems are optional. Servers that only want activity posts can use the **Activity only** feature preset.
 
+## Watch XP rewards
+
+Movies and anime movies award **300 XP per watch**, regardless of runtime. TV and anime episodes use the same runtime-based rewards:
+
+| Episode runtime | XP per episode |
+| --- | --- |
+| Under 40 minutes | 100 |
+| 40 to under 60 minutes | 125 |
+| 60 to under 90 minutes | 150 |
+| 90 to under 120 minutes | 175 |
+| 120 to under 150 minutes | 200 |
+| 150 to under 180 minutes | 225 |
+| 180 minutes or more | 250 |
+
+Rewards use the **individual episode's runtime**, not the total length of the series. Missing or unusable episode runtime defaults to **100 XP**. For example, a 24-minute anime episode earns 100 XP and a 45-minute TV episode earns 125 XP.
+
+These are base watch rewards, shared across all tracking providers. Achievements and challenges can add bonus XP. Confirmed cross-provider duplicates earn watch XP once, as described below.
+
 ## Multiple providers, one progression
 
 Each member selects one source **per server**. The selected account supplies watch totals, history, watching/planned lists and recommendation exclusions. Servers can combine members using different providers.
