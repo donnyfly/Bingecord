@@ -320,6 +320,19 @@ The bot uses the completed item's catalog runtime, not time spent with playback 
 
 Episode runtime comes from provider metadata or cached TMDB season details. If an exact episode runtime is unavailable, the series' typical episode runtime is used. If no valid catalog runtime can be found, the fallback is **25 minutes / 100 XP for an episode** or **90 minutes / 360 XP for a movie**. Estimated duration also counts toward minute-based challenges.
 
+## Community Watchathon
+
+The current community goal switches to watch time across TV, anime and movies immediately after deployment. Unfinished goals for the server-local week beginning **12 October 2026** and future weeks use Watchathon. Already reached or paid legacy goals retain their original rules and rewards.
+
+- The target is **180 minutes per recently active member**, based on the preceding 14 days of credited, selected-source activity. It stays fixed for the week. With no recent duration data, a new server starts with a one- or two-member baseline.
+- Members need **30 minutes** to qualify. The goal requires one to three qualifying contributors, depending on the baseline size; a two-member baseline requires both members.
+- The bonus pool is **2 XP per target minute**: half shared equally among qualifying members and half proportional to their watch minutes. Rewards settle after the week ends and are recalculated after removals.
+- Confirmed duplicate watches count once. Estimated runtime counts; legacy awards without recorded runtime do not supply guessed minutes.
+- Progress notices cover 25%, 50%, 75% and 100%, with only the highest new milestone posted per check. A 100% time milestone still needs enough qualifying contributors.
+- `/bingecord community` shows contributors, remaining minutes and the server-timezone reset countdown. New members may contribute without changing the frozen target.
+
+The personal minute-based daily/weekly challenge pools **permanently replace** the old pools immediately for the current periods; this is permanent, not a temporary event.
+
 ## Multiple providers, one progression
 
 Each member selects one source **per server**. The selected account supplies watch totals, history, watching/planned lists and recommendation exclusions. Servers can combine members using different providers.

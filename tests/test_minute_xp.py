@@ -22,10 +22,10 @@ def test_fractional_runtime_and_legacy_duration():
               {'at':'2026-10-14T14:00:00Z','media_type':'episode','amount':100},
               {'at':'2026-10-14T15:00:00Z','media_type':'achievement','runtime_minutes':500}]
     assert challenge_progress(events, {'kind':'minutes','target':200}, '2026-10-14','2026-10-15') == 114.5
-    assert all(c['kind'] != 'minutes' for c in challenges_for(date(2026,10,13))[0])
-    assert any(c['kind'] == 'minutes' for c in challenges_for(date(2026,10,14))[0])
-    assert all(c['kind'] != 'minutes' for c in challenges_for(date(2026,10,18))[1])
-    assert any(c['kind'] == 'minutes' for c in challenges_for(date(2026,10,19))[1])
+    assert all(c['kind'] != 'minutes' for c in challenges_for(date(2026,10,12))[0])
+    assert any(c['kind'] == 'minutes' for c in challenges_for(date(2026,10,13))[0])
+    assert all(c['kind'] != 'minutes' for c in challenges_for(date(2026,10,11))[1])
+    assert any(c['kind'] == 'minutes' for c in challenges_for(date(2026,10,12))[1])
 
 
 def test_runtime_lookup_uses_one_season_request_for_range(monkeypatch):
@@ -77,7 +77,7 @@ def test_minute_challenge_rewards_and_removals(tmp_path, monkeypatch):
               'watched_at':'2026-10-14T12:00:00Z'}
         await store.reconcile_provider_plays('1','42',[play],complete=True,account_id='9',provider='mdblist')
         rewards=sum(c['xp'] for c in challenges_for(date(2026,10,14))[0] if c['kind']=='minutes')
-        assert (await store.get_progression('42'))['lifetime_xp'] == 480 + rewards
+        assert (await store.get_progression('42'))['lifetime_xp'] == 480 + rewards + sum(c['xp'] for c in challenges_for(date(2026,10,14))[1] if c['kind']=='minutes' and c['target']<=120)
         await store.reconcile_provider_plays('1','42',[],complete=True,account_id='9',provider='mdblist')
         assert (await store.get_progression('42'))['lifetime_xp'] == 0
     asyncio.run(run())

@@ -23,11 +23,14 @@ CHALLENGES={
     "all": {"name":"Watch Party","unit":"watch","media_types":{"episode","anime_episode","movie","anime_movie"},"per_member":22,"minimum":25,"xp_per_watch":300},
 }
 
+CHALLENGES['minutes']={'name':'Community Watchathon','unit':'minute',
+                       'media_types':{'episode','anime_episode','movie','anime_movie'}}
+
 
 def challenge_for_week(week_key: str, member_count: int) -> dict:
     """Rotate in calendar order; keep the rollout week on its original episode goal."""
     week_number=(datetime.fromisoformat(week_key).date()-datetime(2026,9,21).date()).days//7
-    kind=tuple(CHALLENGES)[week_number%len(CHALLENGES)]
+    kind=("episodes","movies","anime","all")[week_number%4]
     challenge=CHALLENGES[kind]
     target=max(challenge["minimum"],challenge["per_member"]*member_count)
     return {"kind":kind,"target":target,"pool":target*challenge["xp_per_watch"]}
@@ -79,3 +82,59 @@ def split_pool(contributions: dict[str,int], pool: int):
     for uid in order[:left]:
         awards[uid]+=1
     return awards
+
+
+def minute_contributions(users, member_ids, start, end, providers):
+    """Count each credited occurrence once, supported by this server's selected source."""
+    from trackerbot.core.progression import event_watch_minutes
+    result={}
+    for uid in member_ids:
+        uid=str(uid)
+        user=users.get(uid) or {}
+        progression=user.get('progression') or {}
+        provider=providers.get(uid)
+        account=str((user.get(provider) or {}).get('account_id')) if provider in {'wetrakr','mdblist'} else None
+        events={event.get('event_key'):event for event in progression.get('xp_events') or []}
+        total=0.0
+        for row in (progression.get('occurrence_ledger') or {}).values():
+            observations=[obs for key,obs in row.get('observations',{}).items()
+                          if obs.get('provider')==provider and
+                          (account is None or key.startswith(f'{provider}:{account}/'))]
+            if not observations:
+                continue
+            event=next((events[key] for key in row.get('award_keys',[])
+                        if key in events and event_watch_minutes(events[key])>0),None)
+            if not event:
+                continue
+            stamp=next(((obs.get('identity') or {}).get('watched_at') for obs in observations
+                        if (obs.get('identity') or {}).get('watched_at')),event.get('at'))
+            try:
+                watched=datetime.fromisoformat(str(stamp).replace('Z','+00:00'))
+                if watched.tzinfo is None:watched=watched.replace(tzinfo=timezone.utc)
+            except (TypeError,ValueError):
+                continue
+            if start<=watched<end:
+                total+=event_watch_minutes(event)
+        if total>0:result[uid]=round(total,6)
+    return result
+
+
+def watchathon_goal(active_count, linked_count):
+    # A new community with no recent duration data starts with at most two members.
+    size=max(1,active_count or min(2,linked_count))
+    target=180*size
+    return {'kind':'minutes','target':target,'pool':target*2,'active_members':active_count,
+            'required_contributors':min(3,max(1,(size+1)//2 if size!=2 else 2)),
+            'qualifying_minutes':30,'milestones_notified':[]}
+
+
+def watchathon_rewards(contributions, record):
+    qualifying={uid:minutes for uid,minutes in contributions.items()
+                if minutes>=record.get('qualifying_minutes',30)}
+    if sum(contributions.values())<record['target'] or len(qualifying)<record['required_contributors']:
+        return {}
+    pool=int(record['pool'])
+    equal=split_pool({uid:1 for uid in qualifying},pool//2)
+    # Preserve fractional minutes in deterministic, integer micro-minute weights.
+    weighted=split_pool({uid:round(minutes*1000000) for uid,minutes in qualifying.items()},pool-pool//2)
+    return {uid:equal.get(uid,0)+weighted.get(uid,0) for uid in qualifying}
