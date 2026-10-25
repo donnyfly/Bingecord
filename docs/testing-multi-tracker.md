@@ -1,5 +1,7 @@
 # Experimental multi-tracker validation
 
+Personal ratings, late message edits and season/series milestones have a separate [cross-provider acceptance checklist](testing-ratings-completion.md). Run it alongside this existing watch/XP validation.
+
 ## Automated coverage
 
 Run `python3 -m pytest -q` and `python3 -m compileall -q trackerbot tests`.

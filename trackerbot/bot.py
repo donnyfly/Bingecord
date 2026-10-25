@@ -13,7 +13,8 @@ from trackerbot.integrations.wetrakr_sync import WeTrakrSync
 from trackerbot.integrations.mdblist_tracking_client import MDBListTrackingClient, MDBListTrackingError
 from trackerbot.integrations.mdblist_provider import MDBListProvider
 from trackerbot.core.storage import DEFAULT_FEATURES, EPOCH_ISO, storage
-from trackerbot.core.watch_delivery import WatchActivity, WatchBatch, WatchCycle, current_cycle, watch_key, deliver_watch
+from trackerbot.core.watch_delivery import WatchActivity, WatchBatch, WatchCycle, current_cycle, watch_key, deliver_watch, current_details
+from trackerbot.core.activity_details import ActivityDetails
 from trackerbot.core.achievements import ACHIEVEMENTS, all_achievements
 from trackerbot.core.progression import RANKS, challenges_for, challenge_progress, level_progress, rank_for_level, xp_for_level, xp_for_watch
 from trackerbot.presentation.level_visuals import accent_for_tier, prestige_style, render_achievement_gif, render_level_up_gif, render_prestige_gif
@@ -450,7 +451,9 @@ def build_embed(t,desc,ts,name,member,image,profile,title=None,title_url=None,po
     e.set_footer(text=f"{label} · {provider}"); return e
 async def send_embed(ch,e,what):
     try:
-        await ch.send(embed=e, allowed_mentions=discord.AllowedMentions.none())
+        message=await ch.send(embed=e, allowed_mentions=discord.AllowedMentions.none())
+        try:await activity_details.remember(message)
+        except Exception:log.exception('Could not retain activity message for later rating edits.')
         return True
     except discord.Forbidden:
         log.error("Discord denied permission while sending %s embed to channel %s.", what, getattr(ch, "id", "unknown"))
@@ -570,6 +573,7 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
     start_claimed=set()
     for (sid,sn,kind),es in groups.items():
         es=sorted(es,key=lambda x:x["episode_number"]); title=es[0]["show_title"]; url=simkl_title_url(t,sid,es[0]["slug"]); fallback=simkl_poster_url(es[0]["poster"])
+        anime_tmdb_id=None
         if t=="anime":
             try:
                 anime_tmdb_id=await resolve_anime_tmdb_id({
@@ -656,6 +660,9 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
                 await storage.record_activity_batch(g,uid,keys,watch_times,records)
                 if started:
                     await storage.update_activity_state(g,uid,statuses={f"{t}:{sid}":"watching"})
+            detail_meta={'ids':{**(grp[0].get('ids') or {}),**({'tmdb':anime_tmdb_id} if anime_tmdb_id else {})},'movie':False,'season':sn,
+                         'episodes':[x['episode_number'] for x in grp],'new_watch':True,'rewatched':kind=='rewatched',
+                         'entry_seasons':sorted({x.get('mapped_tvdb_season_num') for x in grp if x.get('mapped_tvdb_season_num') is not None})}
             if batch is not None:
                 # Verified provider-neutral title IDs plus canonical coordinates
                 # keep grouping independent of the selected account.
@@ -663,8 +670,8 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
                     watch_key("episode",grp[0].get("ids") or {},sn,tuple(x["episode_number"] for x in grp),"simkl",sid),
                     tuple(x["watched_dt"] for x in grp),e,
                     f"**{format_episode_range(sn,grp[0]['episode_number'],grp[-1]['episode_number'])}** of **{title}**",
-                    commit,started=started,rewatched=kind=="rewatched",count=len(grp)))
-            elif await send_embed(ch,e,"episode"):
+                    commit,started=started,rewatched=kind=="rewatched",count=len(grp),details={"source":"simkl","meta":detail_meta}))
+            elif await activity_details.single(send_embed,ch,e,g,uid,"simkl",detail_meta):
                 await commit()
             else:
                 ok=False
@@ -768,11 +775,12 @@ async def process_movies(ch,g,uid,name,member,items,since,profile,batch=None,sco
                 "genres":m.get("genres") or x.get("genres"),"ids":ids,"amount":xp_for_watch(media_type,runtime)}
         async def commit(k=k, wr=wr, record=record):
             await storage.record_activity_batch(g,uid,[k],{k:wr},[record])
+        detail_meta={"ids":ids,"movie":True}
         if batch is not None:
             batch.add(WatchActivity(str(g),str(uid),scope,ch,
                 watch_key("movie",ids,provider="simkl",native=sid),(dt,),e,f"**{title}**",commit,
-                rewatched=bool(rw),movie=True))
-        elif await send_embed(ch,e,"movie"):
+                rewatched=bool(rw),movie=True,details={"source":"simkl","meta":detail_meta}))
+        elif await activity_details.single(send_embed,ch,e,g,uid,"simkl",detail_meta):
             await commit()
         else:
             ok=False
@@ -867,7 +875,11 @@ async def process_status(ch,g,uid,name,member,t,items,profile):
             except Exception:
                 log.warning("TMDB title logo lookup failed for %s.", title)
         e=build_embed(t,desc,datetime.now(timezone.utc),name,member,image,profile,title,simkl_title_url(t,sid,ids.get("slug")),poster,logo,p,status_activity=True)
-        if not await send_embed(ch,e,status):
+        entry_seasons=x.get('mapped_tvdb_seasons') or []
+        detail_meta={'ids':{**ids,**({'tmdb':artwork_tmdb_id} if artwork_tmdb_id else {})},
+                     'movie':t=='movies','status':status,'entry_seasons':entry_seasons,
+                     'season':entry_seasons[0] if len(entry_seasons)==1 else None}
+        if not await activity_details.single(send_embed,ch,e,g,uid,"simkl",detail_meta):
             ok=False
             continue
         count+=1
@@ -1310,27 +1322,30 @@ async def poll_one(ch,g,uid,u,gu,request_cache=None,force_reconcile=False,batch=
 
             if t=="anime":
                 anime_shows,anime_movies=await cached_split_anime_items(uid,items,request_cache)
-                sc,so=await process_status(
-                    ch,g,uid,name,member,t,anime_shows,profile
-                )
-                show_count,show_ok=await process_shows(
-                    ch,g,uid,name,member,t,anime_shows,profile,batch=batch
-                )
-                movie_count,movie_ok=await process_movies(
-                    ch,g,uid,name,member,anime_movies,sdt,profile,batch=batch,scope=t
-                )
-                wc=show_count+movie_count
-                wo=show_ok and movie_ok
+                show_count,show_ok=await process_shows(ch,g,uid,name,member,t,anime_shows,profile,batch=batch)
+                movie_count,movie_ok=await process_movies(ch,g,uid,name,member,anime_movies,sdt,profile,batch=batch,scope=t)
+                wc=show_count+movie_count;wo=show_ok and movie_ok
+                status_items=anime_shows
             else:
-                sc,so=await process_status(
-                    ch,g,uid,name,member,t,items,profile
-                )
-                if t=="shows":
-                    wc,wo=await process_shows(ch,g,uid,name,member,t,items,profile,batch=batch)
-                else:
-                    wc,wo=await process_movies(ch,g,uid,name,member,items,sdt,profile,batch=batch)
+                status_items=items
+                if t=="shows":wc,wo=await process_shows(ch,g,uid,name,member,t,items,profile,batch=batch)
+                else:wc,wo=await process_movies(ch,g,uid,name,member,items,sdt,profile,batch=batch)
+            if batch is None:
+                sc,so=await process_status(ch,g,uid,name,member,t,status_items,profile)
+            else:
+                # Completion rollups run after final episode posts, allowing a merge.
+                async def status_after_watch(t=t,status_items=status_items):
+                    try:
+                        count,good=await process_status(ch,g,uid,name,member,t,status_items,profile)
+                        batch.status_count+=count
+                        if not good:batch.failures.add((str(g),str(uid),t))
+                    except Exception:
+                        batch.failures.add((str(g),str(uid),t))
+                        log.exception('Deferred SIMKL status delivery failed.')
+                batch.finalizers.append(status_after_watch)
+                sc,so=0,True
 
-            posted+=wc
+            posted+=wc+sc
             if so and wo:
                 if batch is None:
                     await storage.update_last_checked(g,uid,t,to_iso(parse_iso(stamp)))
@@ -1475,6 +1490,7 @@ async def poll_all(g=None, force_reconcile=False, ignore_failure_threshold=False
         posted=sum(results) if not batch.activities else (
             max(0,sum(results)-sum(item.count for item in batch.activities))
             + sum(item.count for item in batch.activities if item.delivered))
+        posted+=batch.status_count
         for gid in sorted({str(target["guild_id"]) for target in targets}):
             try:
                 await refresh_community_state(gid)
@@ -1733,16 +1749,24 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
     embed = build_embed(embed_type, desc, stamp, name, member, image, profile_url, title,
                         title_url=title_url, poster=poster, logo=logo, preferences=p,
                         status_activity=bool(status), provider="WeTrakr")
+    native_id=change.get('wetrakr_id') if media_type in {'movie','show'} else change.get('show_id')
+    detail_meta={'ids':{**ids,**({'wetrakr':str(native_id)} if native_id is not None else {})},
+                 'movie':media_type=='movie','status':status,
+                 'season':None if season is None else int(season),
+                 'episodes':[] if status or media_type=='movie' else list(range(int(number),int(end_number if episode_end else number)+1)),
+                 'source_season':source_season if source_season is not None else (None if season is None else int(season)),
+                 'source_episodes':[] if media_type=='movie' else list(range(int(source_number),int((episode_end or {}).get('episode',source_number))+1)) if source_number is not None else [],
+                 'episode_ids':details.get('ids') or {}}
     if not status and await feature_enabled(gid,'watched_together'):
         movie=media_type=='movie'
         numbers=tuple(range(int(number),int(end_number if episode_end else number)+1)) if not movie else ()
         activity=WatchActivity(str(gid),str(uid),embed_type,ch,
             watch_key('movie' if movie else 'episode',ids,None if movie else int(season),numbers,'wetrakr',change.get('show_id') or change.get('wetrakr_id')),
             (stamp,)*max(1,len(numbers)),embed,f"**{title}**" if movie else f"{label} of **{title}**",None,
-            started=False if movie else started,rewatched=desc.startswith('Rewatched'),movie=movie,count=max(1,len(numbers)))
+            started=False if movie else started,rewatched=desc.startswith('Rewatched'),movie=movie,count=max(1,len(numbers)),details={"source":"wetrakr","meta":detail_meta})
         sent=await deliver_watch(send_embed,activity)
     else:
-        sent = await send_embed(ch, embed, "WeTrakr activity")
+        sent = await activity_details.single(send_embed,ch,embed,gid,uid,"wetrakr",detail_meta)
     if sent and media_type == "episode":
         started_ids.discard(str(change.get("show_id")))
     return sent
@@ -3966,6 +3990,12 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
     # A missing still must not suppress an independently available title logo.
     if logo and p.get('style','rich')!='minimal' and p.get('artwork','auto') in {'auto','backdrop'}:
         embed.set_thumbnail(url=logo)
+    end=last_play or play
+    detail_meta={'ids':ids,'movie':movie,'season':None if movie else play['season'],
+                 'episodes':[] if movie else list(range(play['episode'],end['episode']+1)),
+                 'source_season':play.get('source_season',play.get('season')),
+                 'source_episodes':[] if movie else list(range(play.get('source_episode',play['episode']),end.get('source_episode',end['episode'])+1)),
+                 'episode_ids':play.get('episode_ids') or {}}
     if await feature_enabled(gid,'watched_together'):
         end=last_play or play
         numbers=tuple(range(play['episode'],end['episode']+1)) if not movie else ()
@@ -3973,9 +4003,9 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
             None if movie else play['season'],numbers,'mdblist',play.get('show_id')),
             (parse_iso(play['watched_at']),)*max(1,len(numbers)),embed,
             f"**{title}**" if movie else f"{label} of **{title}**",None,
-            started=started,rewatched=rewatch,movie=movie,count=max(1,len(numbers)))
+            started=started,rewatched=rewatch,movie=movie,count=max(1,len(numbers)),details={"source":"mdblist","meta":detail_meta})
         return await deliver_watch(send_embed,activity)
-    return await send_embed(ch,embed,'MDBList activity')
+    return await activity_details.single(send_embed,ch,embed,gid,uid,'mdblist',detail_meta)
 
 
 async def deliver_mdblist_status(ch,gid,uid,name,member,provider,account,status,item):
@@ -3991,7 +4021,7 @@ async def deliver_mdblist_status(ch,gid,uid,name,member,provider,account,status,
     logo=await (tmdb.get_movie_logo(tmdb_id) if movie else tmdb.get_tv_logo(tmdb_id)) if tmdb_id else None
     embed=build_embed(media,description,datetime.now(timezone.utc),name,member,None,provider.profile_url(account),
         title=item['title'],title_url=item.get('url'),poster=item.get('poster'),logo=logo,preferences=p,status_activity=True,provider='MDBList')
-    return await send_embed(ch,embed,'MDBList status')
+    return await activity_details.single(send_embed,ch,embed,gid,uid,'mdblist',{'ids':item['ids'],'movie':movie,'status':status})
 
 
 TRACKER_CHOICES=[app_commands.Choice(name=manifest.display_name,value=manifest.name)
@@ -4052,9 +4082,9 @@ async def tracker_source(i, provider: app_commands.Choice[str] | None = None):
 
 
 @bingecord_commands.command(name="style",description="Choose your personal style for episode and movie watch activities.")
-@app_commands.choices(style=STYLE_CHOICES,artwork=ARTWORK_CHOICES,activity_text=TEXT_CHOICES,episode_format=EPISODE_FORMAT_CHOICES,show_imdb=RATING_CHOICES,show_mal=RATING_CHOICES)
+@app_commands.choices(style=STYLE_CHOICES,artwork=ARTWORK_CHOICES,activity_text=TEXT_CHOICES,episode_format=EPISODE_FORMAT_CHOICES,show_imdb=RATING_CHOICES,show_mal=RATING_CHOICES,show_personal=RATING_CHOICES)
 @app_commands.describe(reset="Reset your personal choices and follow the server default")
-async def simkl_style(i,style: app_commands.Choice[str] | None = None,artwork: app_commands.Choice[str] | None = None,activity_text: app_commands.Choice[str] | None = None,episode_format: app_commands.Choice[str] | None = None,show_imdb: app_commands.Choice[str] | None = None,show_mal: app_commands.Choice[str] | None = None,reset: bool | None = None):
+async def simkl_style(i,style: app_commands.Choice[str] | None = None,artwork: app_commands.Choice[str] | None = None,activity_text: app_commands.Choice[str] | None = None,episode_format: app_commands.Choice[str] | None = None,show_imdb: app_commands.Choice[str] | None = None,show_mal: app_commands.Choice[str] | None = None,show_personal: app_commands.Choice[str] | None = None,reset: bool | None = None):
     g=guild_id(i)
     if not g: await i.response.send_message("This command must be used in a server.",ephemeral=True); return
     uid=str(i.user.id)
@@ -4069,7 +4099,8 @@ async def simkl_style(i,style: app_commands.Choice[str] | None = None,artwork: a
             f"4. **Episode numbers:** **{episode_label}**\n"
             f"5. **IMDb ratings:** **{'On' if p.get('show_imdb', True) else 'Off'}**\n"
             f"6. **MAL ratings:** **{'On' if p.get('show_mal', True) else 'Off'}**\n"
-            f"7. **Status activities:** **Always use posters**"
+            f"7. **Personal ratings:** **{'On' if p.get('show_personal', True) else 'Off'}**\n"
+            f"8. **Status activities:** **Always use posters**"
         )
 
     if reset is True:
@@ -4078,7 +4109,7 @@ async def simkl_style(i,style: app_commands.Choice[str] | None = None,artwork: a
         await i.response.send_message(settings_text(p,"Your personal settings have been reset. You now follow the server default for watch activities:"),ephemeral=True)
         return
 
-    if style is None and artwork is None and activity_text is None and episode_format is None and show_imdb is None and show_mal is None:
+    if style is None and artwork is None and activity_text is None and episode_format is None and show_imdb is None and show_mal is None and show_personal is None:
         p=await prefs(g,uid)
         await i.response.send_message(settings_text(p,"Your effective watch activity settings:"),ephemeral=True)
         return
@@ -4091,6 +4122,7 @@ async def simkl_style(i,style: app_commands.Choice[str] | None = None,artwork: a
         episode_code=(episode_format.value == "true") if episode_format else None,
         show_imdb=(show_imdb.value == "true") if show_imdb else None,
         show_mal=(show_mal.value == "true") if show_mal else None,
+        show_personal=(show_personal.value == "true") if show_personal else None,
     )
     p=await prefs(g,uid)
     await i.response.send_message(
@@ -4100,9 +4132,9 @@ async def simkl_style(i,style: app_commands.Choice[str] | None = None,artwork: a
     )
 
 @bingecord_commands.command(name="style-server",description="(Admin) Set the default style for episode and movie watch activities.")
-@app_commands.choices(style=STYLE_CHOICES,artwork=ARTWORK_CHOICES,activity_text=TEXT_CHOICES,episode_format=EPISODE_FORMAT_CHOICES,show_imdb=RATING_CHOICES,show_mal=RATING_CHOICES)
+@app_commands.choices(style=STYLE_CHOICES,artwork=ARTWORK_CHOICES,activity_text=TEXT_CHOICES,episode_format=EPISODE_FORMAT_CHOICES,show_imdb=RATING_CHOICES,show_mal=RATING_CHOICES,show_personal=RATING_CHOICES)
 @app_commands.describe(reset="Reset all server style options to the default settings",force_override="Force everyone to use the server settings, ignoring personal choices")
-async def simkl_style_server(i,style: app_commands.Choice[str] | None = None,artwork: app_commands.Choice[str] | None = None,activity_text: app_commands.Choice[str] | None = None,episode_format: app_commands.Choice[str] | None = None,show_imdb: app_commands.Choice[str] | None = None,show_mal: app_commands.Choice[str] | None = None,force_override: bool | None = None,reset: bool | None = None):
+async def simkl_style_server(i,style: app_commands.Choice[str] | None = None,artwork: app_commands.Choice[str] | None = None,activity_text: app_commands.Choice[str] | None = None,episode_format: app_commands.Choice[str] | None = None,show_imdb: app_commands.Choice[str] | None = None,show_mal: app_commands.Choice[str] | None = None,show_personal: app_commands.Choice[str] | None = None,force_override: bool | None = None,reset: bool | None = None):
     g=guild_id(i)
     if not g or not is_admin(i): await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True); return
 
@@ -4116,10 +4148,11 @@ async def simkl_style_server(i,style: app_commands.Choice[str] | None = None,art
             f"4. **Episode numbers:** **{episode_label}**\n"
             f"5. **IMDb ratings:** **{'On' if p.get('show_imdb', True) else 'Off'}**\n"
             f"6. **MAL ratings:** **{'On' if p.get('show_mal', True) else 'Off'}**\n"
-            f"7. **Status activities:** **Always use posters**"
+            f"7. **Personal ratings:** **{'On' if p.get('show_personal', True) else 'Off'}**\n"
+            f"8. **Status activities:** **Always use posters**"
         )
         if forced is not None:
-            text += f"\n8. **Force override:** **{'Enabled' if forced else 'Disabled'}**"
+            text += f"\n9. **Force override:** **{'Enabled' if forced else 'Disabled'}**"
         return text
 
     if reset is True:
@@ -4129,7 +4162,7 @@ async def simkl_style_server(i,style: app_commands.Choice[str] | None = None,art
         await i.response.send_message(settings_text(p,"Server style settings have been reset to the defaults:",forced),ephemeral=True)
         return
 
-    if style is None and artwork is None and activity_text is None and episode_format is None and show_imdb is None and show_mal is None and force_override is None:
+    if style is None and artwork is None and activity_text is None and episode_format is None and show_imdb is None and show_mal is None and show_personal is None and force_override is None:
         p=await storage.get_server_embed_preferences(g)
         forced=await storage.get_server_embed_force_override(g)
         await i.response.send_message(settings_text(p,"Server default:",forced),ephemeral=True)
@@ -4143,6 +4176,7 @@ async def simkl_style_server(i,style: app_commands.Choice[str] | None = None,art
         episode_code=(episode_format.value == "true") if episode_format else None,
         show_imdb=(show_imdb.value == "true") if show_imdb else None,
         show_mal=(show_mal.value == "true") if show_mal else None,
+        show_personal=(show_personal.value == "true") if show_personal else None,
         force_override=force_override,
     )
     p=await storage.get_server_embed_preferences(g)
@@ -4196,6 +4230,9 @@ async def simkl_status(i,user: discord.Member | None = None):
         identity=f"• <@{uid}> — active: **{provider_registry.get(selected).manifest.display_name}** · " + (" · ".join(links) or "no linked account")
         if gu.get("mdblist_linked") and u.get("mdblist"):
             identity+=f" · MDBList: **{u['mdblist'].get('username') or 'unknown'}**"
+        detail_account=(u.get(selected) or {}).get('account_id') if selected!='simkl' else u.get('simkl_account_id') or 'unknown:'+uid
+        detail_health=(gu.get('activity_details') or {}).get(f"{selected}:{detail_account}") or {}
+        if detail_health.get('error'):identity+=' · personal ratings: **refresh pending**'
         if selected in {"wetrakr","mdblist"}:
             sync=gu.get(f"{selected}_sync") or {}
             state="ready" if sync.get("seeded") else "first check will seed history"
@@ -4327,18 +4364,24 @@ async def selected_provider(guild_id, uid):
     return provider, await provider.link(str(uid))
 
 
+activity_details=ActivityDetails(_sys.modules[__name__])
 provider_cycle_lock=asyncio.Lock()
 
 async def poll_providers(guild_id=None, *, manual=False):
     async with provider_cycle_lock:
+        await activity_details.begin(guild_id)
+        token=current_details.set(activity_details)
         manifests=provider_registry.manifests()
         cycle=WatchCycle(send_embed)
         calls=[]
         for manifest in manifests:
             call=provider_registry.get(manifest.name).poll(guild_id,manual=manual)
             calls.append(cycle.run(call))
-        results=await cycle.execute(calls)
-        return {manifest.name:count for manifest,count in zip(manifests,results)}
+        try:
+            results=await cycle.execute(calls)
+            await activity_details.finish(guild_id)
+            return {manifest.name:count for manifest,count in zip(manifests,results)}
+        finally:current_details.reset(token)
 
 if __name__ == "__main__":
     bot.run(DISCORD_BOT_TOKEN, log_handler=None)

@@ -51,6 +51,7 @@ DEFAULT_EMBED_PREFERENCES = {
     "activity_text": "detailed",
     "show_imdb": True,
     "show_mal": True,
+    "show_personal": True,
     "episode_code": False,
 }
 
@@ -498,6 +499,7 @@ def _normalise_user(user: dict) -> None:
     prefs.setdefault("activity_text", "detailed")
     prefs.setdefault("show_imdb", True)
     prefs.setdefault("show_mal", True)
+    prefs.setdefault("show_personal", True)
     prefs.setdefault("episode_code", False)
     user.setdefault(
         "embed_preferences_custom",
@@ -601,6 +603,7 @@ def _normalise_guild(guild: dict) -> None:
     guild["embed_preferences"].setdefault("activity_text", "detailed")
     guild["embed_preferences"].setdefault("show_imdb", True)
     guild["embed_preferences"].setdefault("show_mal", True)
+    guild["embed_preferences"].setdefault("show_personal", True)
     guild["embed_preferences"].setdefault("episode_code", False)
     guild.setdefault("users", {})
     if not isinstance(guild["users"], dict):
@@ -865,6 +868,66 @@ class Storage:
         async with _lock:
             return copy.deepcopy(self._data)
 
+    async def get_activity_detail_state(self, guild_id, user_id, provider, account_id):
+        async with _lock:
+            member=self._guild_user(str(guild_id),str(user_id))
+            key=f"{provider}:{account_id}"
+            return copy.deepcopy((member or {}).get('activity_details',{}).get(key,{}))
+
+    async def save_activity_detail_state(self, guild_id, user_id, provider, account_id, state):
+        async with _lock:
+            member=self._guild_user(str(guild_id),str(user_id))
+            if not member or member.get('activity_provider','simkl')!=provider:return False
+            user=self._user(str(user_id))
+            if not user or not provider_linked(member,user,provider):return False
+            if provider!='simkl' and str((user.get(provider) or {}).get('account_id'))!=str(account_id):return False
+            if provider=='simkl' and str(user.get('simkl_account_id') or 'unknown:'+str(user_id))!=str(account_id):return False
+            member.setdefault('activity_details',{})[f"{provider}:{account_id}"]=copy.deepcopy(state)
+            self._dirty=True
+        await self.flush()
+        return True
+
+    async def save_activity_message(self, record):
+        cutoff=datetime.now(timezone.utc)-timedelta(days=7)
+        async with _lock:
+            records=self._data.setdefault('activity_messages',{})
+            for key,value in list(records.items()):
+                try:expired=datetime.fromisoformat(value['posted_at'])<cutoff
+                except (TypeError,ValueError,KeyError):expired=True
+                if expired:records.pop(key,None)
+            records[str(record['message'])]=copy.deepcopy(record)
+            # Only the newest related post per participant can be edited. Keep a
+            # group while any participant still needs it, without retaining every watch.
+            def identity(part):
+                ids=part['meta'].get('ids') or {}
+                anchor=next(((key,str(ids[key])) for key in ('simkl','wetrakr','mdblist','tmdb','tvdb','imdb','mal') if ids.get(key)),('unknown',''))
+                return (part['guild'],part['user'],part['source'],part['account'],bool(part['meta'].get('movie')),anchor)
+            latest={}
+            for row in sorted(records.values(),key=lambda value:value['posted_at']):
+                for part in row['parts']:latest[identity(part)]=row['message']
+            for key,row in list(records.items()):
+                if not any(latest[identity(part)]==row['message'] for part in row['parts']):records.pop(key,None)
+            self._dirty=True
+        await self.flush()
+
+    async def get_activity_messages(self, guild_id=None):
+        cutoff=datetime.now(timezone.utc)-timedelta(days=7)
+        async with _lock:
+            records=self._data.setdefault('activity_messages',{})
+            for key,value in list(records.items()):
+                try:expired=datetime.fromisoformat(value['posted_at'])<cutoff
+                except (TypeError,ValueError,KeyError):expired=True
+                if expired:records.pop(key,None);self._dirty=True
+            result=[copy.deepcopy(row) for row in records.values()
+                    if guild_id is None or any(str(part['guild'])==str(guild_id) for part in row['parts'])]
+        return sorted(result,key=lambda row:row['posted_at'])
+
+    async def delete_activity_message(self, message_id):
+        async with _lock:
+            self._data.setdefault('activity_messages',{}).pop(str(message_id),None)
+            self._dirty=True
+        await self.flush()
+
     async def get_user(self, discord_user_id: str) -> dict | None:
         async with _lock:
             user = self._user(discord_user_id)
@@ -1061,7 +1124,7 @@ class Storage:
                     # anime coordinates. Update the observation without
                     # replaying XP or posting historical activity.
                     changed_metadata = False
-                    for field in ("item_key", "ids", "title", "media_type", "genres", "season", "episode", "source_season", "source_episode", "show_id", "show_ids"):
+                    for field in ("item_key", "ids", "title", "media_type", "genres", "season", "episode", "source_season", "source_episode", "show_id", "show_ids", "episode_ids"):
                         value = play.get(field)
                         if field == "genres" and value:
                             value = _genre_names(value)
@@ -1125,7 +1188,7 @@ class Storage:
                                    "account_id":account,"source_event_id":source_id,
                                    "media_type": kind, "title": title, "item_key": item_key,
                                    "show_id": play.get("show_id"),
-                                   "show_ids": play.get("show_ids") or {},
+                                   "show_ids": play.get("show_ids") or {}, "episode_ids":play.get("episode_ids") or {},
                                    "season": play.get("season"), "episode": play.get("episode"),
                                    "runtime_minutes":play.get("runtime_minutes"),
                                    "source_season": play.get("source_season"), "source_episode": play.get("source_episode"),
@@ -1253,7 +1316,7 @@ class Storage:
             guild = self._guild(guild_id, create=True)
             return copy.deepcopy(guild["embed_preferences"])
 
-    async def set_server_embed_preferences(self, guild_id: int | str, style=None, artwork=None, activity_text=None, show_imdb=None, show_mal=None, episode_code=None, force_override=None) -> None:
+    async def set_server_embed_preferences(self, guild_id: int | str, style=None, artwork=None, activity_text=None, show_imdb=None, show_mal=None, episode_code=None, force_override=None, show_personal=None) -> None:
         async with _lock:
             self._migrate_legacy_guild_locked(str(guild_id))
             guild = self._guild(guild_id, create=True)
@@ -1268,6 +1331,8 @@ class Storage:
                 prefs["show_imdb"] = bool(show_imdb)
             if show_mal is not None:
                 prefs["show_mal"] = bool(show_mal)
+            if show_personal is not None:
+                prefs["show_personal"] = bool(show_personal)
             if episode_code is not None:
                 prefs["episode_code"] = bool(episode_code)
             if force_override is not None:
@@ -1301,7 +1366,7 @@ class Storage:
                 return copy.deepcopy(user["embed_preferences"])
             return copy.deepcopy(guild["embed_preferences"])
 
-    async def set_embed_preferences(self, discord_user_id: str, style=None, artwork=None, activity_text=None, show_imdb=None, show_mal=None, episode_code=None) -> None:
+    async def set_embed_preferences(self, discord_user_id: str, style=None, artwork=None, activity_text=None, show_imdb=None, show_mal=None, episode_code=None, show_personal=None) -> None:
         async with _lock:
             user = self._user(discord_user_id)
             if not user:
@@ -1317,6 +1382,8 @@ class Storage:
                 prefs["show_imdb"] = bool(show_imdb)
             if show_mal is not None:
                 prefs["show_mal"] = bool(show_mal)
+            if show_personal is not None:
+                prefs["show_personal"] = bool(show_personal)
             if episode_code is not None:
                 prefs["episode_code"] = bool(episode_code)
             user["embed_preferences_custom"] = True

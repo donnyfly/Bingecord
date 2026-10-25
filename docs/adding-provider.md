@@ -17,6 +17,10 @@ Read `docs/multi-tracker-design.md`, `trackerbot/core/providers.py`, `trackerbot
 
 ## Release gate
 
+Personal activity details are part of the provider contract. Extend `integrations/personal_ratings.py` with an account-authenticated rating snapshot reader and change-stamp gate. Return validated movie/show/season/episode targets on a 10-point scale, retain parent show IDs for child targets, preserve source precision, paginate completely and apply removals only after a complete successful read. Declare unavailable rating scopes rather than substituting a series score for an episode. See the current providers' official API references in `docs/testing-ratings-completion.md`.
+
+Every watch/status delivery must supply `WatchActivity.details` or call the shared `ActivityDetails.single` hook with source, scoped title IDs, movie/status flags, canonical and source episode coordinates, and exact episode IDs when available. Preserve source coordinates and episode IDs in stored native plays. The shared completion resolver and recent-message store handle milestones, per-member group details, seven-day edits, settings, restarts and account guards; never mutate XP to add a rating or completion annotation. Run the ratings/completion acceptance checklist for the new provider as well as the watch-ledger tests.
+
 The new provider is complete only when the above command and reward tests pass with realistic API fixtures and a live test account. Record its manifest limitations and any unverified endpoints. Do not advertise 1:1 parity for unsupported API capabilities or unfinished mapping. The selected-source behavior and shared XP rules remain the same for every provider.
 
 ## Current migration state

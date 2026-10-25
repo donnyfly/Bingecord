@@ -279,6 +279,10 @@ class WeTrakrProvider(BaseProvider):
         cache = cache if cache is not None else {}
         result = dict(play)
         kind = result.get('media_type')
+        if kind=='episode':
+            result['episode_ids']=result.get('episode_ids') or result.get('ids') or {}
+            result['source_season']=result.get('source_season') if result.get('source_season') is not None else result.get('season')
+            result['source_episode']=result.get('source_episode') if result.get('source_episode') is not None else result.get('episode')
         title_id = result.get('wetrakr_id') if kind == 'movie' else result.get('show_id')
         if kind not in {'movie', 'episode'} or not title_id:
             return result
