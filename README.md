@@ -272,6 +272,14 @@ The main settings live in `.env`. Use `.env.example` as the complete template; l
 
 Server admins can override the timezone with `/bingecord timezone`.
 
+## First-import performance and progress
+
+MDBList and WeTrakr first imports run as background jobs, so scheduled checks and normal posts for other members can continue. Each provider runs at most two import jobs and four enrichment lookups at a time. Concurrent requests for the same title, season or anime mapping share their in-flight metadata reads.
+
+`/bingecord checknow` waits for this server's imports and refreshes its private progress message every 15 seconds. `/bingecord status user:@username` shows imported-page enrichment counts too. Counts describe downloaded plays, not an assumed percentage of the entire library. If Discord expires a long-running interaction, the background job continues; use status to check progress.
+
+Completed pages and enrichment batches are staged in the existing data volume and can resume after interruption or restart. Staging is account-scoped, expires after 24 hours, and never changes watch XP or live history by itself. If the provider's activity stamps change, pagination restarts against the new snapshot while exact unchanged plays can reuse their enrichment. History is only reconciled after a complete validated read; initial imports remain quiet. No new environment settings are required.
+
 ## Activity customization
 
 Users can run `/bingecord style` to choose:

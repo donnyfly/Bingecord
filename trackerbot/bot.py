@@ -147,6 +147,15 @@ class BingecordBot(discord.Client):
             except Exception:
                 log.exception("Polling task failed while shutting down.")
 
+        jobs=[]
+        registry=globals().get('provider_registry')
+        if registry:jobs+=list(registry.get('mdblist').imports.jobs.tasks.values())
+        sync=globals().get('wetrakr_sync')
+        if sync:jobs+=list(sync.imports.jobs.tasks.values())
+        for job in jobs:
+            if not job.done():job.cancel()
+        if jobs:await asyncio.gather(*jobs,return_exceptions=True)
+
         try:
             await storage.flush()
         except Exception:
@@ -1794,6 +1803,9 @@ async def poll_wetrakr_all(g=None):
         async def process_target(target):
             nonlocal posted,checked
             gid, uid = target["guild_id"], target["discord_user_id"]
+            if not target['guild_user_data']['wetrakr_sync'].get('seeded') and current_cycle.get() is not None:
+                wetrakr_sync.imports.jobs.start(gid,uid,target['user_data']['wetrakr']['account_id'],lambda:process_target(target))
+                return
             channel_id = target["channel_id"]
             if not channel_id:
                 return
@@ -4246,6 +4258,9 @@ async def simkl_status(i,user: discord.Member | None = None):
         if selected in {"wetrakr","mdblist"}:
             sync=gu.get(f"{selected}_sync") or {}
             state="ready" if sync.get("seeded") else "first check will seed history"
+            if not sync.get('seeded'):
+                progress=await storage.get_import_progress(uid,selected,detail_account)
+                if progress:state=f"{progress['status']} · {progress['enriched']}/{progress['downloaded']} downloaded plays enriched"
             last=sync.get("last_activity")
             health=sync.get("health") or {}
             if health.get("error"):
@@ -4300,6 +4315,43 @@ async def simkl_status(i,user: discord.Member | None = None):
         ephemeral=True,allowed_mentions=discord.AllowedMentions.none(),
     )
 
+async def import_progress_text(g):
+    lines=[]
+    for source in ('mdblist','wetrakr'):
+        for target in await storage.get_provider_targets(source,g,active_only=True):
+            uid=str(target['discord_user_id']);account=target['user_data'][source]['account_id']
+            if target['guild_user_data'][f'{source}_sync'].get('seeded'):continue
+            progress=await storage.get_import_progress(uid,source,account)
+            if progress:
+                lines.append(f"{provider_registry.get(source).manifest.display_name} · <@{uid}>: {progress['status']} · "
+                             f"{progress['enriched']}/{progress['downloaded']} downloaded plays enriched")
+    extra=max(0,len(lines)-5)
+    return '\n'.join(lines[:5])+ (f'\n…and {extra} more import(s).' if extra else '')
+
+
+async def poll_with_progress(i,g,*,update_interval=15):
+    async def check():
+        result=await poll_providers(g,manual=True)
+        jobs=provider_registry.get('mdblist').imports.jobs.active(g)
+        if wetrakr_sync:jobs+=wetrakr_sync.imports.jobs.active(g)
+        if jobs:await asyncio.shield(asyncio.gather(*jobs))
+        return result
+    task=asyncio.create_task(check());editable=hasattr(i,'edit_original_response')
+    try:
+        while not task.done():
+            done,_=await asyncio.wait({task},timeout=update_interval)
+            if not done and editable:
+                detail=await import_progress_text(g)
+                try:
+                    await i.edit_original_response(content='Checking activity…\n'+(detail or 'Reading account changes, ratings and history.'),
+                                                   allowed_mentions=discord.AllowedMentions.none())
+                except discord.HTTPException:editable=False
+        return await task
+    finally:
+        if not task.done():task.cancel()
+        await asyncio.gather(task,return_exceptions=True)
+
+
 @bingecord_commands.command(name="checknow",description="(Admin) Check selected tracker activity in this server.")
 async def tracker_checknow(i):
     global last_checknow_at
@@ -4307,17 +4359,23 @@ async def tracker_checknow(i):
     if not g or not is_admin(i): await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True); return
     if time.monotonic()-last_checknow_at<CHECKNOW_COOLDOWN_SECONDS:
         await i.response.send_message("Please wait before using /bingecord checknow again.",ephemeral=True); return
-    if poll_lock.locked() or wetrakr_poll_lock.locked() or provider_registry.get("mdblist").lock.locked():
-        await i.response.send_message("An activity check is already running.",ephemeral=True); return
+    if provider_cycle_lock.locked() or poll_lock.locked() or wetrakr_poll_lock.locked() or provider_registry.get("mdblist").lock.locked():
+        detail=await import_progress_text(g)
+        await i.response.send_message("An activity check is already running."+('\n'+detail if detail else ''),
+                                      ephemeral=True,allowed_mentions=discord.AllowedMentions.none()); return
     last_checknow_at=time.monotonic()
     await i.response.send_message("Checking this server's selected tracker activity now...",ephemeral=True)
-    posted = await poll_providers(g, manual=True)
+    posted = await poll_with_progress(i,g)
     total_posted=sum(posted.values())
     breakdown=", ".join(f"{provider_registry.get(source).manifest.display_name} {count}" for source,count in posted.items())
-    await i.followup.send(
-        f"Done. Posted **{total_posted}** new activity item(s) ({breakdown}). "
-        "A new provider's first check seeds history without posting older watches.",
-        ephemeral=True)
+    pending=await import_progress_text(g)
+    try:
+        await i.followup.send(
+            f"Done. Posted **{total_posted}** new activity item(s) ({breakdown}). "
+            "A new provider's first check seeds history without posting older watches."+ ('\nImport still pending:\n'+pending if pending else ''),
+            ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+    except discord.HTTPException:
+        log.info('Manual check completed after its Discord interaction expired; import progress remains available in status.')
 
 POLL_RETRY_DELAY_SECONDS=60
 POLL_MAX_RETRY_DELAY_SECONDS=600

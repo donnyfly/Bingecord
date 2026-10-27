@@ -8,6 +8,7 @@ from collections import Counter
 from urllib.parse import quote
 
 import aiohttp
+from trackerbot.core.import_work import checkpoint_page
 
 BASE_URL = 'https://api.mdblist.com'
 DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
@@ -131,18 +132,19 @@ class MDBListTrackingClient:
                 raise MDBListTrackingError(200,'INVALID_RESPONSE')
             if cursor and cursor in seen:
                 raise MDBListTrackingError(200,'CURSOR_CYCLE')
-            yield data
+            yield checkpoint_page(data,cursor)
             if not cursor:
                 return
             seen.add(cursor)
             params={key:value for key,value in params.items() if key!='since'}
             params['cursor']=cursor
 
-    def history(self, token, *, media_type, limit=1000):
+    def history(self, token, *, media_type, limit=1000, cursor=None):
         if media_type not in {'movie','episode'}:
             raise ValueError('Individual history requires movie or episode')
-        return self._cursor_pages(token,'/sync/watched',{'mediatype':media_type,
-            'plays':'all','limit':min(max(1,limit),1000)},('movies','episodes'))
+        params={'mediatype':media_type,'plays':'all','limit':min(max(1,limit),1000)}
+        if cursor:params['cursor']=cursor
+        return self._cursor_pages(token,'/sync/watched',params,('movies','episodes'))
 
     def journal(self, token, since, *, limit=1000):
         if not since:

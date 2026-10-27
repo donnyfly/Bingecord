@@ -6,6 +6,7 @@ Guild records contain server configuration and per-server tracking state.
 """
 
 import asyncio
+import time
 import copy
 import json
 import os
@@ -874,6 +875,32 @@ class Storage:
             key=f"{provider}:{account_id}"
             return copy.deepcopy((member or {}).get('activity_details',{}).get(key,{}))
 
+    async def get_import_stage(self,user_id,provider,account_id):
+        async with _lock:
+            stage=self._data.get('history_imports',{}).get(f'{provider}:{user_id}') or {}
+            return copy.deepcopy(stage) if str(stage.get('account'))==str(account_id) else {}
+
+    async def save_import_stage(self,guild_id,user_id,provider,account_id,stage):
+        async with _lock:
+            member=self._guild_user(str(guild_id),str(user_id))
+            user=self._user(str(user_id))
+            if (not member or not user or member.get('activity_provider','simkl')!=provider
+                    or not provider_linked(member,user,provider)
+                    or str((user.get(provider) or {}).get('account_id'))!=str(account_id)):
+                raise ValueError('Tracking selection changed during history import')
+            self._data.setdefault('history_imports',{})[f'{provider}:{user_id}']={**copy.deepcopy(stage),'account':str(account_id)}
+            self._dirty=True
+        await self.flush()
+
+    async def get_import_progress(self,user_id,provider,account_id):
+        async with _lock:
+            stages=self._data.get('history_imports',{})
+            key=f'{provider}:{user_id}';stage=stages.get(key) or {}
+            if time.time()-stage.get('started',0)>86400:
+                if key in stages:stages.pop(key,None);self._dirty=True
+                return {}
+            return copy.deepcopy(stage.get('progress',{})) if str(stage.get('account'))==str(account_id) else {}
+
     async def save_activity_detail_state(self, guild_id, user_id, provider, account_id, state):
         async with _lock:
             member=self._guild_user(str(guild_id),str(user_id))
@@ -1075,7 +1102,7 @@ class Storage:
 
     async def reconcile_provider_plays(self, guild_id: str | int, discord_user_id: str,
                                       plays: list[dict], *, complete: bool = False,
-                                      account_id: str | int | None = None, notify: bool | None = None, provider: str = "wetrakr") -> dict:
+                                      account_id: str | int | None = None, notify: bool | None = None, provider: str = "wetrakr", require_selected: bool = False) -> dict:
         """Apply stable WeTrakr play IDs; a full import can revoke deleted plays.
 
         Keep source observations separately from XP so switching sources never
@@ -1087,6 +1114,8 @@ class Storage:
             global_user = self._user(discord_user_id)
             if not guild_user or not global_user:
                 return {"added": 0, "removed": 0, "xp": 0}
+            if require_selected and (not provider_linked(guild_user,global_user,provider) or guild_user.get('activity_provider')!=provider):
+                raise ValueError('Tracking selection changed before import reconciliation')
             if provider == "mdblist" and (not provider_linked(guild_user,global_user,provider) or guild_user.get("activity_provider") != provider):
                 raise ValueError("MDBList source changed during reconciliation")
             current_account=(global_user.get(provider) or {}).get("account_id")

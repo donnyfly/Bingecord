@@ -73,6 +73,15 @@ A series personal rating would instead say `Your series rating`. SIMKL does not 
 
 ## Automated checks and API references
 
+### Import performance acceptance checks
+
+- Link an MDBList or WeTrakr account with a large history. Run checknow and confirm private progress refreshes about every 15 seconds and status shows downloaded/enriched counts. No historical activity, level-up or prestige flood should occur.
+- During that first import, mark a new watch for an already imported member. Scheduled checks must continue and deliver their normal activity; importing accounts should not start duplicate jobs.
+- Interrupt a large import after at least one enriched batch, preserve the data volume, and restart. For unchanged activity stamps, completed pages and enriched rows should be reused. Watch XP and live history must not be reconciled from partial staging.
+- Change provider history while an interrupted import is paused. On retry, expect a fresh page traversal and no deleted watch restored from old staging. The baseline sync boundary remains the original capture for each resumed snapshot.
+- Exercise an expired or repeated cursor, failed metadata request, source switch and account relink. Incomplete reads remain pending; account guards prevent stale imports writing to the new selection.
+- Verify mixed-provider Watched Together still merges live watches. Historical imports never join those groups. Let an interaction expire or dismiss it while importing: the background job must continue.
+
 Run `python -m pytest -q` and `python -m compileall -q trackerbot tests`. Tests cover snapshot pagination/precision, account isolation, mixed-provider grouping, late edits/removals, restart/expiry, failed edits, completion invalidation, pre-delivery reconciliation, delayed completion rollups, bounded catalogue fetching and deferred SIMKL status failure checkpoint handling.
 
 The readers follow these official contracts:
