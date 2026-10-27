@@ -260,3 +260,87 @@ def correct_confirmed(progression,groups,revoke_challenges):
         data['prestige_notified']=max(int(data.get('prestige_notified',0)),prestige)
         data['watch_occurrences']=watch_ledger.audit(rows)
     return data,reduction,challenge_reduction,offset
+
+
+def _stamp(value):
+    value=datetime.fromisoformat(str(value).replace('Z','+00:00'))
+    if value.tzinfo is None:raise ValueError('Use a timestamp with a timezone')
+    return value
+
+
+def rollback_import(progression,provider,before,reward_batch,revoke_challenges):
+    """Quarantine selected older credits, without claiming they are duplicates."""
+    primary=progression.get('history_repair_primary')
+    if provider not in {'simkl','wetrakr','mdblist'} or not primary or provider==primary:
+        raise ValueError('Select a personal primary history and roll back a different provider')
+    cutoff=_stamp(before);batch=_stamp(reward_batch)
+    data=copy.deepcopy(progression);rows=watch_ledger.ensure(data)
+    primary_supported={row['award_keys'][0] for row in rows.values() if len(row['award_keys'])==1
+                       and any(obs['provider']==primary for obs in row['observations'].values())}
+    candidates=[]
+    for event in data.get('xp_events',[]):
+        key=event.get('event_key','')
+        source=key.split(':',1)[0] if key.startswith(('mdblist:','wetrakr:')) else 'simkl'
+        if key in primary_supported or source!=provider or event.get('media_type') not in {'movie','anime_movie','episode','anime_episode'}:continue
+        try:older=_stamp(event['at'])<cutoff
+        except (ValueError,TypeError,KeyError):continue
+        if older:candidates.append(event)
+    selected={event['event_key'] for event in candidates}
+    if len(selected)!=len(candidates):raise ValueError('Repeated event keys need manual review')
+    watch=sum(max(0,int(event['amount'])) for event in candidates)
+    pending=data.setdefault('pending_history_awards',{})
+    for event in candidates:
+        pending[event['event_key']]={**copy.deepcopy(event),'hold_reason':'import_rollback; viewing not confirmed as duplicate'}
+        data.get('watch_xp_keys',{}).pop(event['event_key'],None)
+    for row in rows.values():
+        removed=set(row['award_keys']) & selected
+        if not removed:continue
+        row['award_keys']=[key for key in row['award_keys'] if key not in selected]
+        row['needs_review']=True
+        # If another credited source still supports this occurrence, there is
+        # nothing pending to award again for its removed duplicate reference.
+        if row['award_keys']:
+            for key in removed:pending.pop(key,None)
+    data['xp_events']=[event for event in data.get('xp_events',[]) if event['event_key'] not in selected]
+    for source in ('mdblist','wetrakr'):
+        for play in data.get(source+'_plays',{}).values():
+            if play.get('xp_key') in selected:play['xp_key']=None
+    held_rewards=data.setdefault('pending_history_challenge_awards',{})
+    rewards=[];batch_xp=0
+    for period,completions in data.get('challenge_completions',{}).items():
+        for cid,reward in completions.items():
+            try:matches=_stamp(reward.get('completed_at'))==batch
+            except (ValueError,TypeError):continue
+            amount=max(0,int(reward.get('xp',0)))
+            if not matches or not amount:continue
+            key=f'{period}:{cid}'
+            held_rewards[key]={'period':period,'challenge_id':cid,'reward':copy.deepcopy(reward),
+                               'hold_reason':'historical reward batch rollback'}
+            rewards.append({'key':key,'xp':amount});batch_xp+=amount
+            # Retain the completion at zero credit so polling cannot immediately
+            # recreate the same historical reward. The original is held above.
+            reward['xp']=0;reward['history_credit_held']=True
+    notification_keys={reward['key'] for reward in rewards}
+    data['pending_challenge_notifications']=[item for item in data.get('pending_challenge_notifications',[])
+                                             if item.get('key') not in notification_keys]
+    data['lifetime_xp']=max(0,int(data.get('lifetime_xp',0))-watch-batch_xp)
+    dependent=revoke_challenges(data) if selected or rewards else 0
+    offset=(int(progression.get('prestige',0))*xp_for_level(100)+int(progression.get('xp',0))
+            -int(progression.get('lifetime_xp',0)))
+    prestige,xp=divmod(max(0,int(data['lifetime_xp'])+offset),xp_for_level(100))
+    data.update(prestige=prestige,xp=xp)
+    if selected or rewards:
+        data['prestige_carry_repaired']=True
+        data['prestige_notified']=max(int(data.get('prestige_notified',0)),prestige)
+        data['watch_occurrences']=watch_ledger.audit(rows)
+    report={'read_only':True,'repair_mode':'import_rollback','fingerprint':fingerprint(progression),
+            'generated_at':datetime.now(timezone.utc).isoformat(),'primary_history':primary,
+            'rollback_provider':provider,'rollback_import_before':before,'rollback_rewards_at':reward_batch,
+            'confirmed_duplicate_groups':[],'held_watch_candidates':copy.deepcopy(candidates),
+            'held_challenge_credits':rewards,'selected_watch_xp_reduction':watch,
+            'dependent_challenge_xp_reduction':batch_xp+dependent,
+            'historical_batch_xp_reduction':batch_xp,'additional_dependent_challenge_xp_reduction':dependent,
+            'before':{key:progression.get(key) for key in ('xp','prestige','lifetime_xp')},
+            'projected':{'prestige':prestige,'xp':xp,'level':level_progress(xp)[0],'lifetime_xp':data['lifetime_xp']},
+            'note':'Policy rollback, not proven deduplication or exact restoration. Watch-date cutoff may include legitimate history; selected awards are held for review. Later watches and the primary provider are retained. Only apply if this scope is acceptable.'}
+    return data,report

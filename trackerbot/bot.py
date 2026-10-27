@@ -2910,12 +2910,20 @@ async def show_profile(i,user):
 @app_commands.describe(export="Attach a private read-only XP audit for investigating unexpected progression",
                        repair_preview="Refresh linked SIMKL identities and preview historical overlaps without changing XP",
                        primary_history="Save your personal repair preference and generate a preview; does not change XP",
-                       repair_apply="Apply only the confirmed corrections from your preview token, after saving a backup")
+                       repair_apply="Apply your reviewed repair token after saving a backup",
+                       rollback_source="Preview holding older credits from an imported secondary provider",
+                       rollback_import_before="Import rollback watch-date cutoff, ISO timestamp with timezone",
+                       rollback_rewards_at="Exact historical challenge grant timestamp to hold, ISO timestamp with timezone")
 @app_commands.choices(primary_history=[app_commands.Choice(name="SIMKL",value="simkl"),
                                       app_commands.Choice(name="WeTrakr",value="wetrakr"),
-                                      app_commands.Choice(name="MDBList",value="mdblist")])
+                                      app_commands.Choice(name="MDBList",value="mdblist")],
+                      rollback_source=[app_commands.Choice(name="SIMKL",value="simkl"),
+                                       app_commands.Choice(name="WeTrakr",value="wetrakr"),
+                                       app_commands.Choice(name="MDBList",value="mdblist")])
 async def tracker_mapping(i,export: bool = False,repair_preview: bool = False,
-                          primary_history: app_commands.Choice[str] | None = None,repair_apply: str | None = None):
+                          primary_history: app_commands.Choice[str] | None = None,repair_apply: str | None = None,
+                          rollback_source: app_commands.Choice[str] | None = None,
+                          rollback_import_before: str | None = None,rollback_rewards_at: str | None = None):
     g=guild_id(i)
     if not g:
         await i.response.send_message("This command must be used in a server.",ephemeral=True)
@@ -2927,7 +2935,7 @@ async def tracker_mapping(i,export: bool = False,repair_preview: bool = False,
         return
     if repair_apply is not None:
         await i.response.defer(ephemeral=True)
-        if repair_preview or primary_history is not None or export:
+        if repair_preview or primary_history is not None or export or any(value is not None for value in (rollback_source,rollback_import_before,rollback_rewards_at)):
             await i.followup.send('Use repair_apply by itself with the token from your preview.',ephemeral=True)
             return
         try:
@@ -2939,7 +2947,8 @@ async def tracker_mapping(i,export: bool = False,repair_preview: bool = False,
             log.warning('Historical repair write failed for user %s: %s',uid,type(exc).__name__)
             await i.followup.send('Could not save the repair backup or corrected store. No correction was applied; retry the same token.',ephemeral=True)
             return
-        status='Already applied; no additional XP was deducted.' if receipt['already_applied'] else 'Confirmed correction applied to your progression only.'
+        mode=receipt.get('mode','confirmed')
+        status='Already applied; no additional XP was deducted.' if receipt['already_applied'] else 'Reviewed repair applied to your progression only.'
         result=receipt['projected']
         await i.followup.send(
             f"**Historical XP repair**\n{status}\n"
@@ -2947,8 +2956,49 @@ async def tracker_mapping(i,export: bool = False,repair_preview: bool = False,
             f"Dependent challenge XP removed: **{receipt['challenge_reduction']:,}**\n"
             f"Result at repair: **Prestige {result['prestige']} · Level {result['level']} · {result['lifetime_xp']:,} lifetime XP**\n"
             f"Backup saved in your data volume: `repair-backups/{receipt['backup']}`\n"
-            'Uncertain imports and possible rewatches were left unchanged. This is the confirmed portion of the repair.',
+            +('Selected older watch/reward credits are held for review. This is an import rollback, not an exact reconstruction of your former XP.'
+             if mode=='import_rollback' else 'Uncertain imports and possible rewatches were left unchanged. This is the confirmed portion of the repair.'),
             ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+        return
+    if any(value is not None for value in (rollback_source,rollback_import_before,rollback_rewards_at)):
+        await i.response.defer(ephemeral=True)
+        if rollback_source is None or not rollback_import_before or not rollback_rewards_at or export or repair_preview:
+            await i.followup.send('For an import rollback preview, provide rollback_source, rollback_import_before and rollback_rewards_at together. Use preview/export separately.',ephemeral=True)
+            return
+        import io,json
+        from trackerbot.core.historical_repair import rollback_import
+        from trackerbot.core.storage import _revoke_unmet_watch_challenges
+        try:
+            if primary_history is not None:await storage.set_history_repair_primary(uid,primary_history.value)
+            baseline=await storage.get_progression(uid)
+            _,report=rollback_import(baseline,rollback_source.value,rollback_import_before,rollback_rewards_at,_revoke_unmet_watch_challenges)
+            plan=await storage.prepare_history_repair(uid,baseline,report)
+            if plan:
+                report['apply_token']=plan['token']
+                report['apply_command']=f"/bingecord mapping repair_apply:{plan['token']}"
+            payload=json.dumps(report,ensure_ascii=False,separators=(',',':')).encode()
+            if len(payload)>7_500_000:
+                await i.followup.send('Rollback preview exceeds attachment size. No XP changed.',ephemeral=True);return
+            result=report['projected']
+            await i.followup.send(
+                f"**Import rollback preview — only your progression**\n"
+                f"Primary history retained: **{report['primary_history']}**\n"
+                f"Older {rollback_source.name} watch awards selected: **{len(report['held_watch_candidates']):,}**\n"
+                f"Watch XP to hold: **{report['selected_watch_xp_reduction']:,}**\n"
+                f"Historical reward batch XP to hold: **{report['historical_batch_xp_reduction']:,}**\n"
+                f"Other dependent challenge XP to reverse: **{report['additional_dependent_challenge_xp_reduction']:,}**\n"
+                f"Projected: **Prestige {result['prestige']} · Level {result['level']} · {result['lifetime_xp']:,} lifetime XP**\n"
+                'This selects older credits by watch date; it does not prove duplicates or reconstruct your exact former balance. '
+                'Legitimate older history may be included. Selected awards remain saved for review. Later watches are retained. No XP changed. '
+                +(f"If you accept this scope, apply with `/bingecord mapping repair_apply:{plan['token']}`. A backup is saved first; stale previews are rejected."
+                  if plan else 'No selected credits remain to roll back.'),
+                file=discord.File(io.BytesIO(payload),filename='bingecord-import-rollback-preview.json'),
+                ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+        except ValueError as exc:
+            await i.followup.send(str(exc)+'. No XP changed.',ephemeral=True)
+        except Exception as exc:
+            log.warning('Import rollback preview failed for user %s: %s',uid,type(exc).__name__)
+            await i.followup.send('Could not save the rollback preview. No XP changed.',ephemeral=True)
         return
     if repair_preview or primary_history is not None:
         await i.response.defer(ephemeral=True)

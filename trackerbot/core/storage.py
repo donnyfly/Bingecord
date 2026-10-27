@@ -303,6 +303,9 @@ def _add_watch_xp_events(progression: dict, events: list[dict], *, historical=Fa
                     if award.get('event_key') in row['award_keys']:
                         award['media_type'] = event['media_type']
             continue
+        if key in pending:
+            # A repeated poll is not approval to release a quarantined award.
+            continue
         if historical and providers-{provider}:
             # A newly linked account is not proof of another viewing. Stage
             # unmatched history for review, including aliases/numbering/date
@@ -1488,20 +1491,31 @@ class Storage:
     async def prepare_history_repair(self, user_id: str, baseline: dict, report: dict) -> dict | None:
         """Save an executable server-side plan; clients receive only its token."""
         import secrets
-        from .historical_repair import fingerprint,correct_confirmed
-        if not report['confirmed_duplicate_groups']:return None
+        from .historical_repair import fingerprint,correct_confirmed,rollback_import
+        mode=report.get('repair_mode','confirmed')
+        if mode not in {'confirmed','import_rollback'}:raise ValueError('Unknown repair mode')
+        if mode=='confirmed' and not report['confirmed_duplicate_groups']:return None
         async with _lock:
             user=self._user(str(user_id))
             if not user or fingerprint(user['progression'])!=fingerprint(baseline):
                 raise ValueError('Progression changed; generate a fresh preview')
-            projected,watch,challenge,_=correct_confirmed(baseline,report['confirmed_duplicate_groups'],_revoke_unmet_watch_challenges)
-            if (watch!=report['confirmed_watch_xp_reduction'] or challenge!=report['dependent_challenge_xp_reduction']
+            if mode=='import_rollback':
+                projected,verified=rollback_import(baseline,report['rollback_provider'],report['rollback_import_before'],
+                                                   report['rollback_rewards_at'],_revoke_unmet_watch_challenges)
+                watch=verified['selected_watch_xp_reduction'];challenge=verified['dependent_challenge_xp_reduction']
+                if not watch and not challenge:return None
+            else:
+                projected,watch,challenge,_=correct_confirmed(baseline,report['confirmed_duplicate_groups'],_revoke_unmet_watch_challenges)
+            if (watch!=report.get('selected_watch_xp_reduction',report.get('confirmed_watch_xp_reduction')) or challenge!=report['dependent_challenge_xp_reduction']
                     or any(projected[key]!=report['projected'][key] for key in ('xp','prestige','lifetime_xp'))):
                 raise ValueError('Repair projection does not match the reviewed changes')
             token=secrets.token_hex(8)
             plan={'token':token,'fingerprint':fingerprint(baseline),'created_at':datetime.now(timezone.utc).isoformat(),
                   'accounts':_repair_accounts(user),'groups':copy.deepcopy(report['confirmed_duplicate_groups']),
-                  'watch_reduction':watch,'challenge_reduction':challenge,'projected':copy.deepcopy(report['projected'])}
+                  'watch_reduction':watch,'challenge_reduction':challenge,'projected':copy.deepcopy(report['projected']),
+                  'mode':mode}
+            if mode=='import_rollback':
+                plan['rollback']={key:report[key] for key in ('rollback_provider','rollback_import_before','rollback_rewards_at')}
             self._data.setdefault('history_repair_plans',{})[str(user_id)]=plan
             self._dirty=True
         await self.flush()
@@ -1509,7 +1523,7 @@ class Storage:
 
     async def apply_history_repair(self, user_id: str, token: str) -> dict:
         """Back up and atomically persist one user's reviewed, fingerprint-bound plan."""
-        from .historical_repair import fingerprint,correct_confirmed
+        from .historical_repair import fingerprint,correct_confirmed,rollback_import
         user_id=str(user_id)
         if not user_id.isdecimal() or len(user_id)>30 or len(token)!=16 or any(c not in '0123456789abcdef' for c in token):
             raise ValueError('Invalid repair token; generate a repair preview first')
@@ -1529,14 +1543,20 @@ class Storage:
                 progression=user['progression']
                 if fingerprint(progression)!=plan['fingerprint'] or _repair_accounts(user)!=plan['accounts']:
                     raise ValueError('Progression or linked accounts changed; generate a fresh preview')
-                corrected,watch,challenge,_=correct_confirmed(progression,plan['groups'],_revoke_unmet_watch_challenges)
+                if plan.get('mode')=='import_rollback':
+                    settings=plan['rollback']
+                    corrected,verified=rollback_import(progression,settings['rollback_provider'],settings['rollback_import_before'],
+                                                       settings['rollback_rewards_at'],_revoke_unmet_watch_challenges)
+                    watch=verified['selected_watch_xp_reduction'];challenge=verified['dependent_challenge_xp_reduction']
+                else:
+                    corrected,watch,challenge,_=correct_confirmed(progression,plan['groups'],_revoke_unmet_watch_challenges)
                 if (watch!=plan['watch_reduction'] or challenge!=plan['challenge_reduction']
                         or any(corrected[key]!=plan['projected'][key] for key in ('xp','prestige','lifetime_xp'))):
                     raise ValueError('Correction differs from preview; generate a fresh preview')
                 filename=f'history-repair-{user_id}-{token}.json'
                 receipt={'token':token,'applied_at':datetime.now(timezone.utc).isoformat(),
                          'watch_reduction':watch,'challenge_reduction':challenge,
-                         'duplicate_groups':len(plan['groups']),'projected':plan['projected'],'backup':filename}
+                         'duplicate_groups':len(plan['groups']),'projected':plan['projected'],'backup':filename,'mode':plan.get('mode','confirmed')}
                 corrected.setdefault('history_repairs',{})[token]=receipt
                 backup=json.dumps({'discord_user_id':user_id,'plan':plan,'progression':progression},
                                   indent=2,default=_json_default)+'\n'

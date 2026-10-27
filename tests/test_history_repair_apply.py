@@ -165,3 +165,75 @@ def test_apply_command_only_targets_requester_and_is_private(monkeypatch):
         await bot.tracker_mapping.callback(i,repair_apply='a'*16,export=True)
         apply.assert_not_awaited()
     asyncio.run(run())
+
+
+def test_import_rollback_holds_older_history_keeps_later_watches_and_repeats_safely(tmp_path,monkeypatch):
+    async def run():
+        from trackerbot.core.historical_repair import rollback_import
+        store,a,b=await fixture_store(tmp_path,monkeypatch)
+        p=store._data['users']['42']['progression']
+        later={**b,'event_key':'mdblist:7/3:2026-10-03T00:00:00Z','at':'2026-10-03T00:00:00Z','ids':{'tmdb':3}}
+        module._add_watch_xp_events(p,[later])
+        p['xp']+=1200;p['lifetime_xp']+=1200
+        stamp='2026-10-02T10:00:00Z'
+        p['challenge_completions']={'daily:2026-10-01':{'historical':{'xp':1200,'completed_at':stamp,'definition':{'kind':'movies','target':1}}}}
+        baseline=await store.get_progression('42');other=await store.get_user('43')
+        _,report=rollback_import(baseline,'mdblist','2026-10-02T09:00:00Z',stamp,module._revoke_unmet_watch_challenges)
+        assert report['selected_watch_xp_reduction']==400 and report['historical_batch_xp_reduction']==1200
+        assert report['projected']['lifetime_xp']==800
+        assert await store.get_progression('42')==baseline
+        plan=await store.prepare_history_repair('42',baseline,report)
+        receipt=await store.apply_history_repair('42',plan['token'])
+        assert receipt['mode']=='import_rollback' and await store.get_user('43')==other
+        after=await store.get_progression('42')
+        assert after['xp']==800 and b['event_key'] in after['pending_history_awards']
+        assert after['pending_history_challenge_awards']['daily:2026-10-01:historical']['reward']['xp']==1200
+        assert after['challenge_completions']['daily:2026-10-01']['historical']['xp']==0
+        assert {e['event_key'] for e in after['xp_events']}=={a['event_key'],later['event_key']}
+        # Retrying the same old event as live cannot accidentally release held XP.
+        assert module._add_watch_xp_events(after,[b])==(0,[])
+        new={**later,'event_key':'mdblist:7/4:2026-10-04T00:00:00Z','at':'2026-10-04T00:00:00Z'}
+        assert module._add_watch_xp_events(after,[new])[0]==400
+        again=await store.apply_history_repair('42',plan['token'])
+        assert again['already_applied']
+    asyncio.run(run())
+
+
+def test_import_rollback_requires_explicit_primary_and_valid_dates():
+    from trackerbot.core.historical_repair import rollback_import
+    p={'xp_events':[],'challenge_completions':{},'xp':0,'lifetime_xp':0}
+    with pytest.raises(ValueError):rollback_import(p,'mdblist','2026-10-01T00:00:00Z','2026-10-01T00:00:00Z',module._revoke_unmet_watch_challenges)
+    p['history_repair_primary']='simkl'
+    with pytest.raises(ValueError):rollback_import(p,'simkl','2026-10-01T00:00:00Z','2026-10-01T00:00:00Z',module._revoke_unmet_watch_challenges)
+    with pytest.raises(ValueError):rollback_import(p,'mdblist','2026-10-01','invalid',module._revoke_unmet_watch_challenges)
+
+
+def test_import_rollback_command_previews_privately_then_applies_saved_plan(tmp_path,monkeypatch):
+    async def run():
+        from test_notification_preview import bot
+        store,_,_=await fixture_store(tmp_path,monkeypatch)
+        monkeypatch.setattr(bot,'storage',store)
+        i=SimpleNamespace(guild_id=123,guild=SimpleNamespace(id=123),user=SimpleNamespace(id=42),
+                          response=SimpleNamespace(defer=AsyncMock()),followup=SimpleNamespace(send=AsyncMock()))
+        before=await store.get_progression('42')
+        await bot.tracker_mapping.callback(i,rollback_source=bot.app_commands.Choice(name='MDBList',value='mdblist'),
+                    rollback_import_before='2026-10-02T00:00:00Z',rollback_rewards_at='2026-10-02T00:00:00Z')
+        sent=i.followup.send.await_args.kwargs
+        assert sent['ephemeral']
+        report=json.loads(sent['file'].fp.read());sent['file'].close()
+        assert report['repair_mode']=='import_rollback' and report['apply_token']
+        assert await store.get_progression('42')==before
+        await bot.tracker_mapping.callback(i,repair_apply=report['apply_token'])
+        assert (await store.get_progression('42'))['xp']==400
+        assert 'import rollback' in i.followup.send.await_args.args[0]
+    asyncio.run(run())
+
+
+def test_import_rollback_keeps_a_sole_award_supported_by_primary_history():
+    from trackerbot.core.historical_repair import rollback_import
+    p={'xp':400,'lifetime_xp':400,'prestige':0,'history_repair_primary':'simkl','challenge_completions':{},
+       'xp_events':[{'event_key':'mdblist:7/2:2026-10-01T00:00:00Z','media_type':'movie','amount':400,'at':'2026-10-01T00:00:00Z'}],
+       'occurrence_ledger':{'shared':{'award_keys':['mdblist:7/2:2026-10-01T00:00:00Z'],'needs_review':False,
+            'observations':{'simkl-ref':{'provider':'simkl','identity':None},'mdblist-ref':{'provider':'mdblist','identity':None}}}}}
+    after,report=rollback_import(p,'mdblist','2026-10-02T00:00:00Z','2026-10-02T00:00:00Z',module._revoke_unmet_watch_challenges)
+    assert report['selected_watch_xp_reduction']==0 and after['lifetime_xp']==400

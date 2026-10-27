@@ -134,3 +134,10 @@ Confirmed repair validation:
 - Verify confirmed duplicate awards become one supported occurrence, with both raw provider observations retained. Re-importing cannot restore the duplicate award; deleting one observation retains XP until the final supporting observation is removed.
 - Verify only dependent challenge rewards and their queued notifications are revoked. Prestige can decrease across the threshold, legacy progression offsets are preserved, and no historical level-up, achievement or prestige announcements fire.
 - For the supplied diagnostic rehearsal, 192 confirmed duplicate groups remove 18,804 watch XP and 7,550 challenge XP: Prestige 3, Level 59, 1,210,487 lifetime XP. All 10,765 observations remain. This is a local-copy rehearsal, not live-host validation or a complete resolution of uncertain history.
+
+Import rollback (when an exact pre-import balance is unavailable):
+
+- Require an explicit personal primary and a different rollback source. Select older watch dates and an exact challenge grant timestamp; display that this is a policy rollback and may include legitimate older history.
+- Verify the preview does not change progression. Applying its server-side token holds selected watch credits and original challenge rewards, preserves all observations and later watches, and uses the existing backup/atomic commit/fingerprint/user-isolation protections.
+- Replaying a held watch as live must not release its credit. A new watch with a new event key must still award normally. Retain zero-credit historical challenge completions to prevent immediate replay; keep original rewards separately for review.
+- A local rehearsal after the confirmed repair selects 2,971 remaining older MDBList awards (328,668 XP) and 142 historical challenge credits (103,850 XP), projecting Prestige 2, Level 36 and 777,969 lifetime XP. It retains One Piece Fan Letter after the cutoff and all 10,765 source observations. This is a selected rollback scope, not an exact reconstruction or live-host validation.
