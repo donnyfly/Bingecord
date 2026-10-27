@@ -134,6 +134,13 @@ def _write_repair_backup(path: str, text: str) -> None:
         raise
 
 
+def _rebuild_guilds(data,user_id):
+    return {str(gid):{'timezone':str(_resolve_timezone(guild.get('timezone'))),
+                     'achievements':copy.deepcopy(member.get('achievements') or {})}
+            for gid,guild in data.get('guilds',{}).items()
+            if (member:=(guild.get('users') or {}).get(str(user_id))) is not None}
+
+
 def _repair_accounts(user):
     return {'simkl':str(user.get('simkl_account_id')),
             **{provider:str((user.get(provider) or {}).get('account_id')) for provider in ('wetrakr','mdblist')}}
@@ -1488,32 +1495,63 @@ class Storage:
             user = self._user(discord_user_id)
             return copy.deepcopy(user.get("progression", {})) if user else {}
 
+    async def get_simkl_rebuild_context(self,user_id):
+        from .historical_repair import fingerprint
+        async with _lock:
+            user=self._user(str(user_id))
+            if not user or not user.get('simkl_token'):raise ValueError('Link SIMKL first')
+            guilds=_rebuild_guilds(self._data,user_id)
+            if not guilds:raise ValueError('Link a tracker in a server before rebuilding')
+            return {'baseline':copy.deepcopy(user['progression']),
+                    'guild_timezones':{gid:value['timezone'] for gid,value in guilds.items()},
+                    'guild_fingerprint':fingerprint(guilds),
+                    'source_account_id':str(user.get('simkl_account_id') or 'unknown:'+str(user_id))}
+
+    async def get_history_repair_context(self,user_id,token):
+        async with _lock:
+            user=self._user(str(user_id))
+            if user and token in user['progression'].get('history_repairs',{}):return None
+            plan=self._data.get('history_repair_plans',{}).get(str(user_id))
+            return copy.deepcopy(plan.get('rebuild')) if plan and plan['token']==token and plan.get('mode')=='simkl_rebuild' else None
+
     async def prepare_history_repair(self, user_id: str, baseline: dict, report: dict) -> dict | None:
         """Save an executable server-side plan; clients receive only its token."""
         import secrets
         from .historical_repair import fingerprint,correct_confirmed,rollback_import
         mode=report.get('repair_mode','confirmed')
-        if mode not in {'confirmed','import_rollback'}:raise ValueError('Unknown repair mode')
+        if mode not in {'confirmed','import_rollback','simkl_rebuild'}:raise ValueError('Unknown repair mode')
         if mode=='confirmed' and not report['confirmed_duplicate_groups']:return None
         async with _lock:
             user=self._user(str(user_id))
             if not user or fingerprint(user['progression'])!=fingerprint(baseline):
                 raise ValueError('Progression changed; generate a fresh preview')
-            if mode=='import_rollback':
+            if mode=='simkl_rebuild':
+                from .progression_rebuild import rebuild_simkl
+                if (fingerprint(_rebuild_guilds(self._data,user_id))!=report['guild_fingerprint']
+                        or str(user.get('simkl_account_id') or 'unknown:'+str(user_id))!=report['source_account_id']):
+                    raise ValueError('SIMKL account or achievement context changed; generate a fresh preview')
+                projected,verified=rebuild_simkl(baseline,report['rebuild_entries'],report['guild_timezones'],report['generated_at'])
+                if verified['breakdown']!=report['breakdown']:raise ValueError('Rebuild reward rules changed; generate a fresh preview')
+                watch=sum(e.get('amount',0) for e in baseline.get('xp_events',[]) if e.get('media_type') in {'movie','anime_movie','episode','anime_episode'})-verified['breakdown']['watch']
+                challenge=sum(r.get('xp',0) for rs in baseline.get('challenge_completions',{}).values() for r in rs.values())-verified['breakdown']['challenges']
+            elif mode=='import_rollback':
                 projected,verified=rollback_import(baseline,report['rollback_provider'],report['rollback_import_before'],
                                                    report['rollback_rewards_at'],_revoke_unmet_watch_challenges)
                 watch=verified['selected_watch_xp_reduction'];challenge=verified['dependent_challenge_xp_reduction']
                 if not watch and not challenge:return None
             else:
                 projected,watch,challenge,_=correct_confirmed(baseline,report['confirmed_duplicate_groups'],_revoke_unmet_watch_challenges)
-            if (watch!=report.get('selected_watch_xp_reduction',report.get('confirmed_watch_xp_reduction')) or challenge!=report['dependent_challenge_xp_reduction']
+            if ((mode!='simkl_rebuild' and (watch!=report.get('selected_watch_xp_reduction',report.get('confirmed_watch_xp_reduction')) or challenge!=report['dependent_challenge_xp_reduction']))
                     or any(projected[key]!=report['projected'][key] for key in ('xp','prestige','lifetime_xp'))):
                 raise ValueError('Repair projection does not match the reviewed changes')
             token=secrets.token_hex(8)
             plan={'token':token,'fingerprint':fingerprint(baseline),'created_at':datetime.now(timezone.utc).isoformat(),
-                  'accounts':_repair_accounts(user),'groups':copy.deepcopy(report['confirmed_duplicate_groups']),
+                  'accounts':_repair_accounts(user),'groups':copy.deepcopy(report.get('confirmed_duplicate_groups',[])),
                   'watch_reduction':watch,'challenge_reduction':challenge,'projected':copy.deepcopy(report['projected']),
                   'mode':mode}
+            if mode=='simkl_rebuild':
+                plan['rebuild']={key:copy.deepcopy(report[key]) for key in ('rebuild_entries','guild_timezones','guild_fingerprint','breakdown','simkl_markers')}
+                plan['rebuild']['rebuilt_at']=report['generated_at']
             if mode=='import_rollback':
                 plan['rollback']={key:report[key] for key in ('rollback_provider','rollback_import_before','rollback_rewards_at')}
             self._data.setdefault('history_repair_plans',{})[str(user_id)]=plan
@@ -1521,7 +1559,7 @@ class Storage:
         await self.flush()
         return {'token':token,'expires_in_hours':24}
 
-    async def apply_history_repair(self, user_id: str, token: str) -> dict:
+    async def apply_history_repair(self, user_id: str, token: str, *, simkl_markers=None) -> dict:
         """Back up and atomically persist one user's reviewed, fingerprint-bound plan."""
         from .historical_repair import fingerprint,correct_confirmed,rollback_import
         user_id=str(user_id)
@@ -1543,7 +1581,18 @@ class Storage:
                 progression=user['progression']
                 if fingerprint(progression)!=plan['fingerprint'] or _repair_accounts(user)!=plan['accounts']:
                     raise ValueError('Progression or linked accounts changed; generate a fresh preview')
-                if plan.get('mode')=='import_rollback':
+                guild_updates=None
+                if plan.get('mode')=='simkl_rebuild':
+                    from .progression_rebuild import rebuild_simkl
+                    settings=plan['rebuild']
+                    if simkl_markers!=settings['simkl_markers'] or fingerprint(_rebuild_guilds(self._data,user_id))!=settings['guild_fingerprint']:
+                        raise ValueError('SIMKL activity or achievement context changed; generate a fresh rebuild preview')
+                    corrected,verified=rebuild_simkl(progression,settings['rebuild_entries'],settings['guild_timezones'],settings['rebuilt_at'])
+                    if verified['breakdown']!=settings['breakdown']:raise ValueError('Rebuild reward rules changed; generate a fresh preview')
+                    guild_updates=verified['guild_achievements']
+                    watch=sum(e.get('amount',0) for e in progression.get('xp_events',[]) if e.get('media_type') in {'movie','anime_movie','episode','anime_episode'})-verified['breakdown']['watch']
+                    challenge=sum(r.get('xp',0) for rs in progression.get('challenge_completions',{}).values() for r in rs.values())-verified['breakdown']['challenges']
+                elif plan.get('mode')=='import_rollback':
                     settings=plan['rollback']
                     corrected,verified=rollback_import(progression,settings['rollback_provider'],settings['rollback_import_before'],
                                                        settings['rollback_rewards_at'],_revoke_unmet_watch_challenges)
@@ -1557,11 +1606,19 @@ class Storage:
                 receipt={'token':token,'applied_at':datetime.now(timezone.utc).isoformat(),
                          'watch_reduction':watch,'challenge_reduction':challenge,
                          'duplicate_groups':len(plan['groups']),'projected':plan['projected'],'backup':filename,'mode':plan.get('mode','confirmed')}
+                if guild_updates is not None:receipt['breakdown']=verified['breakdown']
                 corrected.setdefault('history_repairs',{})[token]=receipt
-                backup=json.dumps({'discord_user_id':user_id,'plan':plan,'progression':progression},
+                backup_state={'discord_user_id':user_id,'plan':plan,'progression':progression}
+                if guild_updates is not None:backup_state['guild_achievements']=_rebuild_guilds(self._data,user_id)
+                backup=json.dumps(backup_state,
                                   indent=2,default=_json_default)+'\n'
                 replacement=copy.deepcopy(self._data)
                 replacement['users'][user_id]['progression']=corrected
+                if guild_updates is not None:
+                    for gid,unlocks in guild_updates.items():
+                        member=replacement['guilds'][gid]['users'][user_id]
+                        prior=member.get('achievements') or {}
+                        member['achievements']={aid:copy.deepcopy(prior.get(aid) or {'unlocked_at':settings['rebuilt_at']}) for aid in unlocks}
                 replacement['history_repair_plans'].pop(user_id,None)
                 text=json.dumps(replacement,indent=2,default=_json_default)+'\n'
                 path=os.path.join(os.path.dirname(DATA_PATH),'repair-backups',filename)
