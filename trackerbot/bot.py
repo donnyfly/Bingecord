@@ -2902,7 +2902,8 @@ async def show_profile(i,user):
 
 
 @bingecord_commands.command(name="mapping",description="Privately inspect how your linked trackers match watches and XP.")
-async def tracker_mapping(i):
+@app_commands.describe(export="Attach a private read-only XP audit for investigating unexpected progression")
+async def tracker_mapping(i,export: bool = False):
     g=guild_id(i)
     if not g:
         await i.response.send_message("This command must be used in a server.",ephemeral=True)
@@ -2913,15 +2914,28 @@ async def tracker_mapping(i):
         await i.response.send_message("Link a tracking account with /bingecord link first.",ephemeral=True)
         return
     audit=await storage.get_mapping_audit(uid)
-    await i.response.send_message(
+    attachment={}
+    if export:
+        await i.response.defer(ephemeral=True)
+        import io,json
+        from trackerbot.core.xp_audit import build_xp_audit
+        report=build_xp_audit(await storage.get_progression(uid))
+        payload=json.dumps(report,ensure_ascii=False,separators=(',',':')).encode()
+        if len(payload)>7_500_000:
+            await i.followup.send('This XP audit exceeds the safe attachment size. Existing XP was not changed.',ephemeral=True)
+            return
+        attachment={'file':discord.File(io.BytesIO(payload),filename='bingecord-xp-audit.json')}
+    sender=i.followup.send if export else i.response.send_message
+    await sender(
         "**Your watch mapping**\n"
         f"Verified cross-tracker matches: **{audit['verified']:,}**\n"
         f"Older title-only matches: **{audit['legacy']:,}**\n"
         f"Unpaired watches: **{audit['unpaired']:,}**\n"
         f"Needs review: **{audit['review']:,}**\n"
         f"Possible double XP awards: **{audit['double_awards']:,}**\n\n"
-        "This is a read-only preview. Existing XP is not changed by this command.",
-        ephemeral=True,
+        "This is a read-only preview. Existing XP is not changed by this command. "
+        "Unpaired watches can include unrecognized duplicates. Use `export:True` for a private XP audit.",
+        ephemeral=True,**attachment,
     )
 
 

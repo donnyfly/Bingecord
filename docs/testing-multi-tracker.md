@@ -4,6 +4,8 @@ Personal ratings, late message edits and season/series milestones have a separat
 
 ## Automated coverage
 
+For unexpected XP jumps, `/bingecord mapping export:True` attaches a private read-only audit of XP awards, reward totals and occurrence observations. It excludes linked-account tokens and makes no XP changes. Share this audit for investigation rather than the live store. Unpaired watches can include unrecognized duplicates, so zero recognized double awards is not proof that no duplicate XP exists.
+
 Run `python3 -m pytest -q` and `python3 -m compileall -q trackerbot tests`.
 
 The suite checks both watch ingestion orders, both removal orders, repeated imports, restarts between removals, relinks, distinct rewatches, external ID conflicts, metadata/episode corrections, challenge reward reversals, selected-source statistics and community projections, discovery cards, account guards, adapter history/change contracts and registry poll dispatch. Existing tests cover activity delivery and progression notifications. Rendered profiles for SIMKL and WeTrakr and the rank/prestige/achievement animations have also been visually inspected.
