@@ -254,12 +254,14 @@ def _record_watch_stats(stats: dict, media_type: str, title: str, item_key: str,
     return True
 
 
-def _add_watch_xp_events(progression: dict, events: list[dict]) -> tuple[int,list[dict]]:
+def _add_watch_xp_events(progression: dict, events: list[dict], *, historical=False) -> tuple[int,list[dict]]:
     """Apply one imported history batch without copying or pruning per watch."""
     rows = watch_ledger.ensure(progression)
     known=progression["watch_xp_keys"]
     added=[]
     amount=0
+    pending=progression.setdefault('pending_history_awards',{})
+    providers={obs['provider'] for candidate in rows.values() for obs in candidate['observations'].values()}
     for event in events:
         key=event["event_key"]
         provider = str(key).split(":",1)[0] if str(key).startswith(("wetrakr:","mdblist:")) else "simkl"
@@ -267,12 +269,20 @@ def _add_watch_xp_events(progression: dict, events: list[dict]) -> tuple[int,lis
                     if provider != "simkl" else identity_from_event(event))
         row = watch_ledger.observe(rows, provider, key, identity)
         if row["award_keys"] or key in known:
+            pending.pop(key,None)
             # Classification enrichment updates the shared reward projection;
             # a generic movie observation must not downgrade an anime film.
             if event['media_type'].startswith('anime'):
                 for award in progression['xp_events']:
                     if award.get('event_key') in row['award_keys']:
                         award['media_type'] = event['media_type']
+            continue
+        if historical and providers-{provider}:
+            # A newly linked account is not proof of another viewing. Stage
+            # unmatched history for review, including aliases/numbering/date
+            # differences which the live five-minute matcher cannot resolve.
+            pending[key]=copy.deepcopy(event)
+            row['needs_review']=True
             continue
         row["award_keys"].append(key)
         stamp=event["at"]
@@ -1209,7 +1219,7 @@ class Storage:
                     "ids": play.get("ids") or {},
                     **({"runtime_minutes":preserved_award["runtime_minutes"]} if preserved_award and "runtime_minutes" in preserved_award
                        else {} if preserved_award else {"runtime_minutes":watch_minutes(kind, play.get("runtime_minutes"))}),
-                    "amount": preserved_award["amount"] if preserved_award else xp_for_watch(kind, play.get("runtime_minutes"))}])
+                    "amount": preserved_award["amount"] if preserved_award else xp_for_watch(kind, play.get("runtime_minutes"))}],historical=complete)
                 duplicate = not added_events
                 xp_delta += amount
                 challenge_events.extend(added_events)
@@ -1466,7 +1476,22 @@ class Storage:
             "unpaired": sum(len(row["observations"]) == 1 for row in index.values()),
             "review": sum(row["needs_review"] for row in index.values()),
             "double_awards": sum(len(row["award_keys"]) > 1 for row in index.values()),
+            "pending_history": len(progression.get('pending_history_awards',{})),
         }
+
+    async def enrich_simkl_metadata(self,user_id,account_id,catalog):
+        from .historical_repair import hydrate_simkl
+        async with _lock:
+            user=self._user(str(user_id))
+            current=str((user or {}).get('simkl_account_id') or 'unknown:'+str(user_id))
+            if not user or not user.get('simkl_token') or current!=str(account_id):
+                raise ValueError('SIMKL account changed during identity refresh')
+            before=sum(bool(row.get('needs_review')) for row in watch_ledger.ensure(user['progression']).values())
+            count=hydrate_simkl(user['progression'],catalog)
+            changed=count or before!=sum(bool(row.get('needs_review')) for row in user['progression']['occurrence_ledger'].values())
+            if changed:self._dirty=True
+        if changed:await self.flush()
+        return count
 
     async def refresh_watch_occurrences(self, discord_user_id: str) -> dict:
         """Persist the authoritative ledger and its read-only command projection."""
@@ -1489,7 +1514,7 @@ class Storage:
             if not user or user["progression"].get("history_xp_seeded"):
                 return 0
             progression=user["progression"]
-            amount,_=_add_watch_xp_events(progression,events)
+            amount,_=_add_watch_xp_events(progression,events,historical=True)
             progression["history_xp_seeded"]=True
             self._dirty=True
         await self.flush()
@@ -1519,7 +1544,7 @@ class Storage:
                                 "at":entry["watched_at"],
                                 "ids":entry.get("ids") or {},
                                 "amount":xp_for_watch(entry["media_type"], entry.get("runtime_minutes")), "runtime_minutes":watch_minutes(entry["media_type"], entry.get("runtime_minutes"))})
-            amount,_=_add_watch_xp_events(progression,missing)
+            amount,_=_add_watch_xp_events(progression,missing,historical=True)
             if missing:
                 self._dirty=True
         if missing:
@@ -1569,7 +1594,7 @@ class Storage:
                 "amount":xp_for_watch(record[0]), "runtime_minutes":watch_minutes(record[0]),
             } for record in records]
             amount=self._apply_watch_records_locked(guild_user,global_user,watches_to_record,
-                                                     guild.get("timezone"))
+                                                     guild.get("timezone"),historical=True)
             guild_user["announced"].update(keys)
             guild_user["activity_state"]["statuses"].update(statuses)
             guild_user["activity_state"]["watch_times"].update(watches)
@@ -1602,7 +1627,7 @@ class Storage:
     @staticmethod
     def _apply_watch_records_locked(guild_user: dict, global_user: dict,
                                      records: list[dict], timezone_name: str | None,
-                                     notify_challenges: bool = False) -> int:
+                                     notify_challenges: bool = False, historical: bool = False) -> int:
         xp_events=[]
         for record in records:
             media_type=record["media_type"]
@@ -1622,7 +1647,7 @@ class Storage:
             guild_user["statistics"]=_rebuild_watch_statistics(
                 guild_user["statistics"]["watch_events"],timezone_name)
         progression=global_user["progression"]
-        amount,added=_add_watch_xp_events(progression,xp_events)
+        amount,added=_add_watch_xp_events(progression,xp_events,historical=historical)
         _complete_watch_challenges(progression,added,notify=notify_challenges)
         return amount
 

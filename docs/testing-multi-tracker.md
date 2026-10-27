@@ -4,6 +4,8 @@ Personal ratings, late message edits and season/series milestones have a separat
 
 ## Automated coverage
 
+Historical XP safety: import a second provider with changed dates, romanized/English aliases and absolute/seasonal anime numbering. Unmatched historical plays must appear as held awards, add no XP and trigger no historical challenge rewards. A genuinely new live watch must still earn XP. Exact verified duplicates remain credited once. Run `/bingecord mapping repair_preview:True`; check ID recovery, canonical episode evidence, unresolved/conflicting identities, confirmed-only XP/challenge projections, and unchanged live progression. Preserve genuine rewatches and verify that incomplete or failed metadata reads never apply a correction. This build exports a preview only and does not implement a destructive apply action.
+
 For unexpected XP jumps, `/bingecord mapping export:True` attaches a private read-only audit of XP awards, reward totals and occurrence observations. It excludes linked-account tokens and makes no XP changes. Share this audit for investigation rather than the live store. Unpaired watches can include unrecognized duplicates, so zero recognized double awards is not proof that no duplicate XP exists.
 
 Run `python3 -m pytest -q` and `python3 -m compileall -q trackerbot tests`.

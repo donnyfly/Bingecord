@@ -274,6 +274,14 @@ Server admins can override the timezone with `/bingecord timezone`.
 
 ## First-import performance and progress
 
+### Historical XP reconciliation
+
+When another provider already supplies watch observations, unmatched historical imports are **held for review**, rather than automatically credited as additional viewings. This includes apparently new historical titles until they can be reviewed; live activity still earns normal XP. Confirmed matches retain their existing award, first-account history imports keep their usual behavior, and held watches do not trigger watch-based challenge rewards. Stats can therefore include imported watches whose additional XP is pending.
+
+Use `/bingecord mapping repair_preview:True` to refresh linked SIMKL catalog IDs and export `bingecord-repair-preview.json`. This can take several minutes for a large library. It normalizes verified episode references and complete absolute anime runs while preserving original observations. Different dates, aliases without verified IDs, incomplete episode crosswalks and conflicting IDs remain review items. Only unique, ID-verified duplicates within the strict live matching window produce a confirmed correction preview. The report includes projected XP, prestige, level and dependent challenge adjustments, without changing live XP.
+
+SIMKL identity metadata is also refreshed during full SIMKL reconciliation. These safeguards do not automatically deduct previously awarded XP or resolve held awards. Historical corrections require reviewing the preview first; there is no automatic apply action in this build. Backups and a guarded, repeat-safe apply step must accompany any subsequent approved correction.
+
 MDBList and WeTrakr first imports run as background jobs, so scheduled checks and normal posts for other members can continue. Each provider runs at most two import jobs and four enrichment lookups at a time. Concurrent requests for the same title, season or anime mapping share their in-flight metadata reads.
 
 `/bingecord checknow` waits for this server's imports and refreshes its private progress message every 15 seconds. `/bingecord status user:@username` shows imported-page enrichment counts too. Counts describe downloaded plays, not an assumed percentage of the entire library. If Discord expires a long-running interaction, the background job continues; use status to check progress.

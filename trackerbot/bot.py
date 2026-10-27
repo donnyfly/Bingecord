@@ -1052,6 +1052,11 @@ async def reconcile_watch_progression(g, uid, u, token, changed_types, request_c
 
     result=await storage.reconcile_watch_xp(uid, active_watch_bases, media_types)
     if full_statistics_snapshot:
+        from types import SimpleNamespace
+        catalog=[SimpleNamespace(media_type='movie' if 'movie' in entry['media_type'] else 'episode',
+                                 title_ids=entry.get('ids') or {}) for entry in baseline_entries]
+        if u.get('simkl_token'):
+            await storage.enrich_simkl_metadata(uid,u.get('simkl_account_id') or 'unknown:'+str(uid),catalog)
         progression=await storage.get_progression(uid)
         known_bases={event['event_key'][:-len(event['at'])] for event in progression.get('xp_events', [])
                      if event.get('event_key') and event.get('at') and event['event_key'].endswith(event['at'])}
@@ -2902,8 +2907,9 @@ async def show_profile(i,user):
 
 
 @bingecord_commands.command(name="mapping",description="Privately inspect how your linked trackers match watches and XP.")
-@app_commands.describe(export="Attach a private read-only XP audit for investigating unexpected progression")
-async def tracker_mapping(i,export: bool = False):
+@app_commands.describe(export="Attach a private read-only XP audit for investigating unexpected progression",
+                       repair_preview="Refresh linked SIMKL identities and preview historical overlaps without changing XP")
+async def tracker_mapping(i,export: bool = False,repair_preview: bool = False):
     g=guild_id(i)
     if not g:
         await i.response.send_message("This command must be used in a server.",ephemeral=True)
@@ -2912,6 +2918,39 @@ async def tracker_mapping(i,export: bool = False):
     user=await storage.get_user(uid)
     if not user:
         await i.response.send_message("Link a tracking account with /bingecord link first.",ephemeral=True)
+        return
+    if repair_preview:
+        await i.response.defer(ephemeral=True)
+        import copy,io,json,hashlib
+        from trackerbot.core.historical_repair import canonicalize,build_preview
+        from trackerbot.core.storage import _revoke_unmet_watch_challenges
+        try:
+            enriched=0
+            if user.get('simkl_token') and SIMKL_CLIENT_ID:
+                source=provider_registry.get('simkl');account=await source.link(uid)
+                page=await source.history(account)
+                enriched=await storage.enrich_simkl_metadata(uid,account.account_id,page.changes)
+            baseline=await storage.get_progression(uid)
+            fingerprint=hashlib.sha256(json.dumps(baseline,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+            projection=copy.deepcopy(baseline)
+            crosswalk=await canonicalize(projection,tmdb)
+            report=build_preview(projection,_revoke_unmet_watch_challenges)
+            report.update(fingerprint=fingerprint,simkl_identities_enriched=enriched,**crosswalk)
+            payload=json.dumps(report,ensure_ascii=False,separators=(',',':')).encode()
+            if len(payload)>7_500_000:
+                await i.followup.send('Repair preview exceeds attachment size; no XP changed.',ephemeral=True);return
+            await i.followup.send(
+                f"**Historical XP repair preview**\nSIMKL identities refreshed: **{enriched:,}**\n"
+                f"Confirmed duplicate groups: **{len(report['confirmed_duplicate_groups']):,}**\n"
+                f"Overlaps needing review: **{len(report['uncertain_overlaps']):,}**\n"
+                f"Confirmed watch XP reduction: **{report['confirmed_watch_xp_reduction']:,}**\n"
+                f"Dependent challenge XP reduction: **{report['dependent_challenge_xp_reduction']:,}**\n"
+                "No XP has been changed. The projection includes only confirmed corrections; unresolved overlaps still need review.",
+                file=discord.File(io.BytesIO(payload),filename='bingecord-repair-preview.json'),ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none())
+        except Exception as exc:
+            log.warning('Historical repair preview failed for user %s: %s',uid,type(exc).__name__)
+            await i.followup.send('Could not complete the history/metadata reads. No XP was changed; retry when the linked provider is available.',ephemeral=True)
         return
     audit=await storage.get_mapping_audit(uid)
     attachment={}
@@ -2933,6 +2972,7 @@ async def tracker_mapping(i,export: bool = False):
         f"Unpaired watches: **{audit['unpaired']:,}**\n"
         f"Needs review: **{audit['review']:,}**\n"
         f"Possible double XP awards: **{audit['double_awards']:,}**\n\n"
+        f"Historical awards held for review: **{audit.get('pending_history',0):,}**\n\n"
         "This is a read-only preview. Existing XP is not changed by this command. "
         "Unpaired watches can include unrecognized duplicates. Use `export:True` for a private XP audit.",
         ephemeral=True,**attachment,

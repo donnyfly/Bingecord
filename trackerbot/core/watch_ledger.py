@@ -72,6 +72,7 @@ def ensure(progression):
 
 
 def remove(progression, observation_key):
+    progression.get('pending_history_awards',{}).pop(observation_key,None)
     rows = ensure(progression)
     for occurrence, row in list(rows.items()):
         if observation_key not in row['observations']:
