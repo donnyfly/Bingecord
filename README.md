@@ -426,6 +426,8 @@ A “no active SIMKL targets” log is normal when everyone selects another prov
 
 ### Ratings or artwork are missing
 
+An MDBList `TIMEOUT` or `NETWORK_ERROR` means the API connection/read failed. Read requests retry once, with a 10-second connection limit and 30-second total limit per attempt; repeated failures trigger a 60-second cooldown shared by personal-rating reads and watch polling. Existing ratings, watch history, checkpoints and XP stay intact. OAuth token requests are never automatically replayed. If timeouts continue, check the bot host's outbound connectivity to `api.mdblist.com`; these errors alone do not mean you need to relink or reset data.
+
 Availability depends on provider/catalog metadata. Individual episode IMDb scores may be missing even when the series has a rating. The bot keeps source episode coordinates for metadata lookups separately from mapped anime display numbering.
 
 ### Slash commands are missing

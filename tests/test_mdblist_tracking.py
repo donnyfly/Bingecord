@@ -1,8 +1,61 @@
 import asyncio
 from unittest.mock import AsyncMock
+import aiohttp
+import pytest
 
 from trackerbot.integrations.mdblist_tracking_client import MDBListTrackingClient, MDBListTrackingError, DEVICE_GRANT
 from tests.test_wetrakr_prototype import Response, Session
+
+
+class FailedResponse:
+    def __init__(self,error):self.error=error
+    async def __aenter__(self):raise self.error
+    async def __aexit__(self,*args):return False
+
+
+def test_read_timeout_retries_once_with_bounded_connect_timeout(monkeypatch):
+    async def run():
+        sleep=AsyncMock()
+        monkeypatch.setattr('trackerbot.integrations.mdblist_tracking_client.asyncio.sleep',sleep)
+        session=Session([FailedResponse(asyncio.TimeoutError()),Response({'server_time':'2026-10-27T06:00:00Z'})])
+        client=MDBListTrackingClient('app',session=session)
+        assert (await client.last_activities('secret'))['server_time']
+        assert len(session.calls)==2 and client.request_counts['/sync/last_activities']==2
+        assert session.calls[0][2]['timeout'].connect==10
+        assert session.calls[0][2]['timeout'].total==30
+        sleep.assert_awaited_once_with(1)
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('error,code',[(asyncio.TimeoutError('secret'),'TIMEOUT'),
+                                     (aiohttp.ClientConnectionError('secret'),'NETWORK_ERROR')])
+def test_repeated_transport_failure_is_sanitized_and_requests_cooldown(monkeypatch,error,code):
+    async def run():
+        monkeypatch.setattr('trackerbot.integrations.mdblist_tracking_client.asyncio.sleep',AsyncMock())
+        session=Session([FailedResponse(error),FailedResponse(error)])
+        client=MDBListTrackingClient('app',session=session)
+        with pytest.raises(MDBListTrackingError) as caught:await client.last_activities('secret')
+        assert caught.value.code==code and caught.value.retry_after==60
+        assert 'secret' not in str(caught.value) and caught.value.__suppress_context__
+        assert len(session.calls)==2
+    asyncio.run(run())
+
+
+def test_oauth_timeout_and_cancellation_are_never_replayed(monkeypatch):
+    async def run():
+        sleep=AsyncMock()
+        monkeypatch.setattr('trackerbot.integrations.mdblist_tracking_client.asyncio.sleep',sleep)
+        session=Session([FailedResponse(asyncio.TimeoutError())])
+        client=MDBListTrackingClient('app',session=session)
+        with pytest.raises(MDBListTrackingError) as caught:await client.refresh_token('secret')
+        assert caught.value.code=='TIMEOUT' and caught.value.retry_after is None
+        assert len(session.calls)==1
+        session=Session([FailedResponse(asyncio.CancelledError())])
+        client=MDBListTrackingClient('app',session=session)
+        with pytest.raises(asyncio.CancelledError):await client.last_activities('secret')
+        assert len(session.calls)==1
+        sleep.assert_not_awaited()
+    asyncio.run(run())
 
 
 def test_device_flow_does_not_use_metadata_api_key():

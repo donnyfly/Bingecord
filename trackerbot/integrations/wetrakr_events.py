@@ -38,7 +38,7 @@ def normalize_journal_entry(entry: dict) -> dict | None:
     if category in {"watching", "waiting", "planning", "dropped", "paused"} and status in {"added", "removed"}:
         if media_type not in {"movie", "show"}:
             return None
-        return {"runtime_minutes": row.get("runtime"), "source": "wetrakr", "change_id": str(entry.get("entry_id") or ""),
+        return {"runtime_minutes": entry.get("runtime"), "source": "wetrakr", "change_id": str(entry.get("entry_id") or ""),
                 "action": status, "status": category, "media_type": media_type,
                 "wetrakr_id": entry.get("id"), "ids": entry.get("ids") or {},
                 "title": entry.get("title") or "", "action_at": entry.get("action_at")}

@@ -1,7 +1,22 @@
 import asyncio
+import pytest
 
 from trackerbot.integrations.wetrakr_client import WeTrakrClient, WeTrakrError
 from trackerbot.integrations.wetrakr_events import normalize_compact_play, normalize_journal_entry
+
+
+@pytest.mark.parametrize('category',['watching','waiting','planning','dropped','paused'])
+@pytest.mark.parametrize('action',['added','removed'])
+@pytest.mark.parametrize('media_type',['movie','show'])
+def test_every_status_journal_path_preserves_entry_metadata(category,action,media_type):
+    entry={'entry_id':'status-1','category':category,'status':action,'type':media_type,
+           'id':42,'ids':{'tmdb':7},'title':'Title','runtime':60,'action_at':'2026-10-27T06:00:00Z'}
+    change=normalize_journal_entry(entry)
+    assert change['runtime_minutes']==60
+    assert change['status']==category and change['action']==action
+    assert change['change_id']=='status-1' and change['wetrakr_id']==42
+    assert change['ids']=={'tmdb':7} and change['action_at']==entry['action_at']
+    assert 'source_event_id' not in change  # Status changes are not watched plays.
 
 
 class Response:

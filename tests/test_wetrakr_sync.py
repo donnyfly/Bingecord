@@ -105,6 +105,39 @@ def test_bulk_episode_range_acknowledges_only_after_delivery(tmp_path, monkeypat
     asyncio.run(run())
 
 
+def test_status_before_watch_does_not_block_journal_and_retries_without_duplicates(tmp_path,monkeypatch):
+    async def run():
+        monkeypatch.setattr(storage_module,'DATA_PATH',str(tmp_path/'store.json'))
+        store=storage_module.Storage()
+        await store.link_wetrakr('123','42',{'access_token':'a','refresh_token':'r'},{'id':19})
+        async def target():
+            return (await store.get_provider_targets('wetrakr','123',active_only=True))[0]
+        client=Client();sync=WeTrakrSync(client,Auth(),store)
+        async def accept(*args):return True
+        await sync.poll(await target(),accept)
+        initial=(await target())['guild_user_data']['wetrakr_sync']['checkpoint']
+        client.latest='2026-10-27T06:00:00Z'
+        client.rows=[{'entry_id':'status','action_at':client.latest,'category':'planning','status':'added',
+                      'type':'show','id':10,'title':'Show','runtime':24},
+                     {'entry_id':'watch','action_at':client.latest,'category':'watched','status':'added',
+                      'type':'episode','id':11,'show_id':10,'play_id':'play','season_number':1,'number':1}]
+        attempts=[]
+        async def deliver(change,row):
+            attempts.append(row['entry_id'])
+            if row['entry_id']=='status':
+                assert change['runtime_minutes']==24 and 'source_event_id' not in change
+                return attempts.count('status')>1
+            assert change['source_event_id']=='play'
+            return True
+        assert await sync.poll(await target(),deliver)==0
+        assert (await target())['guild_user_data']['wetrakr_sync']['checkpoint']==initial
+        assert await sync.poll(await target(),deliver)==2
+        assert attempts==['status','status','watch']
+        assert await sync.poll(await target(),deliver)==0
+        assert attempts==['status','status','watch']
+    asyncio.run(run())
+
+
 def test_unrecognized_baseline_does_not_revoke_existing_xp(tmp_path, monkeypatch):
     async def run():
         from trackerbot.integrations.wetrakr_client import WeTrakrError

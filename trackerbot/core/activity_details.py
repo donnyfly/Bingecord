@@ -12,6 +12,7 @@ import time
 import discord
 from .completion import outcome
 from trackerbot.integrations.personal_ratings import fetch
+from trackerbot.integrations.mdblist_tracking_client import MDBListTrackingError
 
 log=logging.getLogger('bingecord')
 current_post=ContextVar('activity_detail_post',default=None)
@@ -91,12 +92,13 @@ class ActivityDetails:
                         provider=self.app.provider_registry.get(source)
                         if hasattr(provider,'paused_until'):
                             provider.paused_until[str(account.account_id)]=time.monotonic()+exc.retry_after
-                    log.warning('Activity detail sync failed for %s/%s: %s',gid,source,type(exc).__name__)
-                    self.errors[(gid,uid)]=type(exc).__name__
+                    error=f'{type(exc).__name__}:{exc.code}' if isinstance(exc,MDBListTrackingError) else type(exc).__name__
+                    log.warning('Activity detail sync failed for %s/%s: %s',gid,source,error)
+                    self.errors[(gid,uid)]=error
                     # Keep a validated old snapshot; never interpret an error as an unrating.
                     if account is None:continue
                     state=await self.app.storage.get_activity_detail_state(gid,uid,source,account.account_id)
-                    state['error']=type(exc).__name__
+                    state['error']=error
                     await self.app.storage.save_activity_detail_state(gid,uid,source,account.account_id,state)
                 self.contexts[(gid,uid)]={'source':source,'account':account.account_id,'state':state}
                 part={'guild':gid,'user':uid,'source':source,'account':str(account.account_id)}
