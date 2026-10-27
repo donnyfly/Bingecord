@@ -147,6 +147,15 @@ class BingecordBot(discord.Client):
             except Exception:
                 log.exception("Polling task failed while shutting down.")
 
+        jobs=[]
+        registry=globals().get('provider_registry')
+        if registry:jobs+=list(registry.get('mdblist').imports.jobs.tasks.values())
+        sync=globals().get('wetrakr_sync')
+        if sync:jobs+=list(sync.imports.jobs.tasks.values())
+        for job in jobs:
+            if not job.done():job.cancel()
+        if jobs:await asyncio.gather(*jobs,return_exceptions=True)
+
         try:
             await storage.flush()
         except Exception:
@@ -335,7 +344,7 @@ def iter_show_episodes(t,items):
                 en=ep.get("number")
                 if en is None: continue
                 wr=ep.get("watched_at")
-                yield {"show_title":show.get("title","a show"),"genres":show.get("genres") or item.get("genres") or [],"simkl_id":sid,"tmdb_id":ids.get("tmdb"),"tvdb_id":ids.get("tvdb"),"ids":ids,"slug":ids.get("slug"),"poster":show.get("poster"),"season_num":sn,"original_season_num":original,"mapped_tvdb_season_num":mapped_season,"episode_number":en,"episode_title":ep.get("title"),"runtime_minutes":ep.get("runtime") or show.get("runtime"),"watched_raw":wr,"watched_dt":parse_iso(wr) if wr else None,"key":episode_key(t,sid,sn,en)}
+                yield {"rewatch_id":item.get("rewatch_id"),"show_title":show.get("title","a show"),"genres":show.get("genres") or item.get("genres") or [],"simkl_id":sid,"tmdb_id":ids.get("tmdb"),"tvdb_id":ids.get("tvdb"),"ids":ids,"slug":ids.get("slug"),"poster":show.get("poster"),"season_num":sn,"original_season_num":original,"mapped_tvdb_season_num":mapped_season,"episode_number":en,"episode_title":ep.get("title"),"runtime_minutes":ep.get("runtime") or show.get("runtime"),"watched_raw":wr,"watched_dt":parse_iso(wr) if wr else None,"key":episode_key(t,sid,sn,en)}
 
 def format_episode_range(s,a,b):
     if s is None: return f"E{a:02d}" if a==b else f"E{a:02d}-E{b:02d}"
@@ -565,8 +574,11 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
     for e in iter_show_episodes(t,items):
         if e["watched_dt"] is None: continue
         prev=watches.get(e["key"]); prevdt=parse_iso(prev) if prev else None
-        rw=e["key"] in announced and prevdt and e["watched_dt"]>prevdt
-        if e["key"] not in announced or rw: groups[(e["simkl_id"],e["season_num"],"rewatched" if rw else "watched")].append(e)
+        changed=e["key"] in announced and prevdt and e["watched_dt"]>prevdt
+        # A changed canonical timestamp can be a deletion/re-add or correction.
+        # Only an explicit provider rewatch session establishes another viewing.
+        rw=bool(e.get('rewatch_id'))
+        if e["key"] not in announced or changed: groups[(e["simkl_id"],e["season_num"],"rewatched" if rw else "watched")].append(e)
     count=0; ok=True
     starting_titles={((item.get("show") or {}).get("ids") or {}).get("simkl")
                      for item in items or [] if item.get("status")=="watching"}
@@ -685,8 +697,9 @@ async def process_movies(ch,g,uid,name,member,items,since,profile,batch=None,sco
     for x in items or []:
         m=x.get("movie") or {}; ids=m.get("ids") or {}; sid=ids.get("simkl"); wr=x.get("last_watched_at")
         if sid is None or not wr: continue
-        dt=parse_iso(wr); k=movie_key("movies",sid); prev=watches.get(k); prevdt=parse_iso(prev) if prev else None; rw=k in announced and prevdt and dt>prevdt
-        if k in announced and not rw: continue
+        dt=parse_iso(wr); k=movie_key("movies",sid); prev=watches.get(k); prevdt=parse_iso(prev) if prev else None; changed=k in announced and prevdt and dt>prevdt
+        if k in announced and not changed: continue
+        rw=bool(x.get('rewatch_id'))
         if k not in announced and dt<=since: continue
         title=m.get("title","a movie"); poster=simkl_poster_url(m.get("poster")); image=None
         anime_movie = bool(
@@ -1708,7 +1721,8 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
                 "completed": "Completed"}[status]
         desc = f"{verb} **{title}**" if p["activity_text"] == "detailed" else verb
     elif t == "movies":
-        desc = f"Watched **{title}**" if p["activity_text"] == "detailed" else "Watched"
+        verb='Rewatched' if change.get('is_rewatch') else 'Watched'
+        desc = f"{verb} **{title}**" if p["activity_text"] == "detailed" else verb
     else:
         if season is None or number is None:
             # Cannot safely identify an episode from a partial journal row.
@@ -1725,7 +1739,8 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
                 label = f"`{span}`" if p.get("episode_code", False) else f"**{span}**"
         else:
             label = format_episode_display(int(season), int(number), int(number), p.get("episode_code", False))
-        desc = f"Watched {label} of **{title}**" if p["activity_text"] == "detailed" else f"Watched {label}"
+        verb='Rewatched' if change.get('is_rewatch') else 'Watched'
+        desc = f"{verb} {label} of **{title}**" if p["activity_text"] == "detailed" else f"{verb} {label}"
         if not episode_end and episode_title and episode_title != title:
             desc += f"\n*{episode_title}*"
         def is_first_episode(s, e):
@@ -1734,7 +1749,7 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
             except (TypeError, ValueError):
                 return False
         started = False
-        if is_first_episode(source_season, source_number) or is_first_episode(season, number):
+        if not change.get('is_rewatch') and (is_first_episode(source_season, source_number) or is_first_episode(season, number)):
             started = not await storage.has_wetrakr_show_history(
                 uid, change.get("show_id"), ids,
                 exclude_event_id=change.get("source_event_id"),
@@ -1788,6 +1803,9 @@ async def poll_wetrakr_all(g=None):
         async def process_target(target):
             nonlocal posted,checked
             gid, uid = target["guild_id"], target["discord_user_id"]
+            if not target['guild_user_data']['wetrakr_sync'].get('seeded') and current_cycle.get() is not None:
+                wetrakr_sync.imports.jobs.start(gid,uid,target['user_data']['wetrakr']['account_id'],lambda:process_target(target))
+                return
             channel_id = target["channel_id"]
             if not channel_id:
                 return
@@ -3954,7 +3972,7 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
     image=None;episode_title=None;rating=None;started=False
     logo=await (tmdb.get_movie_logo(tmdb_id) if movie else tmdb.get_tv_logo(tmdb_id)) if tmdb_id else None
     previous=await storage.get_provider_plays(uid,provider='mdblist')
-    rewatch=any(old.get('item_key')==play['item_key'] and old.get('source_event_id')!=play['source_event_id'] for old in previous)
+    rewatch=bool(play.get('is_rewatch',False))
     if movie:
         image=await tmdb.get_movie_backdrop(tmdb_id) if tmdb_id else None
         description=f"{'Rewatched' if rewatch else 'Watched'} **{title}**"
@@ -3972,7 +3990,7 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
         label=format_episode_display(play['season'],play['episode'],last_play['episode'] if last_play else play['episode'],p.get("episode_code",False))
         description=f"{'Rewatched' if rewatch else 'Watched'} {label} of **{title}**"
         if episode_title:description+=f"\n*{episode_title}*"
-        if play['season']==1 and play['episode']==1 and not any(old.get('show_id')==play.get('show_id') and 'episode' in old.get('media_type','') for old in previous):
+        if not rewatch and play['season']==1 and play['episode']==1 and not any(old.get('show_id')==play.get('show_id') and 'episode' in old.get('media_type','') for old in previous):
             started=True
         ratings={'imdb':rating}
         if last_play:
@@ -4240,6 +4258,9 @@ async def simkl_status(i,user: discord.Member | None = None):
         if selected in {"wetrakr","mdblist"}:
             sync=gu.get(f"{selected}_sync") or {}
             state="ready" if sync.get("seeded") else "first check will seed history"
+            if not sync.get('seeded'):
+                progress=await storage.get_import_progress(uid,selected,detail_account)
+                if progress:state=f"{progress['status']} · {progress['enriched']}/{progress['downloaded']} downloaded plays enriched"
             last=sync.get("last_activity")
             health=sync.get("health") or {}
             if health.get("error"):
@@ -4294,6 +4315,43 @@ async def simkl_status(i,user: discord.Member | None = None):
         ephemeral=True,allowed_mentions=discord.AllowedMentions.none(),
     )
 
+async def import_progress_text(g):
+    lines=[]
+    for source in ('mdblist','wetrakr'):
+        for target in await storage.get_provider_targets(source,g,active_only=True):
+            uid=str(target['discord_user_id']);account=target['user_data'][source]['account_id']
+            if target['guild_user_data'][f'{source}_sync'].get('seeded'):continue
+            progress=await storage.get_import_progress(uid,source,account)
+            if progress:
+                lines.append(f"{provider_registry.get(source).manifest.display_name} · <@{uid}>: {progress['status']} · "
+                             f"{progress['enriched']}/{progress['downloaded']} downloaded plays enriched")
+    extra=max(0,len(lines)-5)
+    return '\n'.join(lines[:5])+ (f'\n…and {extra} more import(s).' if extra else '')
+
+
+async def poll_with_progress(i,g,*,update_interval=15):
+    async def check():
+        result=await poll_providers(g,manual=True)
+        jobs=provider_registry.get('mdblist').imports.jobs.active(g)
+        if wetrakr_sync:jobs+=wetrakr_sync.imports.jobs.active(g)
+        if jobs:await asyncio.shield(asyncio.gather(*jobs))
+        return result
+    task=asyncio.create_task(check());editable=hasattr(i,'edit_original_response')
+    try:
+        while not task.done():
+            done,_=await asyncio.wait({task},timeout=update_interval)
+            if not done and editable:
+                detail=await import_progress_text(g)
+                try:
+                    await i.edit_original_response(content='Checking activity…\n'+(detail or 'Reading account changes, ratings and history.'),
+                                                   allowed_mentions=discord.AllowedMentions.none())
+                except discord.HTTPException:editable=False
+        return await task
+    finally:
+        if not task.done():task.cancel()
+        await asyncio.gather(task,return_exceptions=True)
+
+
 @bingecord_commands.command(name="checknow",description="(Admin) Check selected tracker activity in this server.")
 async def tracker_checknow(i):
     global last_checknow_at
@@ -4301,17 +4359,23 @@ async def tracker_checknow(i):
     if not g or not is_admin(i): await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True); return
     if time.monotonic()-last_checknow_at<CHECKNOW_COOLDOWN_SECONDS:
         await i.response.send_message("Please wait before using /bingecord checknow again.",ephemeral=True); return
-    if poll_lock.locked() or wetrakr_poll_lock.locked() or provider_registry.get("mdblist").lock.locked():
-        await i.response.send_message("An activity check is already running.",ephemeral=True); return
+    if provider_cycle_lock.locked() or poll_lock.locked() or wetrakr_poll_lock.locked() or provider_registry.get("mdblist").lock.locked():
+        detail=await import_progress_text(g)
+        await i.response.send_message("An activity check is already running."+('\n'+detail if detail else ''),
+                                      ephemeral=True,allowed_mentions=discord.AllowedMentions.none()); return
     last_checknow_at=time.monotonic()
     await i.response.send_message("Checking this server's selected tracker activity now...",ephemeral=True)
-    posted = await poll_providers(g, manual=True)
+    posted = await poll_with_progress(i,g)
     total_posted=sum(posted.values())
     breakdown=", ".join(f"{provider_registry.get(source).manifest.display_name} {count}" for source,count in posted.items())
-    await i.followup.send(
-        f"Done. Posted **{total_posted}** new activity item(s) ({breakdown}). "
-        "A new provider's first check seeds history without posting older watches.",
-        ephemeral=True)
+    pending=await import_progress_text(g)
+    try:
+        await i.followup.send(
+            f"Done. Posted **{total_posted}** new activity item(s) ({breakdown}). "
+            "A new provider's first check seeds history without posting older watches."+ ('\nImport still pending:\n'+pending if pending else ''),
+            ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+    except discord.HTTPException:
+        log.info('Manual check completed after its Discord interaction expired; import progress remains available in status.')
 
 POLL_RETRY_DELAY_SECONDS=60
 POLL_MAX_RETRY_DELAY_SECONDS=600

@@ -1,12 +1,14 @@
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+import pytest
 
 from test_notification_preview import bot
 from trackerbot.integrations.wetrakr_client import WeTrakrError
 
 
-def test_episode_delivery_uses_parent_title_and_wetrakr_footer(monkeypatch):
+@pytest.mark.parametrize('rewatch',[False,True])
+def test_episode_delivery_uses_parent_title_and_wetrakr_footer(monkeypatch,rewatch):
     async def run():
         fake = SimpleNamespace(episode=AsyncMock(return_value={
             "title": "The Pilot", "season_number": 1, "number": 1,
@@ -23,12 +25,12 @@ def test_episode_delivery_uses_parent_title_and_wetrakr_footer(monkeypatch):
         member = SimpleNamespace(display_avatar=SimpleNamespace(url="https://example.com/avatar.png"))
         change = {"action": "added", "media_type": "episode", "title": "The Pilot",
                   "wetrakr_id": 50, "show_id": 25, "season": 1, "episode": 1,
-                  "watched_at": "2026-09-28T03:00:00Z"}
+                  "watched_at": "2026-09-28T03:00:00Z",'is_rewatch':rewatch}
         assert await bot.deliver_wetrakr_change(SimpleNamespace(), "123", "42", "Viewer", member,
                                                  change, {}, {"25"})
         embed = send.await_args.args[1]
-        assert "Watched **S1E01** of **A New Show**" in embed.description
-        assert "🆕 Started watching this series." in embed.description
+        assert f"{'Rewatched' if rewatch else 'Watched'} **S1E01** of **A New Show**" in embed.description
+        assert ('🆕 Started watching this series.' in embed.description)==(not rewatch)
         assert embed.image.url.endswith("/still.jpg")
         assert embed.footer.text.endswith("WeTrakr")
     asyncio.run(run())

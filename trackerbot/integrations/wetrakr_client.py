@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import aiohttp
+from trackerbot.core.import_work import checkpoint_page, SingleFlight
 
 
 BASE_URL = "https://api.wetrakr.com"
@@ -71,6 +72,7 @@ class WeTrakrClient:
         self._session = session
         self._owns_session = session is None
         self.request_counts = Counter()
+        self.title_reads=SingleFlight()
 
     async def close(self):
         if self._owns_session and self._session and not self._session.closed:
@@ -147,8 +149,10 @@ class WeTrakrClient:
         if media_type not in {"movie", "show"}:
             raise ValueError("WeTrakr title must be a movie or show")
         path = "movies" if media_type == "movie" else "shows"
-        data, _ = await self._request("GET", f"/{path}/{int(title_id)}")
-        return data
+        async def read():
+            data, _ = await self._request("GET", f"/{path}/{int(title_id)}")
+            return data
+        return await self.title_reads.run((media_type,str(title_id)),read)
 
     async def last_activities(self, token: str) -> dict:
         data, _ = await self._request("GET", "/sync/last_activities", token)
@@ -193,12 +197,12 @@ class WeTrakrClient:
                 raise WeTrakrError(200, 'VALIDATION_PAGE_LIMIT', 'Journal exceeds the validation page limit')
             page += 1
 
-    async def compact_history(self, token: str, target: str, *, limit: int = 5000):
+    async def compact_history(self, token: str, target: str, *, limit: int = 5000, after=None):
         """Yield one small page per play; the cursor must never be used as page."""
         if target not in {"movies", "episodes"}:
             raise ValueError("target must be movies or episodes")
-        after = None
         seen_cursors = set()
+        if after:seen_cursors.add(after)
         while True:
             params = {"compact": "true", "limit": min(limit, 5000)}
             if after:
@@ -206,8 +210,8 @@ class WeTrakrClient:
             data, headers = await self._request(
                 "GET", f"/sync/tracking/watched/history/{target}", token, params=params)
             page_rows(data)
-            yield data
             next_cursor = headers.get("X-Pagination-Next")
+            yield checkpoint_page(data,next_cursor)
             if not next_cursor:
                 return
             if next_cursor in seen_cursors:

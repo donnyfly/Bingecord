@@ -9,6 +9,8 @@ import discord
 from trackerbot.core.providers import BUILTIN_TRACKERS, ProviderAccount, ProviderPage, WatchChange
 from trackerbot.core.tracker_mapping import identity_from_play
 from trackerbot.core.watch_delivery import current_cycle
+from trackerbot.core.import_work import HistoryImport, SingleFlight, bounded_map
+import json
 from .provider_adapters import BaseProvider, matches_filter
 from .mdblist_tracking_client import MDBListTrackingError
 
@@ -63,6 +65,8 @@ class MDBListProvider(BaseProvider):
         self.metadata={}
         self.native_metadata={}
         self.native_inflight={}
+        self.imports=HistoryImport('mdblist')
+        self.title_reads=SingleFlight()
 
     async def link(self, discord_user_id):
         user=await self.app.storage.get_user(discord_user_id)
@@ -101,10 +105,12 @@ class MDBListProvider(BaseProvider):
         key=(kind,str(title_ids['tmdb']))
         cached=self.metadata.get(key)
         if cached and time.monotonic()-cached[0]<21600: return cached[1]
-        data=(await self.app.tmdb.get_movie_details(title_ids['tmdb']) if kind=='movie'
-              else await self.app.tmdb._get_series_details(title_ids['tmdb'])) or {}
-        self.metadata[key]=(time.monotonic(),data)
-        return data
+        async def read():
+            data=(await self.app.tmdb.get_movie_details(title_ids['tmdb']) if kind=='movie'
+                  else await self.app.tmdb._get_series_details(title_ids['tmdb'])) or {}
+            self.metadata[key]=(time.monotonic(),data)
+            return data
+        return await self.title_reads.run(key,read)
 
     async def _native_media(self, account, movie, tmdb_id):
         await self._user(account)
@@ -169,7 +175,23 @@ class MDBListProvider(BaseProvider):
         result['item_key']=f'mdblist:movie:{native}' if kind=='movie' else f'mdblist:episode:{native}:{result["season"]}:{result["episode"]}'
         return result
 
-    async def _history(self, account, token):
+    async def _history(self, account, token, context=None):
+        if context:
+            gid,activities,capture=context
+            async def reader(kind,cursor):
+                kwargs={'media_type':kind}
+                if cursor:kwargs['cursor']=cursor
+                async for page in self.app.mdblist_tracking.history(token,**kwargs):yield page
+            def normalize(page,kind):
+                bucket='movies' if kind=='movie' else 'episodes'
+                if bucket not in page or not isinstance(page[bucket],list):
+                    raise MDBListTrackingError(200,'UNSUPPORTED_HISTORY_SHAPE')
+                return [normalize_play(row,kind) for row in page[bucket]]
+            signature=json.dumps({key:activities.get(key) for key in ('journal_at','watched_at','season_watched_at','episode_watched_at')},sort_keys=True)
+            plays,mark=await self.imports.run(self.app.storage,gid,account.discord_user_id,account.account_id,
+                signature,activities['server_time'],('movie','episode'),reader,normalize,self.resolve_play)
+            capture['mark']=mark
+            return plays
         plays=[]
         for kind,bucket in (('movie','movies'),('episode','episodes')):
             async for page in self.app.mdblist_tracking.history(token,media_type=kind):
@@ -184,17 +206,18 @@ class MDBListProvider(BaseProvider):
                                for key,value in row.items()}
                         self.app.log.warning('MDBList %s history field structure: %s',kind,shape)
                         raise
-                    plays.append(await self.resolve_play(normalized))
+                    plays.append(normalized)
+        plays=await bounded_map(plays,self.resolve_play,self.imports.semaphore)
         seen=set()
         for play in plays:
             if play['source_event_id'] in seen: raise MDBListTrackingError(200,'DUPLICATE_PLAY_ID')
             seen.add(play['source_event_id'])
         return plays
 
-    async def _incremental_history(self,account,token,state,activities):
+    async def _incremental_history(self,account,token,state,activities,context=None):
         """Journal invalidates title histories; never manufacture plays from rows."""
         if not state.get('seeded') or not hasattr(self.app.mdblist_tracking,'journal'):
-            return await self._history(account,token),[],False
+            return await self._history(account,token,context),[],False
         old=(state.get('status_snapshot') or {}).get('activities') or {}
         if all(activities.get(key)==old.get(key) for key in ('journal_at','watched_at','season_watched_at','episode_watched_at')):
             return await self.app.storage.get_provider_plays(account.discord_user_id,provider='mdblist'),[],False
@@ -203,7 +226,7 @@ class MDBListProvider(BaseProvider):
         try:
             async for page in self.app.mdblist_tracking.journal(token,since):rows.extend(page['journal'])
         except MDBListTrackingError as exc:
-            if exc.code=='FULL_SYNC_REQUIRED':return await self._history(account,token),[],True
+            if exc.code=='FULL_SYNC_REQUIRED':return await self._history(account,token,context),[],True
             raise
         saved=await self.app.storage.get_provider_plays(account.discord_user_id,provider='mdblist')
         saved=[p for p in saved if str(p.get('account_id',account.account_id))==account.account_id]
@@ -222,13 +245,13 @@ class MDBListProvider(BaseProvider):
         if changed and not dirty:
             # A stamp without matching journal rows may reflect propagation lag.
             # A complete snapshot is safe; acknowledging an empty journal isn't.
-            return await self._history(account,token),completions,False
-        if len(dirty)>4:return await self._history(account,token),completions,False
+            return await self._history(account,token,context),completions,False
+        if len(dirty)>4:return await self._history(account,token,context),completions,False
         replacements=[]
         for (kind,provider,native),ids in dirty.items():
             try:history=await self.app.mdblist_tracking.item_plays(token,kind,provider,native)
             except MDBListTrackingError as exc:
-                if exc.code=='INCOMPLETE_PLAY_HISTORY':return await self._history(account,token),completions,False
+                if exc.code=='INCOMPLETE_PLAY_HISTORY':return await self._history(account,token,context),completions,False
                 raise
             for row in history['plays']:
                 payload={**row,('movie' if kind=='movie' else 'show'):{'ids':ids}}
@@ -360,6 +383,9 @@ class MDBListProvider(BaseProvider):
                 nonlocal posted
                 gid,uid=target['guild_id'],target['discord_user_id']
                 link=target['user_data']['mdblist'];account_id=str(link['account_id'])
+                if not target['guild_user_data']['mdblist_sync'].get('seeded') and current_cycle.get() is not None:
+                    self.imports.jobs.start(gid,uid,account_id,lambda:process_target(target))
+                    return
                 health=target['guild_user_data']['mdblist_sync'].get('health') or {}
                 if not manual and int(health.get('consecutive_failures',0))>=self.app.MAX_CONSECUTIVE_FAILURES:return
                 if self.paused_until.get(account_id,0)>time.monotonic():return
@@ -399,7 +425,9 @@ class MDBListProvider(BaseProvider):
             if not simkl_user.get('simkl_token'):raise ValueError('Legacy statistics require their original history rebuild')
             simkl_token=await self.app.valid_token(uid,simkl_user)
             await self.app.reconcile_watch_progression(gid,uid,simkl_user,simkl_token,set(self.app.MEDIA_TYPES))
-        plays,completion_rows,expired=await self._incremental_history(account,token,state,activities)
+        capture={}
+        plays,completion_rows,expired=await self._incremental_history(account,token,state,activities,(gid,activities,capture))
+        captured=capture.get('mark',captured)
         previous=state.get('status_snapshot') or {}
         old=previous.get('activities') or {}
         planning=(await self._lists(account,'planning',token) if not state['seeded'] or activities.get('watchlisted_at')!=old.get('watchlisted_at') else list((previous.get('planning') or {}).values()))
@@ -437,13 +465,16 @@ class MDBListProvider(BaseProvider):
                         await store.retry_prestige_notification(uid,number);break
             await self.app.notify_level_up(gid,uid,before,after,channel,source_label='MDBList')
         count=0
-        fresh=[p for p in sorted(plays,key=lambda p:(str(p.get('show_id') or ''),p.get('season') or 0,p.get('episode') or 0,p['watched_at']))
+        from trackerbot.core.rewatches import rewatch_flags
+        flags=rewatch_flags(plays,lambda p:p.get('item_key'))
+        fresh=[{**p,'is_rewatch':flags.get(str(p['source_event_id']),False)} for p in sorted(plays,key=lambda p:(str(p.get('show_id') or ''),p.get('season') or 0,p.get('episode') or 0,p['watched_at']))
                if f'mdblist:{account.account_id}/{p["source_event_id"]}' not in events]
         index=0
         while index<len(fresh):
             batch=[fresh[index]]
             while index+len(batch)<len(fresh) and 'episode' in batch[0]['media_type']:
                 candidate=fresh[index+len(batch)];previous=batch[-1]
+                if candidate['is_rewatch']!=batch[0]['is_rewatch']:break
                 if (candidate.get('show_id'),candidate.get('season')) != (previous.get('show_id'),previous.get('season')) or candidate.get('episode')!=previous.get('episode',0)+1:
                     break
                 if abs((self.app.parse_iso(candidate['watched_at'])-self.app.parse_iso(previous['watched_at'])).total_seconds())>300:

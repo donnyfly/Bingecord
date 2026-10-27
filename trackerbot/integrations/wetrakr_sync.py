@@ -4,7 +4,10 @@ from datetime import datetime, timedelta, timezone
 import logging
 
 from trackerbot.integrations.wetrakr_client import WeTrakrError, page_rows, timestamp
-from trackerbot.integrations.wetrakr_events import normalize_compact_play, normalize_journal_entry
+from trackerbot.integrations.wetrakr_events import normalize_compact_play, normalize_journal_entry, watch_identity_key
+from trackerbot.core.rewatches import rewatch_flags
+from trackerbot.core.import_work import HistoryImport
+import json
 
 log = logging.getLogger("simkl-bot")
 
@@ -18,6 +21,20 @@ def overlap(iso: str) -> str:
 class WeTrakrSync:
     def __init__(self, client, auth, store):
         self.client, self.auth, self.store = client, auth, store
+        self.imports=HistoryImport('wetrakr')
+
+    async def _import_history(self,gid,uid,account_id,token,activities,mark,resolve_play):
+        async def reader(kind,cursor):
+            kwargs={'after':cursor} if cursor else {}
+            async for page in self.client.compact_history(token,kind,**kwargs):yield page
+        def normalize(page,kind):
+            plays=[normalize_compact_play(row) for row in page_rows(page)]
+            if any(play is None for play in plays):
+                raise WeTrakrError(200,'INVALID_RESPONSE','History entry lacks a recognized play identity')
+            return plays
+        async def resolve(play):return await resolve_play(play) if resolve_play else play
+        return await self.imports.run(self.store,gid,uid,account_id,json.dumps({'all':activities.get('all')},sort_keys=True),
+                                      mark,('movies','episodes'),reader,normalize,resolve)
 
     async def poll(self, target: dict, deliver, deliver_group=None, resolve_play=None) -> int:
         gid, uid = target["guild_id"], target["discord_user_id"]
@@ -37,17 +54,9 @@ class WeTrakrSync:
         if not state["seeded"]:
             # Capture the mark before the slow history walk. Changes during
             # import are picked up by the journal on the next poll.
-            plays = []
-            for kind in ("movies", "episodes"):
-                async for page in self.client.compact_history(token, kind):
-                    rows = page_rows(page)
-                    for row in rows:
-                        play = normalize_compact_play(row)
-                        if not play:
-                            raise WeTrakrError(200, 'INVALID_RESPONSE', 'History entry lacks a recognized play identity')
-                        plays.append(await resolve_play(play) if resolve_play else play)
+            plays,baseline_mark=await self._import_history(gid,uid,account_id,token,activities,baseline_mark,resolve_play)
             result = await self.store.reconcile_wetrakr_plays(gid, uid, plays, complete=True,
-                                                             account_id=account_id)
+                                                             account_id=account_id,require_selected=True)
             saved = await self.store.save_wetrakr_sync(
                 gid, uid, account_id, seeded=True, checkpoint=baseline_mark)
             if not saved:
@@ -65,17 +74,9 @@ class WeTrakrSync:
             if exc.code != "JOURNAL_EXPIRED":
                 raise
             # Retention expired: re-seed instead of posting a partial history.
-            plays = []
-            for kind in ("movies", "episodes"):
-                async for page in self.client.compact_history(token, kind):
-                    rows = page_rows(page)
-                    for row in rows:
-                        play = normalize_compact_play(row)
-                        if not play:
-                            raise WeTrakrError(200, 'INVALID_RESPONSE', 'History entry lacks a recognized play identity')
-                        plays.append(await resolve_play(play) if resolve_play else play)
+            plays,baseline_mark=await self._import_history(gid,uid,account_id,token,activities,baseline_mark,resolve_play)
             await self.store.reconcile_wetrakr_plays(gid, uid, plays, complete=True,
-                                                    account_id=account_id)
+                                                    account_id=account_id,require_selected=True)
             await self.store.save_wetrakr_sync(
                 gid, uid, account_id, seeded=True, checkpoint=baseline_mark,
                 last_activity=baseline_mark)
@@ -101,6 +102,21 @@ class WeTrakrSync:
             change = normalize_journal_entry(row)
             pending.append((change, row))
 
+        # Project pending changes before labelling posts, including removals
+        # after additions. This does not acknowledge or mutate any watch.
+        if any(change and change.get('source_event_id') and change['action']=='added' for change,_ in pending):
+            active={str(play['source_event_id']):play for play in await self.store.get_wetrakr_plays(uid)
+                    if str(play.get('account_id',account_id))==str(account_id)}
+            for change,_ in pending:
+                if not change or not change.get('source_event_id'):continue
+                event=change['source_event_id']
+                if change['action']=='removed':active.pop(event,None)
+                else:active[event]=change
+            flags=rewatch_flags(active.values(),watch_identity_key)
+            for change,_ in pending:
+                if change and change.get('source_event_id'):
+                    change['is_rewatch']=flags.get(change['source_event_id'],False)
+
         def episode_pair(item):
             change = item[0]
             if not change or change.get("action") != "added" or change.get("media_type") != "episode":
@@ -119,6 +135,7 @@ class WeTrakrSync:
                 direction = None
                 while index + len(batch) < len(pending):
                     candidate = pending[index + len(batch)]
+                    if (candidate[0] or {}).get('is_rewatch')!=batch[0][0].get('is_rewatch'):break
                     following = episode_pair(candidate)
                     previous = episode_pair(batch[-1])
                     if not following or following[:2] != first[:2]:

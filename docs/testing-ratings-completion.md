@@ -42,6 +42,9 @@ Repeat the checks for **SIMKL, WeTrakr and MDBList**, selecting that provider wi
 | Temporary API/edit failure | Old validated score remains; transient Discord edits retry on a later cycle |
 | A WeTrakr journal removal references a deleted catalogue title | Stored play is removed by account/play ID without a metadata request; later journal watches continue |
 | A WeTrakr title lookup returns 404 for a new watch | Preserve the watch and the journal's scoped IDs; missing artwork/title detail does not discard it or block following rows. Episode IDs must never be used as show IDs. Authentication, quota and server errors still remain pending |
+| Delete a watch and mark it watched again before the next poll | MDBList's current history and WeTrakr's projected journal exclude the deleted play when choosing the verb: the replacement is `Watched`, not `Rewatched`. Repeat for movies and episodes, with removals both before and after additions in the journal |
+| Keep an earlier play and add a later viewing | MDBList and WeTrakr label the later play `Rewatched`; retries and duplicate rows do not create a rewatch. Episode ranges split when their rewatch classification differs |
+| Change the canonical SIMKL watch date or delete/re-add | A changed timestamp remains eligible for activity delivery but does not prove a rewatch. Use `Watched` unless a returned row explicitly carries a `rewatch_id`. The current SIMKL library reader does not request expanded rewatch sessions; enabling and importing those sessions is separate work |
 
 ## Examples
 
@@ -69,6 +72,15 @@ Episode title
 A series personal rating would instead say `Your series rating`. SIMKL does not expose native season/episode personal ratings through its rated-title endpoint; a verified seasonal anime entry is explicitly labelled as a season-entry score. Missing scoped ratings are omitted. No rating is inferred from another account, a public community score or a different episode.
 
 ## Automated checks and API references
+
+### Import performance acceptance checks
+
+- Link an MDBList or WeTrakr account with a large history. Run checknow and confirm private progress refreshes about every 15 seconds and status shows downloaded/enriched counts. No historical activity, level-up or prestige flood should occur.
+- During that first import, mark a new watch for an already imported member. Scheduled checks must continue and deliver their normal activity; importing accounts should not start duplicate jobs.
+- Interrupt a large import after at least one enriched batch, preserve the data volume, and restart. For unchanged activity stamps, completed pages and enriched rows should be reused. Watch XP and live history must not be reconciled from partial staging.
+- Change provider history while an interrupted import is paused. On retry, expect a fresh page traversal and no deleted watch restored from old staging. The baseline sync boundary remains the original capture for each resumed snapshot.
+- Exercise an expired or repeated cursor, failed metadata request, source switch and account relink. Incomplete reads remain pending; account guards prevent stale imports writing to the new selection.
+- Verify mixed-provider Watched Together still merges live watches. Historical imports never join those groups. Let an interaction expire or dismiss it while importing: the background job must continue.
 
 Run `python -m pytest -q` and `python -m compileall -q trackerbot tests`. Tests cover snapshot pagination/precision, account isolation, mixed-provider grouping, late edits/removals, restart/expiry, failed edits, completion invalidation, pre-delivery reconciliation, delayed completion rollups, bounded catalogue fetching and deferred SIMKL status failure checkpoint handling.
 

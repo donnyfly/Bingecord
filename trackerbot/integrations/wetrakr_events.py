@@ -3,6 +3,23 @@
 from __future__ import annotations
 
 
+def watch_identity_key(play):
+    """Use the native parent and source numbering for journal/stored comparisons."""
+    kind=play.get('media_type','')
+    if 'movie' in kind:
+        native=play.get('wetrakr_id')
+        key=str(play.get('item_key') or '')
+        if native is None and key.startswith('wetrakr:movie:'):native=key.split(':',2)[2]
+        return ('movie',str(native)) if native is not None else None
+    if 'episode' in kind:
+        parent=play.get('show_id')
+        season=play.get('source_season') if play.get('source_season') is not None else play.get('season')
+        episode=play.get('source_episode') if play.get('source_episode') is not None else play.get('episode')
+        if None in (parent,season,episode):return None
+        return ('episode',str(parent),str(season),str(episode))
+    return None
+
+
 def normalize_journal_entry(entry: dict) -> dict | None:
     """Ignore show/season roll-up rows: they are not individual plays."""
     category = entry.get("category")

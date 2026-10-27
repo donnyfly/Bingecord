@@ -130,6 +130,13 @@ class TmdbClient:
         path: str,
         params: dict | None = None,
     ) -> dict | None:
+        # Coalesce concurrent episode/series/season lookups during imports.
+        from trackerbot.core.import_work import SingleFlight
+        if not hasattr(self,'_shared_reads'):self._shared_reads=SingleFlight()
+        key=(path,tuple(sorted((str(k),str(v)) for k,v in (params or {}).items())))
+        return await self._shared_reads.run(key,lambda:self._get_json_request(path,params))
+
+    async def _get_json_request(self,path,params=None):
         try:
             session = await self._get_session()
 
@@ -378,6 +385,12 @@ class TmdbClient:
         params: dict | None = None,
     ) -> dict | list | None:
         """Get JSON from TVMaze without requiring a separate API key."""
+        from trackerbot.core.import_work import SingleFlight
+        if not hasattr(self,'_shared_reads'):self._shared_reads=SingleFlight()
+        key=('tvmaze',path,tuple(sorted((str(k),str(v)) for k,v in (params or {}).items())))
+        return await self._shared_reads.run(key,lambda:self._get_tvmaze_json_request(path,params))
+
+    async def _get_tvmaze_json_request(self,path,params=None):
 
         try:
             session = await self._get_session()
@@ -404,6 +417,11 @@ class TmdbClient:
         tvdb_id,
     ) -> dict | None:
         """Find the TVMaze show corresponding to a TVDB series ID."""
+        from trackerbot.core.import_work import SingleFlight
+        if not hasattr(self,'_shared_reads'):self._shared_reads=SingleFlight()
+        return await self._shared_reads.run(('tvmaze-lookup',str(tvdb_id)),lambda:self._find_tvmaze_show_by_tvdb(tvdb_id))
+
+    async def _find_tvmaze_show_by_tvdb(self,tvdb_id):
 
         try:
             tvdb_id = int(tvdb_id)
