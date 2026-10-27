@@ -1459,6 +1459,18 @@ class Storage:
             user = self._user(discord_user_id)
             return copy.deepcopy(user.get("progression", {})) if user else {}
 
+    async def set_history_repair_primary(self, discord_user_id: str, provider: str) -> None:
+        """Store a personal repair preference without changing XP or active sources."""
+        if provider not in {'simkl','wetrakr','mdblist'}:
+            raise ValueError('Unknown primary history provider')
+        async with _lock:
+            user=self._user(str(discord_user_id))
+            if not user:
+                raise ValueError('Link a tracking account first')
+            user['progression']['history_repair_primary']=provider
+            self._dirty=True
+        await self.flush()
+
     async def get_mapping_audit(self, discord_user_id: str) -> dict:
         """Preview the cross-provider occurrence index without changing XP."""
         async with _lock:

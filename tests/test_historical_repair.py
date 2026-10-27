@@ -143,3 +143,45 @@ def test_repair_preview_command_is_private_and_never_changes_progression(monkeyp
         assert p==before and report['confirmed_watch_xp_reduction']==0
         sent['file'].close()
     asyncio.run(run())
+
+
+def test_primary_history_preference_is_personal_persistent_and_does_not_change_sources(tmp_path,monkeypatch):
+    async def run():
+        monkeypatch.setattr(module,'DATA_PATH',str(tmp_path/'store.json'))
+        store=module.Storage()
+        for uid in ('42','43'):
+            await store.link_user('123',uid,'token',None,'account','2026-09-28T00:00:00Z')
+        other=await store.get_user('43')
+        before=await store.get_progression('42')
+        source=await store.get_activity_provider('123','42')
+        await store.set_history_repair_primary('42','simkl')
+        after=await store.get_progression('42')
+        assert after.pop('history_repair_primary')=='simkl' and after==before
+        assert await store.get_user('43')==other
+        assert await store.get_activity_provider('123','42')==source
+        assert (await module.Storage().get_progression('42'))['history_repair_primary']=='simkl'
+        with pytest.raises(ValueError):await store.set_history_repair_primary('42','unknown')
+    asyncio.run(run())
+
+
+def test_primary_dates_are_review_guidance_and_never_proof_of_a_duplicate():
+    p=progression();p['history_repair_primary']='simkl'
+    a=event('movie:movies:1',ids={'tmdb':1})
+    b=event('mdblist:7/2','2026-10-02T00:00:00Z',ids={'tmdb':1})
+    module._add_watch_xp_events(p,[a]);module._add_watch_xp_events(p,[b])
+    before=copy.deepcopy(p);report=build_preview(p,module._revoke_unmet_watch_challenges)
+    assert report['primary_history']=='simkl'
+    assert report['uncertain_overlaps'][0]['primary_reference']==a['event_key']
+    assert report['uncertain_overlaps'][0]['primary_watched_at']==a['at']
+    assert report['confirmed_watch_xp_reduction']==0 and p==before
+
+
+@pytest.mark.parametrize('primary,removed_prefix',[('simkl','mdblist:'),('mdblist','movie:')])
+def test_confirmed_duplicate_keeps_selected_primary_award(primary,removed_prefix):
+    p=progression();p['history_repair_primary']=primary
+    a=event('movie:movies:1',ids={'tmdb':1});b=event('mdblist:7/2',ids={'tmdb':1})
+    module._add_watch_xp_events(p,[a]);module._add_watch_xp_events(p,[b])
+    p['xp_events'].append(b);p['lifetime_xp']+=400;p['xp']+=400
+    p['occurrence_ledger'][a['event_key']]['award_keys'].append(b['event_key'])
+    report=build_preview(p,module._revoke_unmet_watch_challenges)
+    assert report['confirmed_duplicate_groups'][0]['remove_award_keys'][0].startswith(removed_prefix)

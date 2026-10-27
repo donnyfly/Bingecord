@@ -2908,8 +2908,13 @@ async def show_profile(i,user):
 
 @bingecord_commands.command(name="mapping",description="Privately inspect how your linked trackers match watches and XP.")
 @app_commands.describe(export="Attach a private read-only XP audit for investigating unexpected progression",
-                       repair_preview="Refresh linked SIMKL identities and preview historical overlaps without changing XP")
-async def tracker_mapping(i,export: bool = False,repair_preview: bool = False):
+                       repair_preview="Refresh linked SIMKL identities and preview historical overlaps without changing XP",
+                       primary_history="Save your personal repair preference and generate a preview; does not change XP")
+@app_commands.choices(primary_history=[app_commands.Choice(name="SIMKL",value="simkl"),
+                                      app_commands.Choice(name="WeTrakr",value="wetrakr"),
+                                      app_commands.Choice(name="MDBList",value="mdblist")])
+async def tracker_mapping(i,export: bool = False,repair_preview: bool = False,
+                          primary_history: app_commands.Choice[str] | None = None):
     g=guild_id(i)
     if not g:
         await i.response.send_message("This command must be used in a server.",ephemeral=True)
@@ -2919,12 +2924,14 @@ async def tracker_mapping(i,export: bool = False,repair_preview: bool = False):
     if not user:
         await i.response.send_message("Link a tracking account with /bingecord link first.",ephemeral=True)
         return
-    if repair_preview:
+    if repair_preview or primary_history is not None:
         await i.response.defer(ephemeral=True)
         import copy,io,json,hashlib
         from trackerbot.core.historical_repair import canonicalize,build_preview
         from trackerbot.core.storage import _revoke_unmet_watch_challenges
         try:
+            if primary_history is not None:
+                await storage.set_history_repair_primary(uid,primary_history.value)
             enriched=0
             if user.get('simkl_token') and SIMKL_CLIENT_ID:
                 source=provider_registry.get('simkl');account=await source.link(uid)
@@ -2940,7 +2947,7 @@ async def tracker_mapping(i,export: bool = False,repair_preview: bool = False):
             if len(payload)>7_500_000:
                 await i.followup.send('Repair preview exceeds attachment size; no XP changed.',ephemeral=True);return
             await i.followup.send(
-                f"**Historical XP repair preview**\nSIMKL identities refreshed: **{enriched:,}**\n"
+                f"**Historical XP repair preview**\nPrimary history (only you): **{report.get('primary_history') or 'not selected'}**\nSIMKL identities refreshed: **{enriched:,}**\n"
                 f"Confirmed duplicate groups: **{len(report['confirmed_duplicate_groups']):,}**\n"
                 f"Overlaps needing review: **{len(report['uncertain_overlaps']):,}**\n"
                 f"Confirmed watch XP reduction: **{report['confirmed_watch_xp_reduction']:,}**\n"

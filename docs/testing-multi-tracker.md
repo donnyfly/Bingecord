@@ -122,3 +122,5 @@ Use two members in the same posting channel and enable Watched Together through 
 5. Check logs after a normal single-title watch: journal + item history should replace full scans. A truncated item history or an expired journal must use a safe full fallback. Never share OAuth tokens or the persisted store when reporting results.
 
 Automated tests cannot validate a live OAuth account or Discord channel here; record these acceptance results before calling the integration full parity.
+
+Personal repair preference: run `/bingecord mapping primary_history:SIMKL` as one member. Confirm the preference persists across restart, another member's progression and preferences remain unchanged, and each member's active source is unchanged. Confirmed duplicate projections retain the selected primary award; different-date overlaps remain under review with the primary date identified. Preference selection itself must not change XP.

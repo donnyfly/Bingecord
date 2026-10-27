@@ -116,6 +116,7 @@ async def canonicalize(progression,tmdb):
 def build_preview(progression,revoke_challenges):
     data=copy.deepcopy(progression);rows=watch_ledger.ensure(data)
     fingerprint=hashlib.sha256(json.dumps(progression,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    primary=progression.get('history_repair_primary')
     awards={e['event_key']:e for e in data.get('xp_events',[])}
     index=defaultdict(set);titles=defaultdict(set);entries=[]
     for key,row in rows.items():
@@ -167,10 +168,21 @@ def build_preview(progression,revoke_challenges):
             reverse=set().union(*(index[(a,oscope)] for a in entries[other][4]))
             reverse_cross=[i for i in reverse if entries[i][2]['provider']!=oobs['provider']]
             if reason=='verified_id' and len(keys)>1 and len(cross)==1 and len(reverse_cross)==1:
-                keep=min(keys,key=lambda k:(k.startswith(('mdblist:','wetrakr:')),str(awards.get(k,{}).get('at','')),k))
+                # Prefer the primary provider's own award, even for a merged row.
+                def priority(k):
+                    provider=k.split(':',1)[0] if k.startswith(('mdblist:','wetrakr:')) else 'simkl'
+                    return (provider!=primary if primary else k.startswith(('mdblist:','wetrakr:')),
+                            str(awards.get(k,{}).get('at','')),k)
+                keep=min(keys,key=priority)
                 item['remove_award_keys']=[k for k in keys if k!=keep]
                 confirmed.append(item);remove.update(item['remove_award_keys'])
-            else:review.append(item)
+            else:
+                if primary in item['providers']:
+                    position=item['providers'].index(primary)
+                    item['primary_reference']=item['references'][position]
+                    item['primary_watched_at']=item['identities'][position]['watched_at']
+                    item['review_action']='Preserve the primary date if confirmed as imported history; keep separate if a genuine rewatch.'
+                review.append(item)
     removed=sum(int(awards[k].get('amount',0)) for k in remove if k in awards)
     data['xp_events']=[e for e in data.get('xp_events',[]) if e['event_key'] not in remove]
     data['lifetime_xp']=max(0,int(data.get('lifetime_xp',0))-removed)
@@ -179,6 +191,7 @@ def build_preview(progression,revoke_challenges):
             -int(progression.get('lifetime_xp',0)))
     prestige,xp=divmod(max(0,int(data.get('lifetime_xp',0))+offset),xp_for_level(100))
     return {'read_only':True,'fingerprint':fingerprint,'generated_at':datetime.now(timezone.utc).isoformat(),
+            'primary_history':primary,'primary_scope':'This Discord user only; does not change active tracking source or provider data.',
             'before':{k:progression.get(k) for k in ('xp','prestige','lifetime_xp')},
             'confirmed_duplicate_groups':confirmed,'uncertain_overlaps':review,
             'unmatched_observations':unmatched,
