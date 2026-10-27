@@ -4,7 +4,9 @@ The application context keeps transport clients and Discord delivery injectable.
 Provider-specific sync retains its retry/checkpoint behavior behind poll().
 """
 from trackerbot.core.providers import BUILTIN_TRACKERS, ProviderAccount, ProviderPage, WatchChange
-from .wetrakr_client import page_rows, timestamp
+import logging
+
+from .wetrakr_client import page_rows, timestamp, WeTrakrError
 from .wetrakr_events import normalize_compact_play, normalize_journal_entry
 from .wetrakr_sync import overlap
 from trackerbot.core.tracker_mapping import WatchIdentity, match_reason, identity_from_play, normalized_ids
@@ -278,18 +280,44 @@ class WeTrakrProvider(BaseProvider):
     async def resolve_play(self, play, cache=None):
         cache = cache if cache is not None else {}
         result = dict(play)
+        # A deletion is identified by its account/play ID. Its catalogue entry
+        # can have disappeared, and stored observations supply the reversal data.
+        if result.get('action')=='removed' or result.get('removed'):
+            return result
         kind = result.get('media_type')
+        if kind=='episode':
+            result['episode_ids']=result.get('episode_ids') or result.get('ids') or {}
+            result['source_season']=result.get('source_season') if result.get('source_season') is not None else result.get('season')
+            result['source_episode']=result.get('source_episode') if result.get('source_episode') is not None else result.get('episode')
         title_id = result.get('wetrakr_id') if kind == 'movie' else result.get('show_id')
-        if kind not in {'movie', 'episode'} or not title_id:
+        if kind not in {'movie', 'episode'}:
+            return result
+        parent_ids = result.get('show_ids') if kind == 'episode' else result.get('ids')
+        if not title_id:
+            # Episode IDs belong to the episode, never its parent series.
+            if kind=='episode':result['ids']=dict(parent_ids or {})
             return result
         cache_key = (kind, str(title_id))
         if cache_key not in cache:
-            metadata = await self.app.wetrakr.title('movie' if kind == 'movie' else 'show', title_id)
-            anime = (await self.app.is_wetrakr_anime(metadata, (metadata.get('ids') or {}).get('tmdb'))
-                     if kind == 'episode' else await self.app.is_wetrakr_anime_movie(metadata, (metadata.get('ids') or {}).get('tmdb')))
+            try:
+                metadata = await self.app.wetrakr.title('movie' if kind == 'movie' else 'show', title_id)
+            except WeTrakrError as exc:
+                if exc.status!=404:raise
+                metadata=None
+                logging.getLogger('bingecord').warning(
+                    'WeTrakr catalogue title unavailable: kind=%s title_id=%s; retaining journal watch data.',
+                    'movie' if kind=='movie' else 'show',title_id)
+            anime = None if metadata is None else (
+                await self.app.is_wetrakr_anime(metadata, (metadata.get('ids') or {}).get('tmdb'))
+                if kind == 'episode' else await self.app.is_wetrakr_anime_movie(metadata, (metadata.get('ids') or {}).get('tmdb')))
             cache[cache_key] = metadata, anime
         metadata, anime = cache[cache_key]
-        parent_ids = result.get('show_ids') if kind == 'episode' else result.get('ids')
+        if metadata is None:
+            metadata={'ids':dict(parent_ids or {}),
+                      'title':(result.get('show_title') or f'WeTrakr series {title_id}') if kind=='episode' else result.get('title') or f'WeTrakr movie {title_id}',
+                      'genres':result.get('genres') or [],'is_anime':result.get('is_anime',False)}
+            anime=(await self.app.is_wetrakr_anime(metadata,(metadata['ids']).get('tmdb')) if kind=='episode'
+                   else await self.app.is_wetrakr_anime_movie(metadata,(metadata['ids']).get('tmdb')))
         result.update(title=metadata.get('title') or result.get('title') or 'Untitled',
                       ids={**(parent_ids or {}),
                            **(metadata.get('ids') or {})}, genres=metadata.get('genres') or [])

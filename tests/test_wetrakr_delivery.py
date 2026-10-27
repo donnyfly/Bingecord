@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from test_notification_preview import bot
+from trackerbot.integrations.wetrakr_client import WeTrakrError
 
 
 def test_episode_delivery_uses_parent_title_and_wetrakr_footer(monkeypatch):
@@ -30,6 +31,27 @@ def test_episode_delivery_uses_parent_title_and_wetrakr_footer(monkeypatch):
         assert "🆕 Started watching this series." in embed.description
         assert embed.image.url.endswith("/still.jpg")
         assert embed.footer.text.endswith("WeTrakr")
+    asyncio.run(run())
+
+
+def test_missing_episode_metadata_uses_journal_parent_ids_for_series_artwork(monkeypatch):
+    async def run():
+        monkeypatch.setattr(bot,'wetrakr',SimpleNamespace(episode=AsyncMock(side_effect=WeTrakrError(404,'HTTP_ERROR','Not found'))))
+        monkeypatch.setattr(bot,'prefs',AsyncMock(return_value={'style':'rich','artwork':'backdrop',
+                            'activity_text':'detailed','episode_code':False,'show_imdb':False,'show_mal':False}))
+        monkeypatch.setattr(bot,'is_wetrakr_anime',AsyncMock(return_value=False))
+        still=AsyncMock(return_value='https://example.com/still.jpg')
+        monkeypatch.setattr(bot.tmdb,'get_episode_still',still)
+        monkeypatch.setattr(bot.tmdb,'get_tv_logo',AsyncMock(return_value=None))
+        sender=AsyncMock(return_value=True);monkeypatch.setattr(bot,'send_embed',sender)
+        member=SimpleNamespace(display_avatar=SimpleNamespace(url='https://example.com/avatar.png'))
+        change={'action':'added','media_type':'episode','title':'Episode title','show_title':'Series',
+                'ids':{'tmdb':1001},'show_ids':{'tmdb':100},'wetrakr_id':11,'show_id':10,
+                'season':1,'episode':1,'watched_at':'2026-10-27T06:00:00Z'}
+        assert await bot.deliver_wetrakr_change(SimpleNamespace(),'123','42','Viewer',member,change,{},set())
+        still.assert_awaited_once_with(100,1,1)
+        assert 'of **Series**' in sender.await_args.args[1].description
+        assert sender.await_args.args[1].url=='https://wetrakr.com/tmdb/show/100'
     asyncio.run(run())
 
 

@@ -29,6 +29,7 @@ def normalize_journal_entry(entry: dict) -> dict | None:
             "ids": entry.get("ids") or {},
             "show_id": entry.get("show_id") or entry.get("media_id") or show.get("id"),
             "show_ids": entry.get("show_ids") or show.get("ids") or {},
+            "show_title": entry.get("show_title") or show.get("title"),
             "season": entry.get("season_number"),
             "episode": entry.get("number"),
             "watched_at": entry.get("watched_at"),
@@ -38,7 +39,7 @@ def normalize_journal_entry(entry: dict) -> dict | None:
     if category in {"watching", "waiting", "planning", "dropped", "paused"} and status in {"added", "removed"}:
         if media_type not in {"movie", "show"}:
             return None
-        return {"runtime_minutes": row.get("runtime"), "source": "wetrakr", "change_id": str(entry.get("entry_id") or ""),
+        return {"runtime_minutes": entry.get("runtime"), "source": "wetrakr", "change_id": str(entry.get("entry_id") or ""),
                 "action": status, "status": category, "media_type": media_type,
                 "wetrakr_id": entry.get("id"), "ids": entry.get("ids") or {},
                 "title": entry.get("title") or "", "action_at": entry.get("action_at")}
@@ -53,6 +54,7 @@ def normalize_compact_play(row: dict) -> dict | None:
             "media_type": row["type"], "wetrakr_id": row.get("id"),
             "ids": row.get("ids") or {}, "show_id": row.get("show_id"),
             "show_ids": row.get("show_ids") or {},
+            "show_title": row.get("show_title"),
             "season": row.get("season_number"), "episode": row.get("number"),
             "watched_at": row.get("watched_at"),
             "watched_at_unknown": bool(row.get("watched_at_unknown"))}

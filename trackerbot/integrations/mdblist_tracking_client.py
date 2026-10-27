@@ -3,6 +3,7 @@
 Verified against the 2026-10-05 OpenAPI schema and developer device-flow
 implementation. No watch writes or progression mutations are performed here.
 """
+import asyncio
 from collections import Counter
 from urllib.parse import quote
 
@@ -10,6 +11,7 @@ import aiohttp
 
 BASE_URL = 'https://api.mdblist.com'
 DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
+REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10, sock_connect=10)
 
 
 class MDBListTrackingError(Exception):
@@ -33,14 +35,31 @@ class MDBListTrackingClient:
         self._session = None
 
     async def _request(self, method, path, token=None, *, params=None, form=None, allow_list=False):
+        # Retrying reads is safe. OAuth POSTs may rotate tokens and must never
+        # be replayed after losing a response. Cancellation still propagates.
+        attempts=2 if method.upper()=='GET' else 1
+        for attempt in range(attempts):
+            try:
+                return await self._request_once(method,path,token,params=params,form=form,allow_list=allow_list)
+            except (asyncio.TimeoutError,aiohttp.ClientConnectionError,aiohttp.ClientPayloadError) as exc:
+                if attempt+1<attempts:
+                    await asyncio.sleep(1)
+                    continue
+                code='TIMEOUT' if isinstance(exc,asyncio.TimeoutError) else 'NETWORK_ERROR'
+                # Native polling and personal ratings share this cooldown,
+                # preventing another failing request immediately in the cycle.
+                raise MDBListTrackingError(0,code,60 if method.upper()=='GET' else None) from None
+
+    async def _request_once(self, method, path, token=None, *, params=None, form=None, allow_list=False):
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+            self._session = aiohttp.ClientSession(timeout=REQUEST_TIMEOUT)
         headers={'Accept':'application/json','User-Agent':'Bingecord/experimental'}
         if token:
             headers['Authorization']=f'Bearer {token}'
         self.request_counts[path] += 1
         async with self._session.request(method, BASE_URL+path, headers=headers,
-                                        params=params, data=form, allow_redirects=False) as response:
+                                        params=params, data=form, allow_redirects=False,
+                                        timeout=REQUEST_TIMEOUT) as response:
             if response.status == 429:
                 try:
                     delay=max(1,int(response.headers.get('Retry-After','60')))

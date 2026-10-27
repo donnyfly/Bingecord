@@ -23,6 +23,7 @@ class WatchActivity:
     movie: bool = False
     count: int = 1
     delivered: bool = False
+    details: dict | None = None
 
 
 def mentions(users):
@@ -73,12 +74,14 @@ class WatchBatch:
         self.window = timedelta(minutes=window_minutes)
         self.activities = []
         self.finalizers = []
+        self.failures = set()
+        self.status_count = 0
 
     def add(self, activity):
         self.activities.append(activity)
 
     def failed(self, guild, user, scope):
-        return any(not item.delivered for item in self.activities
+        return (str(guild),str(user),scope) in self.failures or any(not item.delivered for item in self.activities
                    if (item.guild, item.user, item.scope) == (str(guild), str(user), scope))
 
     def groups(self):
@@ -123,7 +126,13 @@ class WatchBatch:
         for group in self.groups():
             embed = together_embed(group) if len(group) > 1 else group[0].embed
             try:
-                sent = await self.sender(group[0].channel, embed, 'watch')
+                service=current_details.get()
+                if service:
+                    parts=[service.participant(item.guild,item.user,item.details['source'],item.details['meta'])
+                           if item.details else None for item in group]
+                    sent=await service.send(self.sender,group[0].channel,embed,parts)
+                else:
+                    sent = await self.sender(group[0].channel, embed, 'watch')
             except Exception:
                 log.exception('Watch delivery failed.')
                 sent = False
@@ -147,6 +156,7 @@ import asyncio
 from contextvars import ContextVar
 
 current_cycle = ContextVar('watch_delivery_cycle', default=None)
+current_details = ContextVar('activity_details_service', default=None)
 
 
 def watch_key(kind, ids, season=None, episodes=(), provider=None, native=None):
@@ -248,5 +258,10 @@ class WatchCycle:
 
 async def deliver_watch(sender,activity):
     cycle=current_cycle.get()
-    if cycle is None:return await sender(activity.channel,activity.embed,'watch')
+    if cycle is None:
+        service=current_details.get()
+        if service and activity.details:
+            return await service.single(sender,activity.channel,activity.embed,activity.guild,activity.user,
+                                        activity.details['source'],activity.details['meta'])
+        return await sender(activity.channel,activity.embed,'watch')
     return (await cycle.submit([activity]))[0]

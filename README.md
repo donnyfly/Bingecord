@@ -286,12 +286,33 @@ Users can run `/bingecord style` to choose:
 - Automatic, poster, or backdrop artwork
 - Short or detailed activity text
 - Rating visibility
+- Personal-rating visibility, independently of public IMDb/MAL scores
 
 Server admins can set defaults with `/bingecord style-server`. Personal settings override server defaults.
 
 Titles and activity headers link to the provider entry and member profile when available. Status activities use posters. Episode watches can use episode stills/backdrops and show individual episode IMDb ratings. They omit MAL and do not substitute the whole show's rating for a missing episode rating. Anime movies and anime status activities can show title-level IMDb and MAL scores.
 
-For MDBList, supported playback changes can produce Paused notices. Ended/cancelled shows use Completed; ongoing shows use Caught up with. Available notices depend on each provider's API.
+For MDBList, supported playback changes can produce Paused notices. Available notices depend on each provider's API.
+
+### Personal ratings and completion
+
+SIMKL, WeTrakr and MDBList can display **your own rating** from your selected account alongside the existing public scores. Movies use `Your rating`; series status posts use `Your series rating`. A watched episode uses only your episode-specific rating when available, never the show's personal rating. At a season milestone, an available season rating takes priority; a series rating remains explicitly labelled. SIMKL anime entries that represent a verified single season use `Your season-entry rating`. Scores display on a 10-point scale; WeTrakr's valid zero and MDBList's precise half-point scores are preserved.
+
+The final episode or episode-range post can include:
+
+| Label | Required evidence |
+| --- | --- |
+| **Finished Season N** | Every regular episode watched, all aired, and a confirmed finale, a later season already airing, or an ended/cancelled series |
+| **Caught up** | Every currently aired regular episode watched across the verified catalogue |
+| **Completed this series** | An ended/cancelled series with its complete regular-episode catalogue watched |
+
+Specials do not block completion. Missing metadata or uncertain anime episode mappings withhold an unverified milestone. Native completion notices merge into a recent final-watch post when possible; an unverified native status is labelled `Marked as watched` rather than claiming the whole series is complete.
+
+Rate before watching to include your score immediately. If you rate, change or remove a score afterwards, the next successful poll updates the **latest related bot post from the last seven days**, including after a restart. Older posts stay unchanged. Deleted or inaccessible messages are not reposted. Source switches freeze the old account's posts; silent history imports produce no completion announcements. Removing a watch can invalidate a recent completion annotation. Rating edits and completion annotations never award XP.
+
+Watched Together posts show each displayed member's own score, with at most five members' details. `/bingecord style show_personal:Off` hides your score; `/bingecord style-server` supplies the server default and its existing force-override control. Existing public-rating settings and data sources are unchanged. Personal ratings are read only: Bingecord does not submit ratings to your tracker.
+
+See the [ratings and completion test checklist](docs/testing-ratings-completion.md) for examples and live verification across all three providers.
 
 ---
 
@@ -411,6 +432,8 @@ A “no active SIMKL targets” log is normal when everyone selects another prov
 
 ### Ratings or artwork are missing
 
+An MDBList `TIMEOUT` or `NETWORK_ERROR` means the API connection/read failed. Read requests retry once, with a 10-second connection limit and 30-second total limit per attempt; repeated failures trigger a 60-second cooldown shared by personal-rating reads and watch polling. Existing ratings, watch history, checkpoints and XP stay intact. OAuth token requests are never automatically replayed. If timeouts continue, check the bot host's outbound connectivity to `api.mdblist.com`; these errors alone do not mean you need to relink or reset data.
+
 Availability depends on provider/catalog metadata. Individual episode IMDb scores may be missing even when the series has a rating. The bot keeps source episode coordinates for metadata lookups separately from mapped anime display numbering.
 
 ### Slash commands are missing
@@ -453,6 +476,7 @@ The root `bot.py` launches the application. Source lives in `trackerbot/`, organ
 - [MDBList integration](docs/mdblist-integration.md)
 - [WeTrakr API review](docs/wetrakr-api-review.md)
 - [Live validation checklist](docs/testing-multi-tracker.md)
+- [Personal ratings and completion validation](docs/testing-ratings-completion.md)
 
 The shared interface supports adding providers, but each adapter still needs authentication, API-specific reconciliation and capability checks. Complete the outstanding live checks before promoting multi-tracker support as full production parity.
 

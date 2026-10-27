@@ -5,8 +5,8 @@ import pytest
 from test_notification_preview import bot, storage_module
 
 
-@pytest.mark.parametrize('grouping,success',[(True,True),(True,False),(False,True)])
-def test_poll_groups_first_episode_and_preserves_failed_checkpoints(monkeypatch,tmp_path,grouping,success):
+@pytest.mark.parametrize('grouping,success,status_failure',[(True,True,False),(True,False,False),(False,True,False),(True,True,True)])
+def test_poll_groups_first_episode_and_preserves_failed_checkpoints(monkeypatch,tmp_path,grouping,success,status_failure):
     async def scenario():
         monkeypatch.setattr(storage_module,'_write_lock',asyncio.Lock())
         monkeypatch.setattr(storage_module,'_lock',asyncio.Lock())
@@ -43,6 +43,11 @@ def test_poll_groups_first_episode_and_preserves_failed_checkpoints(monkeypatch,
         monkeypatch.setattr(bot.bot,'get_channel',lambda _:channel)
         sender=AsyncMock(return_value=success)
         monkeypatch.setattr(bot,'send_embed',sender)
+        if status_failure:
+            async def fail_status(*args):
+                assert sender.await_count==1  # Status rollups run after watch delivery.
+                return 0,False
+            monkeypatch.setattr(bot,'process_status',fail_status)
         before={uid:await store.get_last_checked('123',uid) for uid in ('41','42')}
         await bot.poll_all('123')
         assert sender.await_count==(1 if grouping else 2)
@@ -55,7 +60,7 @@ def test_poll_groups_first_episode_and_preserves_failed_checkpoints(monkeypatch,
             state=await store.get_activity_state('123',uid)
             last=await store.get_last_checked('123',uid)
             if success:
-                assert last['shows']==stamp
+                assert last==before[uid] if status_failure else last['shows']==stamp
                 assert state['watch_times']['shows:99:1:1']==stamp
                 assert state['statuses']['shows:99']=='watching'
                 assert (await get_progression(uid))['xp']>0
@@ -63,7 +68,7 @@ def test_poll_groups_first_episode_and_preserves_failed_checkpoints(monkeypatch,
                 assert last==before[uid]
                 assert not state['watch_times']
                 assert state['statuses']['shows:99']=='watching'
-        if success:
+        if success and not status_failure:
             sender.reset_mock()
             await bot.poll_all('123')
             sender.assert_not_awaited()

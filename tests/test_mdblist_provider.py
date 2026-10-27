@@ -98,6 +98,28 @@ def test_duplicate_between_mdblist_and_wetrakr_keeps_award_until_last_source(tmp
     asyncio.run(run())
 
 
+def test_transport_cooldown_preserves_history_checkpoint_and_xp(tmp_path,monkeypatch):
+    async def run():
+        from trackerbot.integrations.mdblist_tracking_client import MDBListTrackingError
+        store,api,app,provider=await setup(tmp_path,monkeypatch)
+        api.movies=[movie()]
+        await provider.poll('1')
+        before=await store.get_progression('42')
+        target=(await store.get_provider_targets('mdblist','1',active_only=True))[0]
+        sync=target['guild_user_data']['mdblist_sync']
+        api.last_activities=AsyncMock(side_effect=MDBListTrackingError(0,'TIMEOUT',60))
+        assert await provider.poll('1')==0
+        target=(await store.get_provider_targets('mdblist','1',active_only=True))[0]
+        updated=target['guild_user_data']['mdblist_sync']
+        assert updated['checkpoint']==sync['checkpoint'] and updated['seeded']==sync['seeded']
+        assert updated['health']['error']=='TIMEOUT'
+        assert await store.get_progression('42')==before
+        assert len(await store.get_provider_plays('42',provider='mdblist'))==1
+        assert await provider.poll('1',manual=True)==0
+        api.last_activities.assert_awaited_once()  # Manual checks respect the retry window too.
+    asyncio.run(run())
+
+
 def test_range_planning_and_discovery_use_mdblist(tmp_path,monkeypatch):
     async def run():
         store,api,app,provider=await setup(tmp_path,monkeypatch)
