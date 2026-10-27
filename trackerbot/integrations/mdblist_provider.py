@@ -437,13 +437,16 @@ class MDBListProvider(BaseProvider):
                         await store.retry_prestige_notification(uid,number);break
             await self.app.notify_level_up(gid,uid,before,after,channel,source_label='MDBList')
         count=0
-        fresh=[p for p in sorted(plays,key=lambda p:(str(p.get('show_id') or ''),p.get('season') or 0,p.get('episode') or 0,p['watched_at']))
+        from trackerbot.core.rewatches import rewatch_flags
+        flags=rewatch_flags(plays,lambda p:p.get('item_key'))
+        fresh=[{**p,'is_rewatch':flags.get(str(p['source_event_id']),False)} for p in sorted(plays,key=lambda p:(str(p.get('show_id') or ''),p.get('season') or 0,p.get('episode') or 0,p['watched_at']))
                if f'mdblist:{account.account_id}/{p["source_event_id"]}' not in events]
         index=0
         while index<len(fresh):
             batch=[fresh[index]]
             while index+len(batch)<len(fresh) and 'episode' in batch[0]['media_type']:
                 candidate=fresh[index+len(batch)];previous=batch[-1]
+                if candidate['is_rewatch']!=batch[0]['is_rewatch']:break
                 if (candidate.get('show_id'),candidate.get('season')) != (previous.get('show_id'),previous.get('season')) or candidate.get('episode')!=previous.get('episode',0)+1:
                     break
                 if abs((self.app.parse_iso(candidate['watched_at'])-self.app.parse_iso(previous['watched_at'])).total_seconds())>300:

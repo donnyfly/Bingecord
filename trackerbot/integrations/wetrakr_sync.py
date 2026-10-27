@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 import logging
 
 from trackerbot.integrations.wetrakr_client import WeTrakrError, page_rows, timestamp
-from trackerbot.integrations.wetrakr_events import normalize_compact_play, normalize_journal_entry
+from trackerbot.integrations.wetrakr_events import normalize_compact_play, normalize_journal_entry, watch_identity_key
+from trackerbot.core.rewatches import rewatch_flags
 
 log = logging.getLogger("simkl-bot")
 
@@ -101,6 +102,21 @@ class WeTrakrSync:
             change = normalize_journal_entry(row)
             pending.append((change, row))
 
+        # Project pending changes before labelling posts, including removals
+        # after additions. This does not acknowledge or mutate any watch.
+        if any(change and change.get('source_event_id') and change['action']=='added' for change,_ in pending):
+            active={str(play['source_event_id']):play for play in await self.store.get_wetrakr_plays(uid)
+                    if str(play.get('account_id',account_id))==str(account_id)}
+            for change,_ in pending:
+                if not change or not change.get('source_event_id'):continue
+                event=change['source_event_id']
+                if change['action']=='removed':active.pop(event,None)
+                else:active[event]=change
+            flags=rewatch_flags(active.values(),watch_identity_key)
+            for change,_ in pending:
+                if change and change.get('source_event_id'):
+                    change['is_rewatch']=flags.get(change['source_event_id'],False)
+
         def episode_pair(item):
             change = item[0]
             if not change or change.get("action") != "added" or change.get("media_type") != "episode":
@@ -119,6 +135,7 @@ class WeTrakrSync:
                 direction = None
                 while index + len(batch) < len(pending):
                     candidate = pending[index + len(batch)]
+                    if (candidate[0] or {}).get('is_rewatch')!=batch[0][0].get('is_rewatch'):break
                     following = episode_pair(candidate)
                     previous = episode_pair(batch[-1])
                     if not following or following[:2] != first[:2]:

@@ -335,7 +335,7 @@ def iter_show_episodes(t,items):
                 en=ep.get("number")
                 if en is None: continue
                 wr=ep.get("watched_at")
-                yield {"show_title":show.get("title","a show"),"genres":show.get("genres") or item.get("genres") or [],"simkl_id":sid,"tmdb_id":ids.get("tmdb"),"tvdb_id":ids.get("tvdb"),"ids":ids,"slug":ids.get("slug"),"poster":show.get("poster"),"season_num":sn,"original_season_num":original,"mapped_tvdb_season_num":mapped_season,"episode_number":en,"episode_title":ep.get("title"),"runtime_minutes":ep.get("runtime") or show.get("runtime"),"watched_raw":wr,"watched_dt":parse_iso(wr) if wr else None,"key":episode_key(t,sid,sn,en)}
+                yield {"rewatch_id":item.get("rewatch_id"),"show_title":show.get("title","a show"),"genres":show.get("genres") or item.get("genres") or [],"simkl_id":sid,"tmdb_id":ids.get("tmdb"),"tvdb_id":ids.get("tvdb"),"ids":ids,"slug":ids.get("slug"),"poster":show.get("poster"),"season_num":sn,"original_season_num":original,"mapped_tvdb_season_num":mapped_season,"episode_number":en,"episode_title":ep.get("title"),"runtime_minutes":ep.get("runtime") or show.get("runtime"),"watched_raw":wr,"watched_dt":parse_iso(wr) if wr else None,"key":episode_key(t,sid,sn,en)}
 
 def format_episode_range(s,a,b):
     if s is None: return f"E{a:02d}" if a==b else f"E{a:02d}-E{b:02d}"
@@ -565,8 +565,11 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
     for e in iter_show_episodes(t,items):
         if e["watched_dt"] is None: continue
         prev=watches.get(e["key"]); prevdt=parse_iso(prev) if prev else None
-        rw=e["key"] in announced and prevdt and e["watched_dt"]>prevdt
-        if e["key"] not in announced or rw: groups[(e["simkl_id"],e["season_num"],"rewatched" if rw else "watched")].append(e)
+        changed=e["key"] in announced and prevdt and e["watched_dt"]>prevdt
+        # A changed canonical timestamp can be a deletion/re-add or correction.
+        # Only an explicit provider rewatch session establishes another viewing.
+        rw=bool(e.get('rewatch_id'))
+        if e["key"] not in announced or changed: groups[(e["simkl_id"],e["season_num"],"rewatched" if rw else "watched")].append(e)
     count=0; ok=True
     starting_titles={((item.get("show") or {}).get("ids") or {}).get("simkl")
                      for item in items or [] if item.get("status")=="watching"}
@@ -685,8 +688,9 @@ async def process_movies(ch,g,uid,name,member,items,since,profile,batch=None,sco
     for x in items or []:
         m=x.get("movie") or {}; ids=m.get("ids") or {}; sid=ids.get("simkl"); wr=x.get("last_watched_at")
         if sid is None or not wr: continue
-        dt=parse_iso(wr); k=movie_key("movies",sid); prev=watches.get(k); prevdt=parse_iso(prev) if prev else None; rw=k in announced and prevdt and dt>prevdt
-        if k in announced and not rw: continue
+        dt=parse_iso(wr); k=movie_key("movies",sid); prev=watches.get(k); prevdt=parse_iso(prev) if prev else None; changed=k in announced and prevdt and dt>prevdt
+        if k in announced and not changed: continue
+        rw=bool(x.get('rewatch_id'))
         if k not in announced and dt<=since: continue
         title=m.get("title","a movie"); poster=simkl_poster_url(m.get("poster")); image=None
         anime_movie = bool(
@@ -1708,7 +1712,8 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
                 "completed": "Completed"}[status]
         desc = f"{verb} **{title}**" if p["activity_text"] == "detailed" else verb
     elif t == "movies":
-        desc = f"Watched **{title}**" if p["activity_text"] == "detailed" else "Watched"
+        verb='Rewatched' if change.get('is_rewatch') else 'Watched'
+        desc = f"{verb} **{title}**" if p["activity_text"] == "detailed" else verb
     else:
         if season is None or number is None:
             # Cannot safely identify an episode from a partial journal row.
@@ -1725,7 +1730,8 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
                 label = f"`{span}`" if p.get("episode_code", False) else f"**{span}**"
         else:
             label = format_episode_display(int(season), int(number), int(number), p.get("episode_code", False))
-        desc = f"Watched {label} of **{title}**" if p["activity_text"] == "detailed" else f"Watched {label}"
+        verb='Rewatched' if change.get('is_rewatch') else 'Watched'
+        desc = f"{verb} {label} of **{title}**" if p["activity_text"] == "detailed" else f"{verb} {label}"
         if not episode_end and episode_title and episode_title != title:
             desc += f"\n*{episode_title}*"
         def is_first_episode(s, e):
@@ -1734,7 +1740,7 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
             except (TypeError, ValueError):
                 return False
         started = False
-        if is_first_episode(source_season, source_number) or is_first_episode(season, number):
+        if not change.get('is_rewatch') and (is_first_episode(source_season, source_number) or is_first_episode(season, number)):
             started = not await storage.has_wetrakr_show_history(
                 uid, change.get("show_id"), ids,
                 exclude_event_id=change.get("source_event_id"),
@@ -3954,7 +3960,7 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
     image=None;episode_title=None;rating=None;started=False
     logo=await (tmdb.get_movie_logo(tmdb_id) if movie else tmdb.get_tv_logo(tmdb_id)) if tmdb_id else None
     previous=await storage.get_provider_plays(uid,provider='mdblist')
-    rewatch=any(old.get('item_key')==play['item_key'] and old.get('source_event_id')!=play['source_event_id'] for old in previous)
+    rewatch=bool(play.get('is_rewatch',False))
     if movie:
         image=await tmdb.get_movie_backdrop(tmdb_id) if tmdb_id else None
         description=f"{'Rewatched' if rewatch else 'Watched'} **{title}**"
@@ -3972,7 +3978,7 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
         label=format_episode_display(play['season'],play['episode'],last_play['episode'] if last_play else play['episode'],p.get("episode_code",False))
         description=f"{'Rewatched' if rewatch else 'Watched'} {label} of **{title}**"
         if episode_title:description+=f"\n*{episode_title}*"
-        if play['season']==1 and play['episode']==1 and not any(old.get('show_id')==play.get('show_id') and 'episode' in old.get('media_type','') for old in previous):
+        if not rewatch and play['season']==1 and play['episode']==1 and not any(old.get('show_id')==play.get('show_id') and 'episode' in old.get('media_type','') for old in previous):
             started=True
         ratings={'imdb':rating}
         if last_play:

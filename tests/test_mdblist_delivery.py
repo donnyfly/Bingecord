@@ -1,7 +1,24 @@
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+import pytest
 from test_notification_preview import bot
+
+
+@pytest.mark.parametrize('rewatch',[False,True])
+def test_movie_verb_uses_live_classification_instead_of_stale_local_play(monkeypatch,rewatch):
+    async def run():
+        monkeypatch.setattr(bot,'prefs',AsyncMock(return_value={'style':'rich','show_imdb':False,'show_mal':False}))
+        monkeypatch.setattr(bot.storage,'get_provider_plays',AsyncMock(return_value=[{'item_key':'movie:1','source_event_id':'deleted'}]))
+        monkeypatch.setattr(bot.tmdb,'get_movie_logo',AsyncMock(return_value=None))
+        monkeypatch.setattr(bot.tmdb,'get_movie_backdrop',AsyncMock(return_value=None))
+        sender=AsyncMock(return_value=True);monkeypatch.setattr(bot,'send_embed',sender)
+        provider=SimpleNamespace(title=AsyncMock(return_value={}),ratings=AsyncMock(return_value={}),profile_url=lambda _:None,title_url=lambda *_:None)
+        play={'media_type':'movie','title':'Film','ids':{'tmdb':1},'item_key':'movie:1','source_event_id':'new',
+              'watched_at':'2026-10-27T06:00:00Z','is_rewatch':rewatch}
+        await bot.deliver_mdblist_play(object(),'1','42','Viewer',None,provider,object(),play)
+        assert sender.await_args.args[1].description.startswith('Rewatched' if rewatch else 'Watched')
+    asyncio.run(run())
 
 
 def test_logo_and_started_line_after_episode_ratings(monkeypatch):

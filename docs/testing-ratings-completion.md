@@ -42,6 +42,9 @@ Repeat the checks for **SIMKL, WeTrakr and MDBList**, selecting that provider wi
 | Temporary API/edit failure | Old validated score remains; transient Discord edits retry on a later cycle |
 | A WeTrakr journal removal references a deleted catalogue title | Stored play is removed by account/play ID without a metadata request; later journal watches continue |
 | A WeTrakr title lookup returns 404 for a new watch | Preserve the watch and the journal's scoped IDs; missing artwork/title detail does not discard it or block following rows. Episode IDs must never be used as show IDs. Authentication, quota and server errors still remain pending |
+| Delete a watch and mark it watched again before the next poll | MDBList's current history and WeTrakr's projected journal exclude the deleted play when choosing the verb: the replacement is `Watched`, not `Rewatched`. Repeat for movies and episodes, with removals both before and after additions in the journal |
+| Keep an earlier play and add a later viewing | MDBList and WeTrakr label the later play `Rewatched`; retries and duplicate rows do not create a rewatch. Episode ranges split when their rewatch classification differs |
+| Change the canonical SIMKL watch date or delete/re-add | A changed timestamp remains eligible for activity delivery but does not prove a rewatch. Use `Watched` unless a returned row explicitly carries a `rewatch_id`. The current SIMKL library reader does not request expanded rewatch sessions; enabling and importing those sessions is separate work |
 
 ## Examples
 
