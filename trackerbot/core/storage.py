@@ -113,6 +113,47 @@ def _write_to_disk(text: str) -> None:
     os.replace(tmp_path, DATA_PATH)
 
 
+def _write_repair_backup(path: str, text: str) -> None:
+    """Durable private backup, never overwrite an existing repair backup."""
+    os.makedirs(os.path.dirname(path),mode=0o700,exist_ok=True)
+    try:
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+    except FileExistsError:
+        # A previous attempt may have saved the backup but failed the store write.
+        with open(path,'r',encoding='utf-8') as source:
+            if source.read()!=text:raise ValueError('Repair backup conflict')
+        return
+    try:
+        with os.fdopen(fd,'w',encoding='utf-8') as target:
+            target.write(text);target.flush();os.fsync(target.fileno())
+        directory=os.open(os.path.dirname(path),os.O_RDONLY)
+        try:os.fsync(directory)
+        finally:os.close(directory)
+    except BaseException:
+        os.unlink(path)
+        raise
+
+
+def _rebuild_guilds(data,user_id):
+    return {str(gid):{'timezone':str(_resolve_timezone(guild.get('timezone'))),
+                     'achievements':copy.deepcopy(member.get('achievements') or {})}
+            for gid,guild in data.get('guilds',{}).items()
+            if (member:=(guild.get('users') or {}).get(str(user_id))) is not None}
+
+
+def _repair_scope_check(scope,user_id,actor_id,guild_id):
+    actor=str(actor_id or user_id)
+    if actor!=str(scope.get('actor',user_id)) or str(scope.get('target',user_id))!=str(user_id):
+        raise ValueError('Repair token belongs to a different requester or target')
+    if scope.get('guild') is not None and str(scope['guild'])!=str(guild_id):
+        raise ValueError('Repair token belongs to a different server')
+
+
+def _repair_accounts(user):
+    return {'simkl':str(user.get('simkl_account_id')),
+            **{provider:str((user.get(provider) or {}).get('account_id')) for provider in ('wetrakr','mdblist')}}
+
+
 def _json_default(obj):
     if isinstance(obj, set):
         return sorted(obj)
@@ -254,12 +295,14 @@ def _record_watch_stats(stats: dict, media_type: str, title: str, item_key: str,
     return True
 
 
-def _add_watch_xp_events(progression: dict, events: list[dict]) -> tuple[int,list[dict]]:
+def _add_watch_xp_events(progression: dict, events: list[dict], *, historical=False) -> tuple[int,list[dict]]:
     """Apply one imported history batch without copying or pruning per watch."""
     rows = watch_ledger.ensure(progression)
     known=progression["watch_xp_keys"]
     added=[]
     amount=0
+    pending=progression.setdefault('pending_history_awards',{})
+    providers={obs['provider'] for candidate in rows.values() for obs in candidate['observations'].values()}
     for event in events:
         key=event["event_key"]
         provider = str(key).split(":",1)[0] if str(key).startswith(("wetrakr:","mdblist:")) else "simkl"
@@ -267,12 +310,23 @@ def _add_watch_xp_events(progression: dict, events: list[dict]) -> tuple[int,lis
                     if provider != "simkl" else identity_from_event(event))
         row = watch_ledger.observe(rows, provider, key, identity)
         if row["award_keys"] or key in known:
+            pending.pop(key,None)
             # Classification enrichment updates the shared reward projection;
             # a generic movie observation must not downgrade an anime film.
             if event['media_type'].startswith('anime'):
                 for award in progression['xp_events']:
                     if award.get('event_key') in row['award_keys']:
                         award['media_type'] = event['media_type']
+            continue
+        if key in pending:
+            # A repeated poll is not approval to release a quarantined award.
+            continue
+        if historical and providers-{provider}:
+            # A newly linked account is not proof of another viewing. Stage
+            # unmatched history for review, including aliases/numbering/date
+            # differences which the live five-minute matcher cannot resolve.
+            pending[key]=copy.deepcopy(event)
+            row['needs_review']=True
             continue
         row["award_keys"].append(key)
         stamp=event["at"]
@@ -1209,7 +1263,7 @@ class Storage:
                     "ids": play.get("ids") or {},
                     **({"runtime_minutes":preserved_award["runtime_minutes"]} if preserved_award and "runtime_minutes" in preserved_award
                        else {} if preserved_award else {"runtime_minutes":watch_minutes(kind, play.get("runtime_minutes"))}),
-                    "amount": preserved_award["amount"] if preserved_award else xp_for_watch(kind, play.get("runtime_minutes"))}])
+                    "amount": preserved_award["amount"] if preserved_award else xp_for_watch(kind, play.get("runtime_minutes"))}],historical=complete)
                 duplicate = not added_events
                 xp_delta += amount
                 challenge_events.extend(added_events)
@@ -1449,6 +1503,205 @@ class Storage:
             user = self._user(discord_user_id)
             return copy.deepcopy(user.get("progression", {})) if user else {}
 
+    async def get_rebuild_context(self,user_id,provider="simkl",*,origin_guild=None):
+        from .historical_repair import fingerprint
+        async with _lock:
+            user=self._user(str(user_id))
+            if provider not in {'simkl','wetrakr','mdblist'}:raise ValueError('Unknown rebuild provider')
+            if not user or not (user.get('simkl_token') if provider=='simkl' else user.get(provider)):
+                raise ValueError(f'Link {provider} first')
+            if origin_guild is not None:
+                member=self._guild_user(str(origin_guild),str(user_id))
+                if not member or not provider_linked(member,user,provider):
+                    raise ValueError('Target must have this provider linked in the originating server')
+            guilds=_rebuild_guilds(self._data,user_id)
+            if not guilds:raise ValueError('Link a tracker in a server before rebuilding')
+            return {'baseline':copy.deepcopy(user['progression']),
+                    'guild_timezones':{gid:value['timezone'] for gid,value in guilds.items()},
+                    'guild_fingerprint':fingerprint(guilds),
+                    'source_account_id':str(user.get('simkl_account_id') or 'unknown:'+str(user_id)) if provider=='simkl' else str(user[provider]['account_id'])}
+
+    async def get_simkl_rebuild_context(self,user_id):
+        return await self.get_rebuild_context(user_id)
+
+    async def get_history_repair_context(self,user_id,token,*,actor_id=None,guild_id=None,rebuild_only=False):
+        async with _lock:
+            user=self._user(str(user_id))
+            if user and token in user['progression'].get('history_repairs',{}):
+                prior=user['progression']['history_repairs'][token]
+                if rebuild_only and prior.get('mode') not in {'simkl_rebuild','provider_rebuild'}:raise ValueError('Use a rebuild preview token')
+                _repair_scope_check(prior.get('scope',{}),user_id,actor_id,guild_id)
+                return None
+            plan=self._data.get('history_repair_plans',{}).get(str(user_id))
+            if plan and plan['token']==token:
+                if rebuild_only and plan.get('mode') not in {'simkl_rebuild','provider_rebuild'}:raise ValueError('Use a rebuild preview token')
+                _repair_scope_check(plan.get('scope',{}),user_id,actor_id,guild_id)
+                return copy.deepcopy(plan.get('rebuild')) if plan.get('mode') in {'simkl_rebuild','provider_rebuild'} else None
+            return None
+
+    async def prepare_history_repair(self, user_id: str, baseline: dict, report: dict, *, actor_id=None, guild_id=None) -> dict | None:
+        """Save an executable server-side plan; clients receive only its token."""
+        import secrets
+        from .historical_repair import fingerprint,correct_confirmed,rollback_import
+        mode=report.get('repair_mode','confirmed')
+        if mode not in {'confirmed','import_rollback','simkl_rebuild','provider_rebuild'}:raise ValueError('Unknown repair mode')
+        if mode=='confirmed' and not report['confirmed_duplicate_groups']:return None
+        async with _lock:
+            user=self._user(str(user_id))
+            if not user or fingerprint(user['progression'])!=fingerprint(baseline):
+                raise ValueError('Progression changed; generate a fresh preview')
+            provider=report.get('rebuild_provider','simkl')
+            if actor_id is not None and str(actor_id)!=str(user_id):
+                if guild_id is None or mode not in {'simkl_rebuild','provider_rebuild'}:raise ValueError('Admin rebuild requires a server')
+                member=self._guild_user(str(guild_id),str(user_id))
+                if not member or not provider_linked(member,user,provider):raise ValueError('Target provider is not linked in this server')
+            if mode in {'simkl_rebuild','provider_rebuild'}:
+                from .progression_rebuild import rebuild_from_history
+                if (fingerprint(_rebuild_guilds(self._data,user_id))!=report['guild_fingerprint']
+                        or (str(user.get('simkl_account_id') or 'unknown:'+str(user_id)) if provider=='simkl' else str((user.get(provider) or {}).get('account_id')))!=report['source_account_id']):
+                    raise ValueError('Provider account or achievement context changed; generate a fresh preview')
+                projected,verified=rebuild_from_history(baseline,report['rebuild_entries'],report['guild_timezones'],report['generated_at'],provider=provider,account_id=report['source_account_id'])
+                if verified['breakdown']!=report['breakdown']:raise ValueError('Rebuild reward rules changed; generate a fresh preview')
+                watch=sum(e.get('amount',0) for e in baseline.get('xp_events',[]) if e.get('media_type') in {'movie','anime_movie','episode','anime_episode'})-verified['breakdown']['watch']
+                challenge=sum(r.get('xp',0) for rs in baseline.get('challenge_completions',{}).values() for r in rs.values())-verified['breakdown']['challenges']
+            elif mode=='import_rollback':
+                projected,verified=rollback_import(baseline,report['rollback_provider'],report['rollback_import_before'],
+                                                   report['rollback_rewards_at'],_revoke_unmet_watch_challenges)
+                watch=verified['selected_watch_xp_reduction'];challenge=verified['dependent_challenge_xp_reduction']
+                if not watch and not challenge:return None
+            else:
+                projected,watch,challenge,_=correct_confirmed(baseline,report['confirmed_duplicate_groups'],_revoke_unmet_watch_challenges)
+            if ((mode not in {'simkl_rebuild','provider_rebuild'} and (watch!=report.get('selected_watch_xp_reduction',report.get('confirmed_watch_xp_reduction')) or challenge!=report['dependent_challenge_xp_reduction']))
+                    or any(projected[key]!=report['projected'][key] for key in ('xp','prestige','lifetime_xp'))):
+                raise ValueError('Repair projection does not match the reviewed changes')
+            token=secrets.token_hex(8)
+            plan={'token':token,'fingerprint':fingerprint(baseline),'created_at':datetime.now(timezone.utc).isoformat(),
+                  'accounts':_repair_accounts(user),'groups':copy.deepcopy(report.get('confirmed_duplicate_groups',[])),
+                  'watch_reduction':watch,'challenge_reduction':challenge,'projected':copy.deepcopy(report['projected']),
+                  'mode':mode,'scope':{'actor':str(actor_id or user_id),'target':str(user_id),
+                                      'guild':str(guild_id) if guild_id is not None else None}}
+            if mode in {'simkl_rebuild','provider_rebuild'}:
+                plan['rebuild']={key:copy.deepcopy(report[key]) for key in ('rebuild_entries','guild_timezones','guild_fingerprint','breakdown')}
+                plan['rebuild'].update(rebuilt_at=report['generated_at'],provider=provider,account_id=report['source_account_id'],
+                                       source_markers=copy.deepcopy(report.get('source_markers',report.get('simkl_markers'))))
+            if mode=='import_rollback':
+                plan['rollback']={key:report[key] for key in ('rollback_provider','rollback_import_before','rollback_rewards_at')}
+            self._data.setdefault('history_repair_plans',{})[str(user_id)]=plan
+            self._dirty=True
+        await self.flush()
+        return {'token':token,'expires_in_hours':24}
+
+    async def apply_history_repair(self, user_id: str, token: str, *, simkl_markers=None,source_markers=None,actor_id=None,guild_id=None) -> dict:
+        """Back up and atomically persist one user's reviewed, fingerprint-bound plan."""
+        from .historical_repair import fingerprint,correct_confirmed,rollback_import
+        user_id=str(user_id)
+        if not user_id.isdecimal() or len(user_id)>30 or len(token)!=16 or any(c not in '0123456789abcdef' for c in token):
+            raise ValueError('Invalid repair token; generate a repair preview first')
+        # Same lock order as flush. Hold both through backup and commit so polling
+        # cannot change progression between validation and the durable write.
+        async with _write_lock:
+            async with _lock:
+                user=self._user(user_id)
+                if not user:raise ValueError('Tracking user no longer exists')
+                prior=user['progression'].get('history_repairs',{}).get(token)
+                if prior:
+                    _repair_scope_check(prior.get('scope',{}),user_id,actor_id,guild_id)
+                    return {**copy.deepcopy(prior),'already_applied':True}
+                plan=self._data.get('history_repair_plans',{}).get(user_id)
+                if not plan or plan['token']!=token:
+                    raise ValueError('Repair token does not belong to your current preview')
+                _repair_scope_check(plan.get('scope',{}),user_id,actor_id,guild_id)
+                if datetime.now(timezone.utc)-datetime.fromisoformat(plan['created_at'])>timedelta(hours=24):
+                    raise ValueError('Repair preview expired; generate a fresh preview')
+                progression=user['progression']
+                if fingerprint(progression)!=plan['fingerprint'] or _repair_accounts(user)!=plan['accounts']:
+                    raise ValueError('Progression or linked accounts changed; generate a fresh preview')
+                guild_updates=None
+                if plan.get('mode') in {'simkl_rebuild','provider_rebuild'}:
+                    from .progression_rebuild import rebuild_from_history
+                    settings=plan['rebuild']
+                    provider=settings.get('provider','simkl')
+                    if plan.get('scope',{}).get('guild') is not None:
+                        member=self._guild_user(str(guild_id),user_id)
+                        if not member or not provider_linked(member,user,provider):raise ValueError('Target provider is no longer linked in this server')
+                    markers=source_markers if source_markers is not None else simkl_markers
+                    if markers!=settings.get('source_markers',settings.get('simkl_markers')) or fingerprint(_rebuild_guilds(self._data,user_id))!=settings['guild_fingerprint']:
+                        raise ValueError('Provider activity or achievement context changed; generate a fresh rebuild preview')
+                    corrected,verified=rebuild_from_history(progression,settings['rebuild_entries'],settings['guild_timezones'],settings['rebuilt_at'],provider=provider,account_id=settings.get('account_id'))
+                    if verified['breakdown']!=settings['breakdown']:raise ValueError('Rebuild reward rules changed; generate a fresh preview')
+                    guild_updates=verified['guild_achievements']
+                    watch=sum(e.get('amount',0) for e in progression.get('xp_events',[]) if e.get('media_type') in {'movie','anime_movie','episode','anime_episode'})-verified['breakdown']['watch']
+                    challenge=sum(r.get('xp',0) for rs in progression.get('challenge_completions',{}).values() for r in rs.values())-verified['breakdown']['challenges']
+                elif plan.get('mode')=='import_rollback':
+                    settings=plan['rollback']
+                    corrected,verified=rollback_import(progression,settings['rollback_provider'],settings['rollback_import_before'],
+                                                       settings['rollback_rewards_at'],_revoke_unmet_watch_challenges)
+                    watch=verified['selected_watch_xp_reduction'];challenge=verified['dependent_challenge_xp_reduction']
+                else:
+                    corrected,watch,challenge,_=correct_confirmed(progression,plan['groups'],_revoke_unmet_watch_challenges)
+                if (watch!=plan['watch_reduction'] or challenge!=plan['challenge_reduction']
+                        or any(corrected[key]!=plan['projected'][key] for key in ('xp','prestige','lifetime_xp'))):
+                    raise ValueError('Correction differs from preview; generate a fresh preview')
+                filename=f'history-repair-{user_id}-{token}.json'
+                receipt={'token':token,'applied_at':datetime.now(timezone.utc).isoformat(),
+                         'watch_reduction':watch,'challenge_reduction':challenge,
+                         'duplicate_groups':len(plan['groups']),'projected':plan['projected'],'backup':filename,'mode':plan.get('mode','confirmed'),'scope':copy.deepcopy(plan.get('scope',{}))}
+                if guild_updates is not None:
+                    receipt['breakdown']=verified['breakdown'];receipt['rebuild_provider']=provider
+                corrected.setdefault('history_repairs',{})[token]=receipt
+                backup_state={'discord_user_id':user_id,'plan':plan,'progression':progression}
+                if guild_updates is not None:
+                    backup_state['guild_achievements']=_rebuild_guilds(self._data,user_id)
+                    backup_state['guild_statistics']={gid:copy.deepcopy(self._data['guilds'][gid]['users'][user_id].get('statistics')) for gid in guild_updates}
+                backup=json.dumps(backup_state,
+                                  indent=2,default=_json_default)+'\n'
+                replacement=copy.deepcopy(self._data)
+                replacement['users'][user_id]['progression']=corrected
+                if guild_updates is not None:
+                    for gid,unlocks in guild_updates.items():
+                        member=replacement['guilds'][gid]['users'][user_id]
+                        prior=member.get('achievements') or {}
+                        member['achievements']={aid:copy.deepcopy(prior.get(aid) or {'unlocked_at':settings['rebuilt_at']}) for aid in unlocks}
+                        stats=member.get('statistics') or _default_statistics()
+                        current=stats.get('watch_events')
+                        if isinstance(current,dict):
+                            def source_of(key):return key.split(':',1)[0] if key.startswith(('wetrakr:','mdblist:')) else 'simkl'
+                            events={key:value for key,value in current.items() if source_of(str(key))!=provider}
+                            for entry in settings['rebuild_entries']:
+                                key=entry['event_key'] if provider=='simkl' else f"{provider}:{entry['source_play_id']}"
+                                events[key]={'media_type':entry['media_type'],'title':entry['title'],'item_key':entry['item_key'],
+                                             'watched_at':entry['at'],'ids':copy.deepcopy(entry.get('ids') or {}),
+                                             'genres':copy.deepcopy((entry.get('native_play') or {}).get('genres') or [])}
+                            member['statistics']=_rebuild_watch_statistics(events,replacement['guilds'][gid].get('timezone'))
+                replacement['history_repair_plans'].pop(user_id,None)
+                text=json.dumps(replacement,indent=2,default=_json_default)+'\n'
+                path=os.path.join(os.path.dirname(DATA_PATH),'repair-backups',filename)
+                # Shield both writes AND memory publication: caller cancellation
+                # must not leave a committed disk state with stale memory.
+                async def commit():
+                    await asyncio.to_thread(_write_repair_backup,path,backup)
+                    await asyncio.to_thread(_write_to_disk,text)
+                    self._data=replacement
+                    self._dirty=False
+                task=asyncio.create_task(commit())
+                try:await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    await task
+                    raise
+                return {**copy.deepcopy(receipt),'already_applied':False}
+
+    async def set_history_repair_primary(self, discord_user_id: str, provider: str) -> None:
+        """Store a personal repair preference without changing XP or active sources."""
+        if provider not in {'simkl','wetrakr','mdblist'}:
+            raise ValueError('Unknown primary history provider')
+        async with _lock:
+            user=self._user(str(discord_user_id))
+            if not user:
+                raise ValueError('Link a tracking account first')
+            user['progression']['history_repair_primary']=provider
+            self._dirty=True
+        await self.flush()
+
     async def get_mapping_audit(self, discord_user_id: str) -> dict:
         """Preview the cross-provider occurrence index without changing XP."""
         async with _lock:
@@ -1466,7 +1719,22 @@ class Storage:
             "unpaired": sum(len(row["observations"]) == 1 for row in index.values()),
             "review": sum(row["needs_review"] for row in index.values()),
             "double_awards": sum(len(row["award_keys"]) > 1 for row in index.values()),
+            "pending_history": len(progression.get('pending_history_awards',{})),
         }
+
+    async def enrich_simkl_metadata(self,user_id,account_id,catalog):
+        from .historical_repair import hydrate_simkl
+        async with _lock:
+            user=self._user(str(user_id))
+            current=str((user or {}).get('simkl_account_id') or 'unknown:'+str(user_id))
+            if not user or not user.get('simkl_token') or current!=str(account_id):
+                raise ValueError('SIMKL account changed during identity refresh')
+            before=sum(bool(row.get('needs_review')) for row in watch_ledger.ensure(user['progression']).values())
+            count=hydrate_simkl(user['progression'],catalog)
+            changed=count or before!=sum(bool(row.get('needs_review')) for row in user['progression']['occurrence_ledger'].values())
+            if changed:self._dirty=True
+        if changed:await self.flush()
+        return count
 
     async def refresh_watch_occurrences(self, discord_user_id: str) -> dict:
         """Persist the authoritative ledger and its read-only command projection."""
@@ -1489,7 +1757,7 @@ class Storage:
             if not user or user["progression"].get("history_xp_seeded"):
                 return 0
             progression=user["progression"]
-            amount,_=_add_watch_xp_events(progression,events)
+            amount,_=_add_watch_xp_events(progression,events,historical=True)
             progression["history_xp_seeded"]=True
             self._dirty=True
         await self.flush()
@@ -1519,7 +1787,7 @@ class Storage:
                                 "at":entry["watched_at"],
                                 "ids":entry.get("ids") or {},
                                 "amount":xp_for_watch(entry["media_type"], entry.get("runtime_minutes")), "runtime_minutes":watch_minutes(entry["media_type"], entry.get("runtime_minutes"))})
-            amount,_=_add_watch_xp_events(progression,missing)
+            amount,_=_add_watch_xp_events(progression,missing,historical=True)
             if missing:
                 self._dirty=True
         if missing:
@@ -1569,7 +1837,7 @@ class Storage:
                 "amount":xp_for_watch(record[0]), "runtime_minutes":watch_minutes(record[0]),
             } for record in records]
             amount=self._apply_watch_records_locked(guild_user,global_user,watches_to_record,
-                                                     guild.get("timezone"))
+                                                     guild.get("timezone"),historical=True)
             guild_user["announced"].update(keys)
             guild_user["activity_state"]["statuses"].update(statuses)
             guild_user["activity_state"]["watch_times"].update(watches)
@@ -1602,7 +1870,7 @@ class Storage:
     @staticmethod
     def _apply_watch_records_locked(guild_user: dict, global_user: dict,
                                      records: list[dict], timezone_name: str | None,
-                                     notify_challenges: bool = False) -> int:
+                                     notify_challenges: bool = False, historical: bool = False) -> int:
         xp_events=[]
         for record in records:
             media_type=record["media_type"]
@@ -1622,7 +1890,7 @@ class Storage:
             guild_user["statistics"]=_rebuild_watch_statistics(
                 guild_user["statistics"]["watch_events"],timezone_name)
         progression=global_user["progression"]
-        amount,added=_add_watch_xp_events(progression,xp_events)
+        amount,added=_add_watch_xp_events(progression,xp_events,historical=historical)
         _complete_watch_challenges(progression,added,notify=notify_challenges)
         return amount
 

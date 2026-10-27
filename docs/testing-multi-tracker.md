@@ -4,6 +4,10 @@ Personal ratings, late message edits and season/series milestones have a separat
 
 ## Automated coverage
 
+Historical XP safety: import a second provider with changed dates, romanized/English aliases and absolute/seasonal anime numbering. Unmatched historical plays must appear as held awards, add no XP and trigger no historical challenge rewards. A genuinely new live watch must still earn XP. Exact verified duplicates remain credited once. Run `/bingecord mapping repair_preview:True`; check ID recovery, canonical episode evidence, unresolved/conflicting identities, confirmed-only XP/challenge projections, and unchanged live progression. Preserve genuine rewatches and verify that incomplete or failed metadata reads never apply a correction. A new preview saves a private, server-side plan and returns an apply token for the confirmed portion only. Older preview exports cannot be applied directly.
+
+For unexpected XP jumps, `/bingecord mapping export:True` attaches a private read-only audit of XP awards, reward totals and occurrence observations. It excludes linked-account tokens and makes no XP changes. Share this audit for investigation rather than the live store. Unpaired watches can include unrecognized duplicates, so zero recognized double awards is not proof that no duplicate XP exists.
+
 Run `python3 -m pytest -q` and `python3 -m compileall -q trackerbot tests`.
 
 The suite checks both watch ingestion orders, both removal orders, repeated imports, restarts between removals, relinks, distinct rewatches, external ID conflicts, metadata/episode corrections, challenge reward reversals, selected-source statistics and community projections, discovery cards, account guards, adapter history/change contracts and registry poll dispatch. Existing tests cover activity delivery and progression notifications. Rendered profiles for SIMKL and WeTrakr and the rank/prestige/achievement animations have also been visually inspected.
@@ -118,3 +122,39 @@ Use two members in the same posting channel and enable Watched Together through 
 5. Check logs after a normal single-title watch: journal + item history should replace full scans. A truncated item history or an expired journal must use a safe full fallback. Never share OAuth tokens or the persisted store when reporting results.
 
 Automated tests cannot validate a live OAuth account or Discord channel here; record these acceptance results before calling the integration full parity.
+
+Personal repair preference: run `/bingecord mapping primary_history:SIMKL` as one member. Confirm the preference persists across restart, another member's progression and preferences remain unchanged, and each member's active source is unchanged. Confirmed duplicate projections retain the selected primary award; different-date overlaps remain under review with the primary date identified. Preference selection itself must not change XP.
+
+Confirmed repair validation:
+
+- Generate a preview with a known duplicate and an uncertain different-date watch. Check the exact deduction and projected level/prestige before applying the returned `/bingecord mapping repair_apply:TOKEN` command.
+- Confirm a credential-free backup exists under the mounted data volume's `repair-backups/` directory before the corrected store is committed. Check another member's full user record and every member's active source remain unchanged.
+- Restart and repeat the same apply token: no further deduction. Mutate progression or relink a provider between preview and apply: reject with a fresh-preview instruction. Other members cannot use the token, and expired tokens are rejected.
+- Simulate backup failure and store-write failure: XP remains unchanged in memory and on disk; retrying the same token works when storage recovers. A cancelled caller must not leave disk and memory inconsistent.
+- Verify confirmed duplicate awards become one supported occurrence, with both raw provider observations retained. Re-importing cannot restore the duplicate award; deleting one observation retains XP until the final supporting observation is removed.
+- Verify only dependent challenge rewards and their queued notifications are revoked. Prestige can decrease across the threshold, legacy progression offsets are preserved, and no historical level-up, achievement or prestige announcements fire.
+- For the supplied diagnostic rehearsal, 192 confirmed duplicate groups remove 18,804 watch XP and 7,550 challenge XP: Prestige 3, Level 59, 1,210,487 lifetime XP. All 10,765 observations remain. This is a local-copy rehearsal, not live-host validation or a complete resolution of uncertain history.
+
+Import rollback (when an exact pre-import balance is unavailable):
+
+- Require an explicit personal primary and a different rollback source. Select older watch dates and an exact challenge grant timestamp; display that this is a policy rollback and may include legitimate older history.
+- Verify the preview does not change progression. Applying its server-side token holds selected watch credits and original challenge rewards, preserves all observations and later watches, and uses the existing backup/atomic commit/fingerprint/user-isolation protections.
+- Replaying a held watch as live must not release its credit. A new watch with a new event key must still award normally. Retain zero-credit historical challenge completions to prevent immediate replay; keep original rewards separately for review.
+- A local rehearsal after the confirmed repair selects 2,971 remaining older MDBList awards (328,668 XP) and 142 historical challenge credits (103,850 XP), projecting Prestige 2, Level 36 and 777,969 lifetime XP. It retains One Piece Fan Letter after the cutoff and all 10,765 source observations. This is a selected rollback scope, not an exact reconstruction or live-host validation.
+
+SIMKL-only rebuild validation:
+
+- Run `/bingecord mapping rebuild_simkl:True` alone. Confirm fresh reads for shows/anime/movies, correct anime-film classification (including cross-catalog dedupe), and a preview with watch, achievement, challenge and preserved recorded-community XP. Verify the original progression is unchanged.
+- Verify all old watch/achievement/challenge credits and manual prestige offsets are replaced by the new calculation. Eligible achievement awards are shared once globally while per-server locks respect each server timezone. Challenge eligibility follows the existing calendar and January 2025 cutoff. Report runtime lookup/default usage and undated skipped episode rows.
+- If any catalog fails, SIMKL activity changes during the read, no dated watches are returned, or progression/accounts/guild achievement context change while preparing, refuse the plan. Check activity markers again at application; changed activity rejects it.
+- Applying saves progression and prior per-server achievement locks to a private backup before atomically publishing both. Simulate store-write failure: progression and locks must remain unchanged. Reapplying the token does nothing further, including after restart. Do not replay old achievement, challenge, prestige or activity notifications.
+- Confirm other users, account links, native provider play records, selected sources, settings and server community records remain intact. Keep recorded community XP exactly once. Seed matched secondary observations against new awards and hold/exclude unmatched secondary history; polling a known old key must not refill XP, while a new live event can still earn XP.
+- A rebuilt balance is not an exact restoration of a prior level; inspect the actual live preview before approving its apply command. A source may omit older rewatches or watch dates, which the rebuild cannot invent.
+
+Multi-provider and admin rebuild validation:
+
+- Use `/bingecord mapping rebuild_source:WeTrakr` and `rebuild_source:MDBList`; retain compatibility with `rebuild_simkl:True` and existing unused SIMKL preview plans. Validate complete paginated native movie/episode plays with original play IDs, parent-show IDs, anime types, seasonal coordinates and runtime. Explicit unknown-date plays are excluded and seeded against re-crediting. Malformed/partial pages, duplicate IDs and changing markers reject the preview. MDBList response clock changes alone must not invalidate it; pending WeTrakr journal visibility rejects until settled.
+- Apply then repeat a complete native history reconciliation: no additional watch XP, unchanged community rewards, correct chosen-provider watch counters and preserved secondary observations/native records. A failed store write must leave progression, achievement locks and watch counters unchanged; backups include all three.
+- `/bingecord rebuild user:@member source:MDBList` requires Manage Server at preview and apply. Without source, use the target's selected source. Refuse a member from another server, an untracked target, or a provider not linked in this server. Use the target's OAuth credentials internally; never include credentials in the preview or backup.
+- Bind the apply token to the requesting admin, target member and originating server. Reject another admin, another target, another server, a self-service attempt to use an admin token, revoked permissions, and a member unlinking that provider. Repeated successful tokens do nothing further. An admin command must reject ordinary repair tokens before mutation.
+- The private preview/result must clearly say shared progression across servers. Persist requester/target/server in the receipt/backup, preserve other users and settings, refresh only the target's locks/counters, and never replay historical reward/activity notifications. Apply a fresh live preview before marking native-provider rebuilds live-validated.
