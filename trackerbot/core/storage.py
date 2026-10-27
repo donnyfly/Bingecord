@@ -141,6 +141,14 @@ def _rebuild_guilds(data,user_id):
             if (member:=(guild.get('users') or {}).get(str(user_id))) is not None}
 
 
+def _repair_scope_check(scope,user_id,actor_id,guild_id):
+    actor=str(actor_id or user_id)
+    if actor!=str(scope.get('actor',user_id)) or str(scope.get('target',user_id))!=str(user_id):
+        raise ValueError('Repair token belongs to a different requester or target')
+    if scope.get('guild') is not None and str(scope['guild'])!=str(guild_id):
+        raise ValueError('Repair token belongs to a different server')
+
+
 def _repair_accounts(user):
     return {'simkl':str(user.get('simkl_account_id')),
             **{provider:str((user.get(provider) or {}).get('account_id')) for provider in ('wetrakr','mdblist')}}
@@ -1495,42 +1503,64 @@ class Storage:
             user = self._user(discord_user_id)
             return copy.deepcopy(user.get("progression", {})) if user else {}
 
-    async def get_simkl_rebuild_context(self,user_id):
+    async def get_rebuild_context(self,user_id,provider="simkl",*,origin_guild=None):
         from .historical_repair import fingerprint
         async with _lock:
             user=self._user(str(user_id))
-            if not user or not user.get('simkl_token'):raise ValueError('Link SIMKL first')
+            if provider not in {'simkl','wetrakr','mdblist'}:raise ValueError('Unknown rebuild provider')
+            if not user or not (user.get('simkl_token') if provider=='simkl' else user.get(provider)):
+                raise ValueError(f'Link {provider} first')
+            if origin_guild is not None:
+                member=self._guild_user(str(origin_guild),str(user_id))
+                if not member or not provider_linked(member,user,provider):
+                    raise ValueError('Target must have this provider linked in the originating server')
             guilds=_rebuild_guilds(self._data,user_id)
             if not guilds:raise ValueError('Link a tracker in a server before rebuilding')
             return {'baseline':copy.deepcopy(user['progression']),
                     'guild_timezones':{gid:value['timezone'] for gid,value in guilds.items()},
                     'guild_fingerprint':fingerprint(guilds),
-                    'source_account_id':str(user.get('simkl_account_id') or 'unknown:'+str(user_id))}
+                    'source_account_id':str(user.get('simkl_account_id') or 'unknown:'+str(user_id)) if provider=='simkl' else str(user[provider]['account_id'])}
 
-    async def get_history_repair_context(self,user_id,token):
+    async def get_simkl_rebuild_context(self,user_id):
+        return await self.get_rebuild_context(user_id)
+
+    async def get_history_repair_context(self,user_id,token,*,actor_id=None,guild_id=None,rebuild_only=False):
         async with _lock:
             user=self._user(str(user_id))
-            if user and token in user['progression'].get('history_repairs',{}):return None
+            if user and token in user['progression'].get('history_repairs',{}):
+                prior=user['progression']['history_repairs'][token]
+                if rebuild_only and prior.get('mode') not in {'simkl_rebuild','provider_rebuild'}:raise ValueError('Use a rebuild preview token')
+                _repair_scope_check(prior.get('scope',{}),user_id,actor_id,guild_id)
+                return None
             plan=self._data.get('history_repair_plans',{}).get(str(user_id))
-            return copy.deepcopy(plan.get('rebuild')) if plan and plan['token']==token and plan.get('mode')=='simkl_rebuild' else None
+            if plan and plan['token']==token:
+                if rebuild_only and plan.get('mode') not in {'simkl_rebuild','provider_rebuild'}:raise ValueError('Use a rebuild preview token')
+                _repair_scope_check(plan.get('scope',{}),user_id,actor_id,guild_id)
+                return copy.deepcopy(plan.get('rebuild')) if plan.get('mode') in {'simkl_rebuild','provider_rebuild'} else None
+            return None
 
-    async def prepare_history_repair(self, user_id: str, baseline: dict, report: dict) -> dict | None:
+    async def prepare_history_repair(self, user_id: str, baseline: dict, report: dict, *, actor_id=None, guild_id=None) -> dict | None:
         """Save an executable server-side plan; clients receive only its token."""
         import secrets
         from .historical_repair import fingerprint,correct_confirmed,rollback_import
         mode=report.get('repair_mode','confirmed')
-        if mode not in {'confirmed','import_rollback','simkl_rebuild'}:raise ValueError('Unknown repair mode')
+        if mode not in {'confirmed','import_rollback','simkl_rebuild','provider_rebuild'}:raise ValueError('Unknown repair mode')
         if mode=='confirmed' and not report['confirmed_duplicate_groups']:return None
         async with _lock:
             user=self._user(str(user_id))
             if not user or fingerprint(user['progression'])!=fingerprint(baseline):
                 raise ValueError('Progression changed; generate a fresh preview')
-            if mode=='simkl_rebuild':
-                from .progression_rebuild import rebuild_simkl
+            provider=report.get('rebuild_provider','simkl')
+            if actor_id is not None and str(actor_id)!=str(user_id):
+                if guild_id is None or mode not in {'simkl_rebuild','provider_rebuild'}:raise ValueError('Admin rebuild requires a server')
+                member=self._guild_user(str(guild_id),str(user_id))
+                if not member or not provider_linked(member,user,provider):raise ValueError('Target provider is not linked in this server')
+            if mode in {'simkl_rebuild','provider_rebuild'}:
+                from .progression_rebuild import rebuild_from_history
                 if (fingerprint(_rebuild_guilds(self._data,user_id))!=report['guild_fingerprint']
-                        or str(user.get('simkl_account_id') or 'unknown:'+str(user_id))!=report['source_account_id']):
-                    raise ValueError('SIMKL account or achievement context changed; generate a fresh preview')
-                projected,verified=rebuild_simkl(baseline,report['rebuild_entries'],report['guild_timezones'],report['generated_at'])
+                        or (str(user.get('simkl_account_id') or 'unknown:'+str(user_id)) if provider=='simkl' else str((user.get(provider) or {}).get('account_id')))!=report['source_account_id']):
+                    raise ValueError('Provider account or achievement context changed; generate a fresh preview')
+                projected,verified=rebuild_from_history(baseline,report['rebuild_entries'],report['guild_timezones'],report['generated_at'],provider=provider,account_id=report['source_account_id'])
                 if verified['breakdown']!=report['breakdown']:raise ValueError('Rebuild reward rules changed; generate a fresh preview')
                 watch=sum(e.get('amount',0) for e in baseline.get('xp_events',[]) if e.get('media_type') in {'movie','anime_movie','episode','anime_episode'})-verified['breakdown']['watch']
                 challenge=sum(r.get('xp',0) for rs in baseline.get('challenge_completions',{}).values() for r in rs.values())-verified['breakdown']['challenges']
@@ -1541,17 +1571,19 @@ class Storage:
                 if not watch and not challenge:return None
             else:
                 projected,watch,challenge,_=correct_confirmed(baseline,report['confirmed_duplicate_groups'],_revoke_unmet_watch_challenges)
-            if ((mode!='simkl_rebuild' and (watch!=report.get('selected_watch_xp_reduction',report.get('confirmed_watch_xp_reduction')) or challenge!=report['dependent_challenge_xp_reduction']))
+            if ((mode not in {'simkl_rebuild','provider_rebuild'} and (watch!=report.get('selected_watch_xp_reduction',report.get('confirmed_watch_xp_reduction')) or challenge!=report['dependent_challenge_xp_reduction']))
                     or any(projected[key]!=report['projected'][key] for key in ('xp','prestige','lifetime_xp'))):
                 raise ValueError('Repair projection does not match the reviewed changes')
             token=secrets.token_hex(8)
             plan={'token':token,'fingerprint':fingerprint(baseline),'created_at':datetime.now(timezone.utc).isoformat(),
                   'accounts':_repair_accounts(user),'groups':copy.deepcopy(report.get('confirmed_duplicate_groups',[])),
                   'watch_reduction':watch,'challenge_reduction':challenge,'projected':copy.deepcopy(report['projected']),
-                  'mode':mode}
-            if mode=='simkl_rebuild':
-                plan['rebuild']={key:copy.deepcopy(report[key]) for key in ('rebuild_entries','guild_timezones','guild_fingerprint','breakdown','simkl_markers')}
-                plan['rebuild']['rebuilt_at']=report['generated_at']
+                  'mode':mode,'scope':{'actor':str(actor_id or user_id),'target':str(user_id),
+                                      'guild':str(guild_id) if guild_id is not None else None}}
+            if mode in {'simkl_rebuild','provider_rebuild'}:
+                plan['rebuild']={key:copy.deepcopy(report[key]) for key in ('rebuild_entries','guild_timezones','guild_fingerprint','breakdown')}
+                plan['rebuild'].update(rebuilt_at=report['generated_at'],provider=provider,account_id=report['source_account_id'],
+                                       source_markers=copy.deepcopy(report.get('source_markers',report.get('simkl_markers'))))
             if mode=='import_rollback':
                 plan['rollback']={key:report[key] for key in ('rollback_provider','rollback_import_before','rollback_rewards_at')}
             self._data.setdefault('history_repair_plans',{})[str(user_id)]=plan
@@ -1559,7 +1591,7 @@ class Storage:
         await self.flush()
         return {'token':token,'expires_in_hours':24}
 
-    async def apply_history_repair(self, user_id: str, token: str, *, simkl_markers=None) -> dict:
+    async def apply_history_repair(self, user_id: str, token: str, *, simkl_markers=None,source_markers=None,actor_id=None,guild_id=None) -> dict:
         """Back up and atomically persist one user's reviewed, fingerprint-bound plan."""
         from .historical_repair import fingerprint,correct_confirmed,rollback_import
         user_id=str(user_id)
@@ -1572,22 +1604,30 @@ class Storage:
                 user=self._user(user_id)
                 if not user:raise ValueError('Tracking user no longer exists')
                 prior=user['progression'].get('history_repairs',{}).get(token)
-                if prior:return {**copy.deepcopy(prior),'already_applied':True}
+                if prior:
+                    _repair_scope_check(prior.get('scope',{}),user_id,actor_id,guild_id)
+                    return {**copy.deepcopy(prior),'already_applied':True}
                 plan=self._data.get('history_repair_plans',{}).get(user_id)
                 if not plan or plan['token']!=token:
                     raise ValueError('Repair token does not belong to your current preview')
+                _repair_scope_check(plan.get('scope',{}),user_id,actor_id,guild_id)
                 if datetime.now(timezone.utc)-datetime.fromisoformat(plan['created_at'])>timedelta(hours=24):
                     raise ValueError('Repair preview expired; generate a fresh preview')
                 progression=user['progression']
                 if fingerprint(progression)!=plan['fingerprint'] or _repair_accounts(user)!=plan['accounts']:
                     raise ValueError('Progression or linked accounts changed; generate a fresh preview')
                 guild_updates=None
-                if plan.get('mode')=='simkl_rebuild':
-                    from .progression_rebuild import rebuild_simkl
+                if plan.get('mode') in {'simkl_rebuild','provider_rebuild'}:
+                    from .progression_rebuild import rebuild_from_history
                     settings=plan['rebuild']
-                    if simkl_markers!=settings['simkl_markers'] or fingerprint(_rebuild_guilds(self._data,user_id))!=settings['guild_fingerprint']:
-                        raise ValueError('SIMKL activity or achievement context changed; generate a fresh rebuild preview')
-                    corrected,verified=rebuild_simkl(progression,settings['rebuild_entries'],settings['guild_timezones'],settings['rebuilt_at'])
+                    provider=settings.get('provider','simkl')
+                    if plan.get('scope',{}).get('guild') is not None:
+                        member=self._guild_user(str(guild_id),user_id)
+                        if not member or not provider_linked(member,user,provider):raise ValueError('Target provider is no longer linked in this server')
+                    markers=source_markers if source_markers is not None else simkl_markers
+                    if markers!=settings.get('source_markers',settings.get('simkl_markers')) or fingerprint(_rebuild_guilds(self._data,user_id))!=settings['guild_fingerprint']:
+                        raise ValueError('Provider activity or achievement context changed; generate a fresh rebuild preview')
+                    corrected,verified=rebuild_from_history(progression,settings['rebuild_entries'],settings['guild_timezones'],settings['rebuilt_at'],provider=provider,account_id=settings.get('account_id'))
                     if verified['breakdown']!=settings['breakdown']:raise ValueError('Rebuild reward rules changed; generate a fresh preview')
                     guild_updates=verified['guild_achievements']
                     watch=sum(e.get('amount',0) for e in progression.get('xp_events',[]) if e.get('media_type') in {'movie','anime_movie','episode','anime_episode'})-verified['breakdown']['watch']
@@ -1605,11 +1645,14 @@ class Storage:
                 filename=f'history-repair-{user_id}-{token}.json'
                 receipt={'token':token,'applied_at':datetime.now(timezone.utc).isoformat(),
                          'watch_reduction':watch,'challenge_reduction':challenge,
-                         'duplicate_groups':len(plan['groups']),'projected':plan['projected'],'backup':filename,'mode':plan.get('mode','confirmed')}
-                if guild_updates is not None:receipt['breakdown']=verified['breakdown']
+                         'duplicate_groups':len(plan['groups']),'projected':plan['projected'],'backup':filename,'mode':plan.get('mode','confirmed'),'scope':copy.deepcopy(plan.get('scope',{}))}
+                if guild_updates is not None:
+                    receipt['breakdown']=verified['breakdown'];receipt['rebuild_provider']=provider
                 corrected.setdefault('history_repairs',{})[token]=receipt
                 backup_state={'discord_user_id':user_id,'plan':plan,'progression':progression}
-                if guild_updates is not None:backup_state['guild_achievements']=_rebuild_guilds(self._data,user_id)
+                if guild_updates is not None:
+                    backup_state['guild_achievements']=_rebuild_guilds(self._data,user_id)
+                    backup_state['guild_statistics']={gid:copy.deepcopy(self._data['guilds'][gid]['users'][user_id].get('statistics')) for gid in guild_updates}
                 backup=json.dumps(backup_state,
                                   indent=2,default=_json_default)+'\n'
                 replacement=copy.deepcopy(self._data)
@@ -1619,6 +1662,17 @@ class Storage:
                         member=replacement['guilds'][gid]['users'][user_id]
                         prior=member.get('achievements') or {}
                         member['achievements']={aid:copy.deepcopy(prior.get(aid) or {'unlocked_at':settings['rebuilt_at']}) for aid in unlocks}
+                        stats=member.get('statistics') or _default_statistics()
+                        current=stats.get('watch_events')
+                        if isinstance(current,dict):
+                            def source_of(key):return key.split(':',1)[0] if key.startswith(('wetrakr:','mdblist:')) else 'simkl'
+                            events={key:value for key,value in current.items() if source_of(str(key))!=provider}
+                            for entry in settings['rebuild_entries']:
+                                key=entry['event_key'] if provider=='simkl' else f"{provider}:{entry['source_play_id']}"
+                                events[key]={'media_type':entry['media_type'],'title':entry['title'],'item_key':entry['item_key'],
+                                             'watched_at':entry['at'],'ids':copy.deepcopy(entry.get('ids') or {}),
+                                             'genres':copy.deepcopy((entry.get('native_play') or {}).get('genres') or [])}
+                            member['statistics']=_rebuild_watch_statistics(events,replacement['guilds'][gid].get('timezone'))
                 replacement['history_repair_plans'].pop(user_id,None)
                 text=json.dumps(replacement,indent=2,default=_json_default)+'\n'
                 path=os.path.join(os.path.dirname(DATA_PATH),'repair-backups',filename)

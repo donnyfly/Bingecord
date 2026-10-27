@@ -2435,7 +2435,8 @@ async def bingecord_help(i):
         "`features` — optional features or Activity only mode\n"
         "`style-server` / `timezone` — server defaults\n"
         "`weekly-recap` — post a weekly recap\n"
-        "`debug` — privately preview progression notifications",inline=False)
+        "`debug` — privately preview progression notifications\n"
+        "`rebuild` — preview/rebuild one tracked member’s shared progression",inline=False)
     embed.set_footer(text="Some features may be disabled by your server. Help is always available.")
     await i.response.send_message(embed=embed,ephemeral=True)
 
@@ -2867,6 +2868,119 @@ async def show_profile(i,user):
         await i.followup.send(embed=embed)
 
 
+REBUILD_PROVIDER_CHOICES=[app_commands.Choice(name=name,value=value) for name,value in
+                          (('SIMKL','simkl'),('WeTrakr','wetrakr'),('MDBList','mdblist'))]
+
+
+def rebuild_provider_label(provider):
+    return {'simkl':'SIMKL','wetrakr':'WeTrakr','mdblist':'MDBList'}[provider]
+
+
+async def prepare_rebuild_preview(i,uid,provider,*,admin=False):
+    import io,json
+    from trackerbot.core.progression_rebuild import fetch_provider_entries,rebuild_from_history
+    label=rebuild_provider_label(provider)
+    scope={'actor_id':str(i.user.id),'guild_id':guild_id(i)} if admin else {}
+    try:
+        if provider=='simkl' and not SIMKL_CLIENT_ID:raise ValueError('SIMKL is not configured on this bot')
+        user=await storage.get_user(uid)
+        context=await storage.get_rebuild_context(uid,provider,origin_guild=guild_id(i) if admin else None)
+        await i.followup.send(f'Reading full {label} history and runtimes. No XP has changed; this may take several minutes.',ephemeral=True)
+        async with asyncio.timeout(600):
+            entries,markers,undated=await fetch_provider_entries(sys.modules[__name__],uid,user,provider,context['baseline'])
+        at=datetime.now(timezone.utc).isoformat()
+        _,report=await asyncio.to_thread(rebuild_from_history,context['baseline'],entries,context['guild_timezones'],at,
+                                         provider=provider,account_id=context['source_account_id'])
+        report.update(rebuild_entries=entries,source_markers=markers,undated_rows_skipped=undated,
+                      guild_timezones=context['guild_timezones'],guild_fingerprint=context['guild_fingerprint'],
+                      source_account_id=context['source_account_id'])
+        if admin:report.update(requested_by=str(i.user.id),target_user=uid,origin_guild=str(guild_id(i)))
+        export_report={**report,'rebuild_entries':[{key:value for key,value in entry.items() if key!='native_play'} for entry in entries]}
+        payload=json.dumps(export_report,ensure_ascii=False,separators=(',',':')).encode()
+        if len(payload)>7_400_000:
+            await i.followup.send('Rebuild preview exceeds attachment size. No XP changed.',ephemeral=True);return
+        plan=await storage.prepare_history_repair(uid,context['baseline'],report,**scope)
+        command=(f"/bingecord rebuild user:<@{uid}> apply_token:{plan['token']}" if admin else
+                 f"/bingecord mapping repair_apply:{plan['token']}")
+        export_report['apply_token']=plan['token'];export_report['apply_command']=command
+        payload=json.dumps(export_report,ensure_ascii=False,separators=(',',':')).encode()
+        result=report['projected'];breakdown=report['breakdown']
+        await i.followup.send(
+            f"**{label}-only progression rebuild preview**\nTarget: <@{uid}> — shared progression across servers\nDated {label} watches: **{len(entries):,}**\n"
+            f"Watch XP: **{breakdown['watch']:,}**\nAchievement XP ({report['achievement_count']} unlocks): **{breakdown['achievements']:,}**\n"
+            f"Eligible historical challenge XP: **{breakdown['challenges']:,}**\nRecorded community XP preserved: **{breakdown['community_preserved']:,}**\n"
+            f"Projected: **Prestige {result['prestige']} · Level {result['level']} · {result['lifetime_xp']:,} lifetime XP**\n"
+            f"Runtime lookup/default used: **{report['runtime_lookup_or_default_count']:,}**; undated rows skipped: **{undated:,}**.\n"
+            'This replaces watch/achievement/challenge XP under current rules; it does not target a previous level. '
+            'Other provider records are retained, but their unmatched history earns no additional XP in this rebuild. '
+            f'Review the attached breakdown, then apply with `{command}`. A private backup is saved first. No XP has changed.',
+            file=discord.File(io.BytesIO(payload),filename=f'bingecord-{provider}-rebuild-preview.json'),
+            ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+    except ValueError as exc:
+        await i.followup.send(str(exc)+'. No XP changed.',ephemeral=True)
+    except Exception as exc:
+        log.warning('Provider rebuild preview failed for user %s: %s',uid,type(exc).__name__)
+        await i.followup.send('Could not finish the provider history reads or save the preview. No XP changed; retry when the provider is available.',ephemeral=True)
+
+
+async def execute_history_repair(uid,token,*,actor_id=None,guild_id=None):
+    from trackerbot.core.progression_rebuild import provider_markers
+    scope={'actor_id':actor_id,'guild_id':guild_id} if actor_id is not None else {}
+    context=await storage.get_history_repair_context(uid,token,**scope,**({'rebuild_only':True} if actor_id is not None else {}))
+    if context:
+        provider=context.get('provider','simkl')
+        if actor_id is not None:await storage.get_rebuild_context(uid,provider,origin_guild=guild_id)
+        user=await storage.get_user(uid)
+        markers,_=await provider_markers(sys.modules[__name__],uid,user,provider)
+        return await storage.apply_history_repair(uid,token,source_markers=markers,**scope)
+    return await storage.apply_history_repair(uid,token,**scope)
+
+
+async def send_rebuild_receipt(i,uid,receipt):
+    label=rebuild_provider_label(receipt.get('rebuild_provider','simkl'))
+    breakdown=receipt['breakdown'];result=receipt['projected']
+    status='Already applied; no additional change.' if receipt['already_applied'] else 'Reviewed rebuild applied.'
+    await i.followup.send(
+        f"**{label} progression rebuilt**\nTarget: <@{uid}> — shared progression across servers\n{status}\n"
+        f"**Prestige {result['prestige']} · Level {result['level']} · {result['lifetime_xp']:,} lifetime XP**\n"
+        f"Watch {breakdown['watch']:,} · Achievements {breakdown['achievements']:,} · Challenges {breakdown['challenges']:,} · Community preserved {breakdown['community_preserved']:,}\n"
+        f"Backup: `repair-backups/{receipt['backup']}`\n"
+        'The former watch/reward balance was replaced. Account links and settings were retained; no historical notifications were sent.',
+        ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+
+
+@bingecord_commands.command(name='rebuild',description='(Admin) Preview and apply a provider-based progression rebuild for one member.')
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.choices(source=REBUILD_PROVIDER_CHOICES)
+@app_commands.describe(user='Tracked server member whose shared progression should be rebuilt',
+                       source='Provider history to use; defaults to the member’s selected source',
+                       apply_token='Apply the token from your preview for this member; use without source')
+async def tracker_rebuild(i,user:discord.Member,source:app_commands.Choice[str] | None=None,apply_token:str | None=None):
+    g=guild_id(i)
+    if not g or not is_admin(i):
+        await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True);return
+    if str(getattr(getattr(user,'guild',None),'id',''))!=str(g):
+        await i.response.send_message('Choose a member of this server.',ephemeral=True);return
+    await i.response.defer(ephemeral=True)
+    uid=str(user.id)
+    if apply_token is not None:
+        if source is not None:
+            await i.followup.send('Use apply_token without source; it is bound to your reviewed provider and target.',ephemeral=True);return
+        try:
+            receipt=await execute_history_repair(uid,apply_token.strip(),actor_id=str(i.user.id),guild_id=g)
+        except ValueError as exc:
+            await i.followup.send(str(exc)+'. No rebuild was applied.',ephemeral=True);return
+        except Exception as exc:
+            log.warning('Admin rebuild apply failed for target %s: %s',uid,type(exc).__name__)
+            await i.followup.send('Could not verify the provider or save the rebuild. No rebuild was applied.',ephemeral=True);return
+        await send_rebuild_receipt(i,uid,receipt)
+        return
+    provider=source.value if source is not None else await storage.get_activity_provider(g,uid)
+    if provider not in {'simkl','wetrakr','mdblist'}:
+        await i.followup.send('This member has no tracked source in this server.',ephemeral=True);return
+    await prepare_rebuild_preview(i,uid,provider,admin=True)
+
+
 @bingecord_commands.command(name="mapping",description="Privately inspect how your linked trackers match watches and XP.")
 @app_commands.describe(export="Attach a private read-only XP audit for investigating unexpected progression",
                        repair_preview="Refresh linked SIMKL identities and preview historical overlaps without changing XP",
@@ -2875,18 +2989,19 @@ async def show_profile(i,user):
                        rollback_source="Preview holding older credits from an imported secondary provider",
                        rollback_import_before="Import rollback watch-date cutoff, ISO timestamp with timezone",
                        rollback_rewards_at="Exact historical challenge grant timestamp to hold, ISO timestamp with timezone",
-                       rebuild_simkl="Preview rebuilding all watch XP and rewards from fresh SIMKL history; preserve community XP")
+                       rebuild_simkl="Legacy shortcut for a SIMKL-only rebuild preview",
+                       rebuild_source="Preview rebuilding your progression from one linked provider; preserve community XP")
 @app_commands.choices(primary_history=[app_commands.Choice(name="SIMKL",value="simkl"),
                                       app_commands.Choice(name="WeTrakr",value="wetrakr"),
                                       app_commands.Choice(name="MDBList",value="mdblist")],
                       rollback_source=[app_commands.Choice(name="SIMKL",value="simkl"),
                                        app_commands.Choice(name="WeTrakr",value="wetrakr"),
-                                       app_commands.Choice(name="MDBList",value="mdblist")])
+                                       app_commands.Choice(name="MDBList",value="mdblist")],rebuild_source=REBUILD_PROVIDER_CHOICES)
 async def tracker_mapping(i,export: bool = False,repair_preview: bool = False,
                           primary_history: app_commands.Choice[str] | None = None,repair_apply: str | None = None,
                           rollback_source: app_commands.Choice[str] | None = None,
                           rollback_import_before: str | None = None,rollback_rewards_at: str | None = None,
-                          rebuild_simkl: bool = False):
+                          rebuild_simkl: bool = False,rebuild_source: app_commands.Choice[str] | None = None):
     g=guild_id(i)
     if not g:
         await i.response.send_message("This command must be used in a server.",ephemeral=True)
@@ -2898,18 +3013,11 @@ async def tracker_mapping(i,export: bool = False,repair_preview: bool = False,
         return
     if repair_apply is not None:
         await i.response.defer(ephemeral=True)
-        if rebuild_simkl or repair_preview or primary_history is not None or export or any(value is not None for value in (rollback_source,rollback_import_before,rollback_rewards_at)):
+        if rebuild_simkl or rebuild_source is not None or repair_preview or primary_history is not None or export or any(value is not None for value in (rollback_source,rollback_import_before,rollback_rewards_at)):
             await i.followup.send('Use repair_apply by itself with the token from your preview.',ephemeral=True)
             return
         try:
-            context=await storage.get_history_repair_context(uid,repair_apply.strip())
-            if context:
-                from trackerbot.core.progression_rebuild import simkl_markers
-                token=await valid_token(uid,user)
-                markers,_=await simkl_markers(sys.modules[__name__],uid,user,token)
-                receipt=await storage.apply_history_repair(uid,repair_apply.strip(),simkl_markers=markers)
-            else:
-                receipt=await storage.apply_history_repair(uid,repair_apply.strip())
+            receipt=await execute_history_repair(uid,repair_apply.strip())
         except ValueError as exc:
             await i.followup.send(str(exc)+'. No correction was applied.',ephemeral=True)
             return
@@ -2920,15 +3028,8 @@ async def tracker_mapping(i,export: bool = False,repair_preview: bool = False,
         mode=receipt.get('mode','confirmed')
         status='Already applied; no additional XP was deducted.' if receipt['already_applied'] else 'Reviewed repair applied to your progression only.'
         result=receipt['projected']
-        if mode=='simkl_rebuild':
-            breakdown=receipt['breakdown']
-            await i.followup.send(
-                f"**SIMKL progression rebuilt**\n{status}\n"
-                f"**Prestige {result['prestige']} · Level {result['level']} · {result['lifetime_xp']:,} lifetime XP**\n"
-                f"Watch {breakdown['watch']:,} · Achievements {breakdown['achievements']:,} · Challenges {breakdown['challenges']:,} · Community preserved {breakdown['community_preserved']:,}\n"
-                f"Backup: `repair-backups/{receipt['backup']}`\n"
-                'Your former watch/reward balance was replaced with this new calculation. Account links and settings were retained; no historical notifications were sent.',
-                ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+        if mode in {'simkl_rebuild','provider_rebuild'}:
+            await send_rebuild_receipt(i,uid,receipt)
             return
         await i.followup.send(
             f"**Historical XP repair**\n{status}\n"
@@ -2940,47 +3041,11 @@ async def tracker_mapping(i,export: bool = False,repair_preview: bool = False,
              if mode=='import_rollback' else 'Uncertain imports and possible rewatches were left unchanged. This is the confirmed portion of the repair.'),
             ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
         return
-    if rebuild_simkl:
+    if rebuild_simkl or rebuild_source is not None:
         await i.response.defer(ephemeral=True)
-        if export or repair_preview or primary_history is not None or any(value is not None for value in (rollback_source,rollback_import_before,rollback_rewards_at)):
-            await i.followup.send('Use rebuild_simkl by itself to prepare a fresh rebuild preview.',ephemeral=True);return
-        import io,json
-        from trackerbot.core.progression_rebuild import fetch_simkl_entries,rebuild_simkl as build_rebuild
-        try:
-            if not SIMKL_CLIENT_ID:raise ValueError('SIMKL is not configured on this bot')
-            context=await storage.get_simkl_rebuild_context(uid)
-            await i.followup.send('Reading your full SIMKL history and runtimes. No XP has changed; this may take several minutes.',ephemeral=True)
-            async with asyncio.timeout(600):
-                entries,markers,undated=await fetch_simkl_entries(sys.modules[__name__],uid,user)
-            at=datetime.now(timezone.utc).isoformat()
-            _,report=await asyncio.to_thread(build_rebuild,context['baseline'],entries,context['guild_timezones'],at)
-            report.update(rebuild_entries=entries,simkl_markers=markers,undated_episode_rows_skipped=undated,
-                          guild_timezones=context['guild_timezones'],guild_fingerprint=context['guild_fingerprint'],
-                          source_account_id=context['source_account_id'])
-            payload=json.dumps(report,ensure_ascii=False,separators=(',',':')).encode()
-            if len(payload)>7_400_000:
-                await i.followup.send('Rebuild preview exceeds attachment size. No XP changed.',ephemeral=True);return
-            plan=await storage.prepare_history_repair(uid,context['baseline'],report)
-            report['apply_token']=plan['token'];report['apply_command']=f"/bingecord mapping repair_apply:{plan['token']}"
-            payload=json.dumps(report,ensure_ascii=False,separators=(',',':')).encode()
-            result=report['projected'];breakdown=report['breakdown']
-            await i.followup.send(
-                f"**SIMKL-only progression rebuild preview**\nDated SIMKL watches: **{len(entries):,}**\n"
-                f"Watch XP: **{breakdown['watch']:,}**\nAchievement XP ({report['achievement_count']} unlocks): **{breakdown['achievements']:,}**\n"
-                f"Eligible historical challenge XP: **{breakdown['challenges']:,}**\nRecorded community XP preserved: **{breakdown['community_preserved']:,}**\n"
-                f"Projected: **Prestige {result['prestige']} · Level {result['level']} · {result['lifetime_xp']:,} lifetime XP**\n"
-                f"Runtime lookup/default used: **{report['runtime_lookup_or_default_count']:,}**; undated episode rows skipped: **{undated:,}**.\n"
-                'This replaces your watch/achievement/challenge XP under current rules; it does not target your previous level. '
-                'Other provider records are retained, but their unmatched history earns no additional XP in this rebuild. '
-                'Review the attached breakdown, then apply with '
-                f"`/bingecord mapping repair_apply:{plan['token']}`. A private backup is saved first. No XP has changed.",
-                file=discord.File(io.BytesIO(payload),filename='bingecord-simkl-rebuild-preview.json'),
-                ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
-        except ValueError as exc:
-            await i.followup.send(str(exc)+'. No XP changed.',ephemeral=True)
-        except Exception as exc:
-            log.warning('SIMKL rebuild preview failed for user %s: %s',uid,type(exc).__name__)
-            await i.followup.send('Could not finish the SIMKL history reads or save the preview. No XP changed; retry when the provider is available.',ephemeral=True)
+        if (rebuild_simkl and rebuild_source is not None) or export or repair_preview or primary_history is not None or any(value is not None for value in (rollback_source,rollback_import_before,rollback_rewards_at)):
+            await i.followup.send('Use rebuild_source by itself to prepare a fresh rebuild preview.',ephemeral=True);return
+        await prepare_rebuild_preview(i,uid,rebuild_source.value if rebuild_source is not None else 'simkl')
         return
     if any(value is not None for value in (rollback_source,rollback_import_before,rollback_rewards_at)):
         await i.response.defer(ephemeral=True)
