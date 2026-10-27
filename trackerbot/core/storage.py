@@ -113,6 +113,32 @@ def _write_to_disk(text: str) -> None:
     os.replace(tmp_path, DATA_PATH)
 
 
+def _write_repair_backup(path: str, text: str) -> None:
+    """Durable private backup, never overwrite an existing repair backup."""
+    os.makedirs(os.path.dirname(path),mode=0o700,exist_ok=True)
+    try:
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+    except FileExistsError:
+        # A previous attempt may have saved the backup but failed the store write.
+        with open(path,'r',encoding='utf-8') as source:
+            if source.read()!=text:raise ValueError('Repair backup conflict')
+        return
+    try:
+        with os.fdopen(fd,'w',encoding='utf-8') as target:
+            target.write(text);target.flush();os.fsync(target.fileno())
+        directory=os.open(os.path.dirname(path),os.O_RDONLY)
+        try:os.fsync(directory)
+        finally:os.close(directory)
+    except BaseException:
+        os.unlink(path)
+        raise
+
+
+def _repair_accounts(user):
+    return {'simkl':str(user.get('simkl_account_id')),
+            **{provider:str((user.get(provider) or {}).get('account_id')) for provider in ('wetrakr','mdblist')}}
+
+
 def _json_default(obj):
     if isinstance(obj, set):
         return sorted(obj)
@@ -1458,6 +1484,80 @@ class Storage:
         async with _lock:
             user = self._user(discord_user_id)
             return copy.deepcopy(user.get("progression", {})) if user else {}
+
+    async def prepare_history_repair(self, user_id: str, baseline: dict, report: dict) -> dict | None:
+        """Save an executable server-side plan; clients receive only its token."""
+        import secrets
+        from .historical_repair import fingerprint,correct_confirmed
+        if not report['confirmed_duplicate_groups']:return None
+        async with _lock:
+            user=self._user(str(user_id))
+            if not user or fingerprint(user['progression'])!=fingerprint(baseline):
+                raise ValueError('Progression changed; generate a fresh preview')
+            projected,watch,challenge,_=correct_confirmed(baseline,report['confirmed_duplicate_groups'],_revoke_unmet_watch_challenges)
+            if (watch!=report['confirmed_watch_xp_reduction'] or challenge!=report['dependent_challenge_xp_reduction']
+                    or any(projected[key]!=report['projected'][key] for key in ('xp','prestige','lifetime_xp'))):
+                raise ValueError('Repair projection does not match the reviewed changes')
+            token=secrets.token_hex(8)
+            plan={'token':token,'fingerprint':fingerprint(baseline),'created_at':datetime.now(timezone.utc).isoformat(),
+                  'accounts':_repair_accounts(user),'groups':copy.deepcopy(report['confirmed_duplicate_groups']),
+                  'watch_reduction':watch,'challenge_reduction':challenge,'projected':copy.deepcopy(report['projected'])}
+            self._data.setdefault('history_repair_plans',{})[str(user_id)]=plan
+            self._dirty=True
+        await self.flush()
+        return {'token':token,'expires_in_hours':24}
+
+    async def apply_history_repair(self, user_id: str, token: str) -> dict:
+        """Back up and atomically persist one user's reviewed, fingerprint-bound plan."""
+        from .historical_repair import fingerprint,correct_confirmed
+        user_id=str(user_id)
+        if not user_id.isdecimal() or len(user_id)>30 or len(token)!=16 or any(c not in '0123456789abcdef' for c in token):
+            raise ValueError('Invalid repair token; generate a repair preview first')
+        # Same lock order as flush. Hold both through backup and commit so polling
+        # cannot change progression between validation and the durable write.
+        async with _write_lock:
+            async with _lock:
+                user=self._user(user_id)
+                if not user:raise ValueError('Tracking user no longer exists')
+                prior=user['progression'].get('history_repairs',{}).get(token)
+                if prior:return {**copy.deepcopy(prior),'already_applied':True}
+                plan=self._data.get('history_repair_plans',{}).get(user_id)
+                if not plan or plan['token']!=token:
+                    raise ValueError('Repair token does not belong to your current preview')
+                if datetime.now(timezone.utc)-datetime.fromisoformat(plan['created_at'])>timedelta(hours=24):
+                    raise ValueError('Repair preview expired; generate a fresh preview')
+                progression=user['progression']
+                if fingerprint(progression)!=plan['fingerprint'] or _repair_accounts(user)!=plan['accounts']:
+                    raise ValueError('Progression or linked accounts changed; generate a fresh preview')
+                corrected,watch,challenge,_=correct_confirmed(progression,plan['groups'],_revoke_unmet_watch_challenges)
+                if (watch!=plan['watch_reduction'] or challenge!=plan['challenge_reduction']
+                        or any(corrected[key]!=plan['projected'][key] for key in ('xp','prestige','lifetime_xp'))):
+                    raise ValueError('Correction differs from preview; generate a fresh preview')
+                filename=f'history-repair-{user_id}-{token}.json'
+                receipt={'token':token,'applied_at':datetime.now(timezone.utc).isoformat(),
+                         'watch_reduction':watch,'challenge_reduction':challenge,
+                         'duplicate_groups':len(plan['groups']),'projected':plan['projected'],'backup':filename}
+                corrected.setdefault('history_repairs',{})[token]=receipt
+                backup=json.dumps({'discord_user_id':user_id,'plan':plan,'progression':progression},
+                                  indent=2,default=_json_default)+'\n'
+                replacement=copy.deepcopy(self._data)
+                replacement['users'][user_id]['progression']=corrected
+                replacement['history_repair_plans'].pop(user_id,None)
+                text=json.dumps(replacement,indent=2,default=_json_default)+'\n'
+                path=os.path.join(os.path.dirname(DATA_PATH),'repair-backups',filename)
+                # Shield both writes AND memory publication: caller cancellation
+                # must not leave a committed disk state with stale memory.
+                async def commit():
+                    await asyncio.to_thread(_write_repair_backup,path,backup)
+                    await asyncio.to_thread(_write_to_disk,text)
+                    self._data=replacement
+                    self._dirty=False
+                task=asyncio.create_task(commit())
+                try:await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    await task
+                    raise
+                return {**copy.deepcopy(receipt),'already_applied':False}
 
     async def set_history_repair_primary(self, discord_user_id: str, provider: str) -> None:
         """Store a personal repair preference without changing XP or active sources."""

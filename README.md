@@ -282,7 +282,17 @@ Use `/bingecord mapping repair_preview:True` to refresh linked SIMKL catalog IDs
 
 For imported histories, `/bingecord mapping primary_history:SIMKL` saves your personal repair preference and generates a preview. It applies only to your Discord user across servers; it does not change the active tracking source, other users, or data on provider websites. Confirmed duplicate projections keep the primary provider's award. Uncertain date conflicts show the preferred historical date for review and still produce no deduction: choosing a primary does not prove that a separate rewatch was an import.
 
-SIMKL identity metadata is also refreshed during full SIMKL reconciliation. These safeguards do not automatically deduct previously awarded XP or resolve held awards. Historical corrections require reviewing the preview first; there is no automatic apply action in this build. Backups and a guarded, repeat-safe apply step must accompany any subsequent approved correction.
+SIMKL identity metadata is also refreshed during full SIMKL reconciliation. These safeguards do not automatically deduct previously awarded XP or resolve held awards.
+
+To apply the **confirmed portion** of a historical correction:
+
+1. Run `/bingecord mapping repair_preview:True` (or choose `primary_history:SIMKL` for your personal repair preference).
+2. Review the XP reduction and projected prestige/level. The response includes a unique `/bingecord mapping repair_apply:TOKEN` command when confirmed corrections exist.
+3. Run that exact apply command by itself. The bot first saves a private progression backup in `data/repair-backups/` on the mounted data volume, then atomically commits the correction. No old activity or reward notifications are posted.
+
+The token belongs only to the requesting Discord user, expires after 24 hours and is rejected if progression or linked account IDs changed since the preview. Generate a fresh preview in that case. Repeating an already successful token does not deduct XP again. A backup or store write failure leaves the correction unapplied. Backups contain the user's progression and repair plan, without authentication credentials; keep the data volume persistent.
+
+The repair retains both provider observations as support for the remaining award and recalculates dependent watch challenge rewards, XP, level and prestige. Other users, active tracking sources, provider websites, achievements, community rewards and uncertain rewatches are unchanged. **This does not resolve every imported-history discrepancy**: different dates, conflicting IDs and incomplete anime crosswalks still require evidence and review. Existing preview exports from older builds cannot be applied; generate a new preview to obtain a server-side plan and token.
 
 MDBList and WeTrakr first imports run as background jobs, so scheduled checks and normal posts for other members can continue. Each provider runs at most two import jobs and four enrichment lookups at a time. Concurrent requests for the same title, season or anime mapping share their in-flight metadata reads.
 

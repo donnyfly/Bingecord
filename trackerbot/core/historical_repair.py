@@ -1,4 +1,4 @@
-"""Conservative historical overlap preview. Never changes live XP."""
+"""Conservative historical overlap plans and pure, confirmed-only corrections."""
 import asyncio
 import copy
 from collections import defaultdict
@@ -183,13 +183,8 @@ def build_preview(progression,revoke_challenges):
                     item['primary_watched_at']=item['identities'][position]['watched_at']
                     item['review_action']='Preserve the primary date if confirmed as imported history; keep separate if a genuine rewatch.'
                 review.append(item)
-    removed=sum(int(awards[k].get('amount',0)) for k in remove if k in awards)
-    data['xp_events']=[e for e in data.get('xp_events',[]) if e['event_key'] not in remove]
-    data['lifetime_xp']=max(0,int(data.get('lifetime_xp',0))-removed)
-    challenge_delta=revoke_challenges(data) if remove else 0
-    offset=(int(progression.get('prestige',0))*xp_for_level(100)+int(progression.get('xp',0))
-            -int(progression.get('lifetime_xp',0)))
-    prestige,xp=divmod(max(0,int(data.get('lifetime_xp',0))+offset),xp_for_level(100))
+    data,removed,challenge_delta,offset=correct_confirmed(progression,confirmed,revoke_challenges)
+    prestige,xp=data.get('prestige',0),data.get('xp',0)
     return {'read_only':True,'fingerprint':fingerprint,'generated_at':datetime.now(timezone.utc).isoformat(),
             'primary_history':primary,'primary_scope':'This Discord user only; does not change active tracking source or provider data.',
             'before':{k:progression.get(k) for k in ('xp','prestige','lifetime_xp')},
@@ -202,3 +197,66 @@ def build_preview(progression,revoke_challenges):
             'preserved_progression_offset':offset,
             'projected':{'prestige':prestige,'xp':xp,'level':level_progress(xp)[0],'lifetime_xp':data['lifetime_xp']},
             'note':'No live XP is changed. Different dates, numbering and title-only matches require review; potential overlap is not a confirmed duplicate.'}
+
+
+def fingerprint(progression):
+    return hashlib.sha256(json.dumps(progression,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+
+
+def correct_confirmed(progression,groups,revoke_challenges):
+    """Return a corrected COPY; preserve source observations and uncertain watches.
+
+    Callers must bind server-generated groups to the live progression fingerprint
+    before persisting this result. Uploaded JSON is never an executable plan.
+    """
+    data=copy.deepcopy(progression)
+    rows=watch_ledger.ensure(data)
+    awards={event['event_key']:event for event in data.get('xp_events',[])}
+    owners={ref:key for key,row in rows.items() for ref in row['observations']}
+    used_rows=set();remove=set()
+    for group in groups:
+        refs=group['references'];identities=[WatchIdentity(**value) for value in group['identities']]
+        if (group.get('reason')!='verified_id' or len(refs)!=2 or len(set(refs))!=2
+                or len(identities)!=2 or match_reason(*identities)!='verified_id'):
+            raise ValueError('Repair group is not a verified duplicate')
+        owner_keys={owners[ref] for ref in refs}
+        if owner_keys & used_rows:
+            raise ValueError('Ambiguous repair groups overlap')
+        used_rows.update(owner_keys)
+        actual_keys={key for owner in owner_keys for key in rows[owner]['award_keys']}
+        removed=set(group['remove_award_keys']);kept=actual_keys-removed
+        if (actual_keys!=set(group['award_keys']) or not actual_keys<=awards.keys()
+                or not removed or not removed<actual_keys or len(kept)!=1):
+            raise ValueError('Repair award references changed')
+        providers=[rows[owners[ref]]['observations'][ref]['provider'] for ref in refs]
+        if len(set(providers))!=2:
+            raise ValueError('Repair requires distinct providers')
+        # Keep both providers as support for the one retained award. Deleting
+        # either observation later must not revoke XP while the other remains.
+        target=owners[refs[0]];merged=rows[target]
+        for owner in owner_keys-{target}:
+            merged['observations'].update(rows.pop(owner)['observations'])
+        for ref,identity in zip(refs,identities):
+            merged['observations'][ref]['canonical_identity']=asdict(identity)
+        merged['award_keys']=sorted(kept)
+        merged['needs_review']=len(merged['observations'])!=2
+        remove.update(removed)
+    reduction=sum(max(0,int(awards[key]['amount'])) for key in remove)
+    data['xp_events']=[event for event in data.get('xp_events',[]) if event['event_key'] not in remove]
+    for key in remove:
+        data.get('watch_xp_keys',{}).pop(key,None)
+        data.get('pending_history_awards',{}).pop(key,None)
+    for provider in ('mdblist','wetrakr'):
+        for play in data.get(provider+'_plays',{}).values():
+            if play.get('xp_key') in remove:play['xp_key']=None
+    data['lifetime_xp']=max(0,int(data.get('lifetime_xp',0))-reduction)
+    challenge_reduction=revoke_challenges(data) if remove else 0
+    offset=(int(progression.get('prestige',0))*xp_for_level(100)+int(progression.get('xp',0))
+            -int(progression.get('lifetime_xp',0)))
+    prestige,xp=divmod(max(0,int(data['lifetime_xp'])+offset),xp_for_level(100))
+    data.update(prestige=prestige,xp=xp)
+    if remove:
+        data['prestige_carry_repaired']=True
+        data['prestige_notified']=max(int(data.get('prestige_notified',0)),prestige)
+        data['watch_occurrences']=watch_ledger.audit(rows)
+    return data,reduction,challenge_reduction,offset

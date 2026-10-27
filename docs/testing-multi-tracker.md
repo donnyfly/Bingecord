@@ -4,7 +4,7 @@ Personal ratings, late message edits and season/series milestones have a separat
 
 ## Automated coverage
 
-Historical XP safety: import a second provider with changed dates, romanized/English aliases and absolute/seasonal anime numbering. Unmatched historical plays must appear as held awards, add no XP and trigger no historical challenge rewards. A genuinely new live watch must still earn XP. Exact verified duplicates remain credited once. Run `/bingecord mapping repair_preview:True`; check ID recovery, canonical episode evidence, unresolved/conflicting identities, confirmed-only XP/challenge projections, and unchanged live progression. Preserve genuine rewatches and verify that incomplete or failed metadata reads never apply a correction. This build exports a preview only and does not implement a destructive apply action.
+Historical XP safety: import a second provider with changed dates, romanized/English aliases and absolute/seasonal anime numbering. Unmatched historical plays must appear as held awards, add no XP and trigger no historical challenge rewards. A genuinely new live watch must still earn XP. Exact verified duplicates remain credited once. Run `/bingecord mapping repair_preview:True`; check ID recovery, canonical episode evidence, unresolved/conflicting identities, confirmed-only XP/challenge projections, and unchanged live progression. Preserve genuine rewatches and verify that incomplete or failed metadata reads never apply a correction. A new preview saves a private, server-side plan and returns an apply token for the confirmed portion only. Older preview exports cannot be applied directly.
 
 For unexpected XP jumps, `/bingecord mapping export:True` attaches a private read-only audit of XP awards, reward totals and occurrence observations. It excludes linked-account tokens and makes no XP changes. Share this audit for investigation rather than the live store. Unpaired watches can include unrecognized duplicates, so zero recognized double awards is not proof that no duplicate XP exists.
 
@@ -124,3 +124,13 @@ Use two members in the same posting channel and enable Watched Together through 
 Automated tests cannot validate a live OAuth account or Discord channel here; record these acceptance results before calling the integration full parity.
 
 Personal repair preference: run `/bingecord mapping primary_history:SIMKL` as one member. Confirm the preference persists across restart, another member's progression and preferences remain unchanged, and each member's active source is unchanged. Confirmed duplicate projections retain the selected primary award; different-date overlaps remain under review with the primary date identified. Preference selection itself must not change XP.
+
+Confirmed repair validation:
+
+- Generate a preview with a known duplicate and an uncertain different-date watch. Check the exact deduction and projected level/prestige before applying the returned `/bingecord mapping repair_apply:TOKEN` command.
+- Confirm a credential-free backup exists under the mounted data volume's `repair-backups/` directory before the corrected store is committed. Check another member's full user record and every member's active source remain unchanged.
+- Restart and repeat the same apply token: no further deduction. Mutate progression or relink a provider between preview and apply: reject with a fresh-preview instruction. Other members cannot use the token, and expired tokens are rejected.
+- Simulate backup failure and store-write failure: XP remains unchanged in memory and on disk; retrying the same token works when storage recovers. A cancelled caller must not leave disk and memory inconsistent.
+- Verify confirmed duplicate awards become one supported occurrence, with both raw provider observations retained. Re-importing cannot restore the duplicate award; deleting one observation retains XP until the final supporting observation is removed.
+- Verify only dependent challenge rewards and their queued notifications are revoked. Prestige can decrease across the threshold, legacy progression offsets are preserved, and no historical level-up, achievement or prestige announcements fire.
+- For the supplied diagnostic rehearsal, 192 confirmed duplicate groups remove 18,804 watch XP and 7,550 challenge XP: Prestige 3, Level 59, 1,210,487 lifetime XP. All 10,765 observations remain. This is a local-copy rehearsal, not live-host validation or a complete resolution of uncertain history.

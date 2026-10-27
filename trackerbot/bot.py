@@ -2909,12 +2909,13 @@ async def show_profile(i,user):
 @bingecord_commands.command(name="mapping",description="Privately inspect how your linked trackers match watches and XP.")
 @app_commands.describe(export="Attach a private read-only XP audit for investigating unexpected progression",
                        repair_preview="Refresh linked SIMKL identities and preview historical overlaps without changing XP",
-                       primary_history="Save your personal repair preference and generate a preview; does not change XP")
+                       primary_history="Save your personal repair preference and generate a preview; does not change XP",
+                       repair_apply="Apply only the confirmed corrections from your preview token, after saving a backup")
 @app_commands.choices(primary_history=[app_commands.Choice(name="SIMKL",value="simkl"),
                                       app_commands.Choice(name="WeTrakr",value="wetrakr"),
                                       app_commands.Choice(name="MDBList",value="mdblist")])
 async def tracker_mapping(i,export: bool = False,repair_preview: bool = False,
-                          primary_history: app_commands.Choice[str] | None = None):
+                          primary_history: app_commands.Choice[str] | None = None,repair_apply: str | None = None):
     g=guild_id(i)
     if not g:
         await i.response.send_message("This command must be used in a server.",ephemeral=True)
@@ -2923,6 +2924,31 @@ async def tracker_mapping(i,export: bool = False,repair_preview: bool = False,
     user=await storage.get_user(uid)
     if not user:
         await i.response.send_message("Link a tracking account with /bingecord link first.",ephemeral=True)
+        return
+    if repair_apply is not None:
+        await i.response.defer(ephemeral=True)
+        if repair_preview or primary_history is not None or export:
+            await i.followup.send('Use repair_apply by itself with the token from your preview.',ephemeral=True)
+            return
+        try:
+            receipt=await storage.apply_history_repair(uid,repair_apply.strip())
+        except ValueError as exc:
+            await i.followup.send(str(exc)+'. No correction was applied.',ephemeral=True)
+            return
+        except Exception as exc:
+            log.warning('Historical repair write failed for user %s: %s',uid,type(exc).__name__)
+            await i.followup.send('Could not save the repair backup or corrected store. No correction was applied; retry the same token.',ephemeral=True)
+            return
+        status='Already applied; no additional XP was deducted.' if receipt['already_applied'] else 'Confirmed correction applied to your progression only.'
+        result=receipt['projected']
+        await i.followup.send(
+            f"**Historical XP repair**\n{status}\n"
+            f"Watch XP removed: **{receipt['watch_reduction']:,}**\n"
+            f"Dependent challenge XP removed: **{receipt['challenge_reduction']:,}**\n"
+            f"Result at repair: **Prestige {result['prestige']} · Level {result['level']} · {result['lifetime_xp']:,} lifetime XP**\n"
+            f"Backup saved in your data volume: `repair-backups/{receipt['backup']}`\n"
+            'Uncertain imports and possible rewatches were left unchanged. This is the confirmed portion of the repair.',
+            ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
         return
     if repair_preview or primary_history is not None:
         await i.response.defer(ephemeral=True)
@@ -2943,6 +2969,11 @@ async def tracker_mapping(i,export: bool = False,repair_preview: bool = False,
             crosswalk=await canonicalize(projection,tmdb)
             report=build_preview(projection,_revoke_unmet_watch_challenges)
             report.update(fingerprint=fingerprint,simkl_identities_enriched=enriched,**crosswalk)
+            plan=await storage.prepare_history_repair(uid,baseline,report) if report['confirmed_duplicate_groups'] else None
+            if plan:
+                report['apply_token']=plan['token']
+                report['apply_command']=f"/bingecord mapping repair_apply:{plan['token']}"
+                report['plan_expires_in_hours']=plan['expires_in_hours']
             payload=json.dumps(report,ensure_ascii=False,separators=(',',':')).encode()
             if len(payload)>7_500_000:
                 await i.followup.send('Repair preview exceeds attachment size; no XP changed.',ephemeral=True);return
@@ -2952,9 +2983,15 @@ async def tracker_mapping(i,export: bool = False,repair_preview: bool = False,
                 f"Overlaps needing review: **{len(report['uncertain_overlaps']):,}**\n"
                 f"Confirmed watch XP reduction: **{report['confirmed_watch_xp_reduction']:,}**\n"
                 f"Dependent challenge XP reduction: **{report['dependent_challenge_xp_reduction']:,}**\n"
-                "No XP has been changed. The projection includes only confirmed corrections; unresolved overlaps still need review.",
+                f"Projected result: **Prestige {report['projected']['prestige']} · Level {report['projected']['level']} · {report['projected']['lifetime_xp']:,} lifetime XP**\n"
+                "No XP has been changed. Uncertain overlaps are excluded. "
+                +(f"Apply this confirmed portion with `/bingecord mapping repair_apply:{plan['token']}` within 24 hours. "
+                  "A private backup is saved before the correction. If progression changes, generate a fresh preview."
+                  if plan else "No confirmed corrections are available to apply."),
                 file=discord.File(io.BytesIO(payload),filename='bingecord-repair-preview.json'),ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none())
+        except ValueError as exc:
+            await i.followup.send(str(exc)+'. No XP was changed.',ephemeral=True)
         except Exception as exc:
             log.warning('Historical repair preview failed for user %s: %s',uid,type(exc).__name__)
             await i.followup.send('Could not complete the history/metadata reads. No XP was changed; retry when the linked provider is available.',ephemeral=True)
