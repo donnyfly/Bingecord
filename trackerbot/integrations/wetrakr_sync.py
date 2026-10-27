@@ -132,7 +132,7 @@ class WeTrakrSync:
             if resolve_play:
                 for change, _ in batch:
                     if change and change.get("source_event_id"):
-                        play = await resolve_play(change)
+                        play = dict(change) if change['action']=='removed' else await resolve_play(change)
                         play["removed"] = change["action"] == "removed"
                         plays.append(play)
             if len(batch) > 1:

@@ -1582,11 +1582,15 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
     end_season, end_number = None, None
     media_type = change["media_type"]
     if media_type == "episode":
+        # Journal ids identify this episode. Metadata outages must never feed
+        # those IDs into series artwork, ratings, grouping or completion.
+        ids=change.get('show_ids') or {}
+        title=change.get('show_title') or 'Unknown series'
         try:
             details = await wetrakr.episode(change["wetrakr_id"])
             parent = details.get("media") or details.get("show") or {}
             title = parent.get("title") or title
-            ids = parent.get("ids") or {}
+            ids = parent.get("ids") or ids
             episode_title = details.get("title") or change.get("title")
             # This is WeTrakr's numbering; anime needs a separate TVDB/TVMaze
             # mapping before it becomes the displayed season/episode.
@@ -1681,7 +1685,7 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
     episode_rating = None
     if media_type == "episode" and status is None and not episode_end and p.get("show_imdb", True):
         try:
-            episode_ids = details.get("ids") or {}
+            episode_ids = details.get("ids") or change.get('ids') or {}
             imdb_id = ((details.get("external_ids") or {}).get("imdb_id")
                        or episode_ids.get("imdb") or details.get("imdb_id"))
             if not imdb_id and resolved_episode:
@@ -1756,7 +1760,7 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
                  'episodes':[] if status or media_type=='movie' else list(range(int(number),int(end_number if episode_end else number)+1)),
                  'source_season':source_season if source_season is not None else (None if season is None else int(season)),
                  'source_episodes':[] if media_type=='movie' else list(range(int(source_number),int((episode_end or {}).get('episode',source_number))+1)) if source_number is not None else [],
-                 'episode_ids':details.get('ids') or {}}
+                 'episode_ids':details.get('ids') or change.get('ids') or {}}
     if not status and await feature_enabled(gid,'watched_together'):
         movie=media_type=='movie'
         numbers=tuple(range(int(number),int(end_number if episode_end else number)+1)) if not movie else ()

@@ -40,6 +40,8 @@ Repeat the checks for **SIMKL, WeTrakr and MDBList**, selecting that provider wi
 | Rate more than seven days after the post | No historical edit or new post |
 | Delete the Discord message or revoke edit access | No repost; obsolete binding is discarded |
 | Temporary API/edit failure | Old validated score remains; transient Discord edits retry on a later cycle |
+| A WeTrakr journal removal references a deleted catalogue title | Stored play is removed by account/play ID without a metadata request; later journal watches continue |
+| A WeTrakr title lookup returns 404 for a new watch | Preserve the watch and the journal's scoped IDs; missing artwork/title detail does not discard it or block following rows. Episode IDs must never be used as show IDs. Authentication, quota and server errors still remain pending |
 
 ## Examples
 
