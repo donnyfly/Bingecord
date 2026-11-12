@@ -301,14 +301,25 @@ class ActivityDetails:
 
     async def single(self,sender,channel,embed,guild,user,source,meta):
         part=self.participant(guild,user,source,meta)
-        if part and meta.get('status')=='completed':
-            # Native rollups arriving after the final watch must not duplicate its milestone.
+        if part and meta.get('status')=='completed' and not meta.get('movie'):
+            def matching_episode(other):
+                watch=other['meta']
+                return (all(other[key]==part[key] for key in ('guild','user','source','account'))
+                        and not watch.get('status') and not watch.get('movie') and watch.get('episodes')
+                        and ids_match(watch['ids'],meta['ids'])
+                        and (meta.get('season') is None
+                             or meta['season'] in (watch.get('season'),watch.get('source_season'))))
+
+            # A completed status from the same poll adds no separate activity
+            # when the episode post is already delivered. Missing catalogue
+            # evidence still prevents a completion claim on that episode.
+            if any(matching_episode(other) for record in self.sent for other in record['parts']):
+                return True
+            # A later rollup is redundant only if a recorded milestone still holds.
             recent=await self.app.storage.get_activity_messages(guild)
-            for previous in reversed(recent+self.sent):
-                for other in previous['parts']:
-                    if (other['guild'],other['user'],other['source'],other['account'])==(part['guild'],part['user'],part['source'],part['account']) and ids_match(other['meta']['ids'],meta['ids']) and not other['meta'].get('status') and not other['meta'].get('movie') and other.get('milestone'):
-                        if not await self.milestone(part):continue
-                        return True
+            if any(matching_episode(other) and other.get('milestone')
+                   for record in recent for other in record['parts']) and await self.milestone(part):
+                return True
         return await self.send(sender,channel,embed,[part])
 
     async def remember(self,message):

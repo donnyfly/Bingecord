@@ -344,7 +344,7 @@ The final episode or episode-range post can include:
 | **Caught up** | Every currently aired regular episode watched across the verified catalogue |
 | **Completed this series** | An ended/cancelled series with its complete regular-episode catalogue watched |
 
-Specials do not block completion. Missing metadata or uncertain anime episode mappings withhold an unverified milestone. Native completion notices merge into a recent final-watch post when possible; an unverified native status is labelled `Marked as watched` rather than claiming the whole series is complete.
+Specials do not block completion. Missing metadata or uncertain anime episode mappings withhold an unverified milestone. If an episode post and its completion status arrive in the same poll, only the episode post is sent. A standalone unverified completion status is labelled `Marked as watched`.
 
 Rate before watching to include your score immediately. If you rate, change or remove a score afterwards, the next successful poll updates the **latest related bot post from the last seven days**, including after a restart. Older posts stay unchanged. Deleted or inaccessible messages are not reposted. Source switches freeze the old account's posts; silent history imports produce no completion announcements. Removing a watch can invalidate a recent completion annotation. Rating edits and completion annotations never award XP.
 

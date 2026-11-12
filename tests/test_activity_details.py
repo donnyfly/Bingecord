@@ -279,6 +279,24 @@ def test_catalog_fetches_current_season_only_until_near_completion(tmp_path,monk
     asyncio.run(run())
 
 
+def test_same_poll_unverified_completion_does_not_duplicate_episode_post(tmp_path,monkeypatch):
+    async def run():
+        _,app,engine,ch,_,sent,sender=await setup(tmp_path,monkeypatch)
+        app.tmdb._get_series_details.return_value={}
+        await engine.single(sender,ch,discord.Embed(description='Watched S1E08'),'10','1','simkl',
+                            {'ids':{'tmdb':1},'season':1,'episodes':[8]})
+        rollup=discord.Embed(description='Completed **Show**')
+        meta={'ids':{'tmdb':1},'status':'completed'}
+        assert await engine.single(sender,ch,rollup,'10','1','simkl',meta)
+        assert [embed.description for embed in sent]==['Watched S1E08']
+
+        # A status-only change on another poll still has a truthful fallback.
+        engine.sent=[]
+        assert await engine.single(sender,ch,rollup,'10','1','simkl',meta)
+        assert sent[-1].description=='Marked as watched **Show**'
+    asyncio.run(run())
+
+
 def test_native_status_requires_evidence_and_ended_series_gets_correct_label(tmp_path,monkeypatch):
     async def run():
         store,app,engine,ch,message,sent,sender=await setup(tmp_path,monkeypatch)
