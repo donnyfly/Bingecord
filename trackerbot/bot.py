@@ -2741,12 +2741,13 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         app_commands.Choice(name="Rank up", value="rank"),
         app_commands.Choice(name="Achievement unlocked", value="achievement"),
         app_commands.Choice(name="Prestige unlocked", value="prestige"),
+        app_commands.Choice(name="Completion", value="completion"),
     ],
     rank=[app_commands.Choice(name=name,value=minimum) for minimum,name in RANKS],
 )
 @app_commands.autocomplete(achievement=achievement_autocomplete)
 @app_commands.describe(
-    feature="Notification to preview",
+    feature="Notification to preview or completion to inspect",
     achievement="Required for an achievement preview",
     level="Optional target level (2-100) for a level/rank preview",
     rank="Optional rank to preview; a chosen level must belong to it",
@@ -2762,6 +2763,32 @@ async def simkl_debug(
 ):
     if not guild_id(i) or not is_admin(i):
         await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True)
+        return
+    if feature.value == "completion":
+        await i.response.defer(ephemeral=True)
+        try:
+            report=await activity_details.completion_report(str(i.guild.id),str(i.user.id))
+        except Exception:
+            log.exception("Could not inspect recent completion activity.")
+            await i.followup.send("Could not inspect completion metadata. Check the bot logs.",ephemeral=True)
+            return
+        if report is None:
+            await i.followup.send("No recent completion activity found for your selected tracker.",ephemeral=True)
+            return
+        title=discord.utils.escape_markdown(report['title'])[:180]
+        missing=report.get('missing')
+        missing_text=('unknown' if missing is None else 'none' if not missing
+                      else ', '.join(map(str,missing[:20]))+(f" (+{len(missing)-20} more)" if len(missing)>20 else ''))
+        await i.followup.send(
+            f"**Completion check: {title}** ({report['source']})\n"
+            f"Posted: {report['posted_milestone'] or 'none'} · Verified now: {report['current_milestone'] or 'none'}\n"
+            f"TMDB series: {report.get('tmdb') or 'unresolved'} · Status: {report.get('series_status') or 'unknown'}\n"
+            f"Season {report.get('season') or '?'}: {report.get('loaded','?')}/{report.get('expected') or '?'} catalogue episodes · "
+            f"Watched episode mapped: {'yes' if report.get('episode_mapped') else 'no'}\n"
+            f"Episodes missing from Bingecord's watch history: {missing_text}\n"
+            f"Season's last episode: {report.get('last_type') or 'unlabelled'} · Air date: {report.get('last_air_date') or 'unknown'}\n"
+            f"Series summary's latest episode: {report.get('latest') or 'unknown'}",
+            ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
         return
     if feature.value == "achievement":
         if achievement is None or achievement not in ACHIEVEMENTS:

@@ -350,6 +350,24 @@ def test_native_status_requires_evidence_and_ended_series_gets_correct_label(tmp
     asyncio.run(run())
 
 
+def test_completion_report_reads_existing_post_and_identifies_missing_episode(tmp_path,monkeypatch):
+    async def run():
+        store,_,engine,ch,message,_,sender=await setup(tmp_path,monkeypatch,('1','2'))
+        await watch(store,2)
+        await engine.single(sender,ch,discord.Embed(title='Show',description='Watched S1E02'),'10','1','simkl',
+                            {'ids':{'tmdb':1},'season':1,'episodes':[2]})
+        await engine.single(sender,ch,discord.Embed(description='Completed Show'),'10','1','simkl',
+                            {'ids':{'tmdb':1},'status':'completed'})
+        report=await engine.completion_report('10','1')
+        assert report['missing']==[1] and report['episode_mapped'] and report['last_type']=='finale'
+        assert report['posted_milestone'] is None and report['current_milestone'] is None
+        assert await engine.completion_report('10','2') is None
+        await watch(store,1)
+        assert (await engine.completion_report('10','1'))['current_milestone']=='season'
+        message.edit.assert_not_awaited()
+    asyncio.run(run())
+
+
 def test_deleted_message_discards_binding_without_reposting(tmp_path,monkeypatch):
     async def run():
         store,app,engine,ch,message,sent,sender=await setup(tmp_path,monkeypatch)

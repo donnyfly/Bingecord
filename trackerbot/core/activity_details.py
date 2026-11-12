@@ -179,12 +179,14 @@ class ActivityDetails:
             if len(self.catalogs)>500:self.catalogs.pop(next(iter(self.catalogs)))
             return value
 
-    async def milestone(self,part,*,additional=False,include_sent=False):
+    async def milestone(self,part,*,additional=False,include_sent=False,diagnostic=None):
         meta=part['meta']
         if meta.get('movie') or (meta.get('season') is None and meta.get('status') not in {'completed','caught_up'}):return None
         ctx=self.contexts.get((part['guild'],part['user'])) or {}
         rows=ctx.get('before_watches') if include_sent else None
         if rows is None:rows=await self.watches(part)
+        if diagnostic is not None:
+            diagnostic['tmdb']=meta['ids'].get('tmdb')
         catalog=await self.catalog(meta,rows)
         if not catalog:return None
         series,seasons=catalog
@@ -232,8 +234,38 @@ class ActivityDetails:
             points.difference_update(added)
         if additional:points.update(added)
         raw_season=added[-1][0] if added else meta.get('source_season') or meta['season']
+        if diagnostic is not None:
+            data=seasons.get(raw_season) or {}
+            numbered={number for season,number in catalog_points if season==raw_season and isinstance(number,int)}
+            summary=next((row for row in series.get('seasons') or [] if row.get('season_number')==raw_season),{})
+            last=max((row for row in data.get('episodes') or [] if isinstance(row.get('episode_number'),int)),
+                     key=lambda row:row['episode_number'],default={})
+            latest=series.get('last_episode_to_air') or {}
+            diagnostic.update(season=raw_season,series_status=series.get('status'),expected=summary.get('episode_count'),
+                              loaded=len(numbered),missing=sorted(number for number in numbered if (raw_season,number) not in points),
+                              episode_mapped=bool(added),last_air_date=last.get('air_datetime') or last.get('air_date'),
+                              last_type=last.get('episode_type') or last.get('milestone'),
+                              latest=f"S{latest.get('season_number')}E{latest.get('episode_number')} {latest.get('episode_type') or latest.get('milestone') or 'unlabelled'}" if latest else None)
         # Never announce a season in a different numbering namespace as the display season.
         return outcome(series,seasons,points,raw_season,display_season=meta['season'])
+
+    async def completion_report(self,guild,user):
+        source=await self.app.storage.get_activity_provider(guild,user)
+        if not source:return None
+        account=await self.app.provider_registry.get(source).link(user)
+        for record in reversed(await self.app.storage.get_activity_messages(guild)):
+            for part in record['parts']:
+                meta=part['meta']
+                if (part['guild'],part['user'],part['source'],str(part['account']))!=(str(guild),str(user),source,str(account.account_id)):
+                    continue
+                if meta.get('movie') or not meta.get('episodes'):continue
+                if not (part.get('milestone') or meta.get('completion_reported')):continue
+                diagnostic={}
+                milestone=await self.milestone(part,diagnostic=diagnostic)
+                return {'title':record['base'].get('title') or 'Episode activity','source':source,
+                        'posted_milestone':(part.get('milestone') or {}).get('kind'),
+                        'current_milestone':(milestone or {}).get('kind'),**diagnostic}
+        return None
 
     def participant(self,guild,user,source,meta):
         ctx=self.contexts.get((str(guild),str(user)))
