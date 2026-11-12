@@ -263,13 +263,24 @@ def test_simkl_import_before_delivery_and_next_cycle_rollup_do_not_hide_or_dupli
         await watch(store,1)
         part={'guild':'10','user':'1','source':'simkl','account':'1'}
         engine.contexts[('10','1')]['before_watches']=await engine.watches(part)
+        engine.contexts[('10','1')]['state']['ratings']=[normalize({'tmdb':1,'rating':8},'show','simkl')]
         await watch(store,2)  # Full reconciliation precedes actual activity delivery.
         meta={'ids':{'tmdb':1},'season':1,'episodes':[2],'new_watch':True}
         await engine.single(sender,ch,discord.Embed(description='Watched S1E02\n⭐ IMDb 8.2/10'),'10','1','simkl',meta)
         assert 'Finished **Season 1**' in sent[-1].description
+        assert 'Your series rating: **8/10**' in sent[-1].description
+        await engine.finish()
+        message.edit.assert_not_awaited()
+        report=await engine.completion_report('10','1')
+        assert report['missing']==[] and report['current_milestone']=='season'
         engine.sent=[]  # Native completed status arrives on the next poll.
         await engine.single(sender,ch,discord.Embed(description='Completed Show'),'10','1','simkl',{'ids':{'tmdb':1},'status':'completed'})
         assert len(sent)==1
+        # An actual unwatch still removes the milestone on a later poll.
+        await store.reconcile_watch_statistics('10','1',{'episode:series:shows:1:1:1:'},{'episode'})
+        await engine.finish()
+        assert 'Finished' not in message.edit.await_args.kwargs['embed'].description
+        assert (await engine.completion_report('10','1'))['missing']==[2]
     asyncio.run(run())
 
 

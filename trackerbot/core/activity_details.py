@@ -233,7 +233,9 @@ class ActivityDetails:
                          'source_episode':raw_numbers[index] if index<len(raw_numbers) else number,
                          'episode_ids':meta.get('episode_ids') if len(meta.get('episodes') or [])==1 else {}})
             if value:added.append(value)
-        if not additional and meta.get('new_watch') and not meta.get('rewatched') and part['source']=='simkl':
+        # A SIMKL snapshot can already contain the pending episode. Subtract
+        # it only when comparing the pre-delivery state, never on a live refresh.
+        if include_sent and not additional and meta.get('new_watch') and not meta.get('rewatched') and part['source']=='simkl':
             points.difference_update(added)
         if additional:points.update(added)
         raw_season=added[-1][0] if added else meta.get('source_season') or meta['season']
@@ -262,7 +264,7 @@ class ActivityDetails:
                 if (part['guild'],part['user'],part['source'],str(part['account']))!=(str(guild),str(user),source,str(account.account_id)):
                     continue
                 if meta.get('movie') or not meta.get('episodes'):continue
-                if not (part.get('milestone') or meta.get('completion_reported')):continue
+                if not (part.get('transition') or part.get('milestone') or meta.get('completion_reported')):continue
                 diagnostic={}
                 milestone=await self.milestone(part,diagnostic=diagnostic)
                 return {'title':record['base'].get('title') or 'Episode activity','source':source,
