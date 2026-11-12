@@ -372,6 +372,9 @@ def test_full_snapshot_fills_partial_history_without_duplicate_rewatch(monkeypat
                         {"number":2,"watched_at":"2026-09-25T10:00:00Z"},
                     ]}]}],token
             monkeypatch.setattr(bot,"cached_simkl_items",AsyncMock(side_effect=history))
+            await bot.reconcile_watch_progression("123","42",{},"token",{"shows"})
+            assert (await store.get_statistics("123","42"))["episodes_watched"]==2
+            assert (await store.get_progression("42"))["xp"]==100
             await bot.reconcile_watch_progression("123","42",{},"token",set(bot.MEDIA_TYPES))
             assert (await store.get_statistics("123","42"))["episodes_watched"]==2
             assert (await store.get_progression("42"))["xp"]==200

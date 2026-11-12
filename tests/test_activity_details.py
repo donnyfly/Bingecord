@@ -355,16 +355,18 @@ def test_completion_report_reads_existing_post_and_identifies_missing_episode(tm
         store,_,engine,ch,message,_,sender=await setup(tmp_path,monkeypatch,('1','2'))
         await watch(store,2)
         await engine.single(sender,ch,discord.Embed(title='Show',description='Watched S1E02'),'10','1','simkl',
-                            {'ids':{'tmdb':1},'season':1,'episodes':[2]})
+                            {'ids':{'simkl':1,'tmdb':1},'season':1,'episodes':[2]})
         await engine.single(sender,ch,discord.Embed(description='Completed Show'),'10','1','simkl',
                             {'ids':{'tmdb':1},'status':'completed'})
         report=await engine.completion_report('10','1')
         assert report['missing']==[1] and report['episode_mapped'] and report['last_type']=='finale'
         assert report['posted_milestone'] is None and report['current_milestone'] is None
         assert await engine.completion_report('10','2') is None
-        await watch(store,1)
+        await store.record_watch('10','1','episode','Show','series:shows:1:1:1','2020-01-01T12:00:00Z')
         assert (await engine.completion_report('10','1'))['current_milestone']=='season'
         message.edit.assert_not_awaited()
+        await engine.finish()
+        assert 'Finished **Season 1**.' in message.edit.await_args.kwargs['embed'].description
     asyncio.run(run())
 
 

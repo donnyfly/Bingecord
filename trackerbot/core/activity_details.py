@@ -121,7 +121,10 @@ class ActivityDetails:
             if 'episode' not in row.get('media_type',''):continue
             pieces=str(row.get('item_key','')).split(':')
             if len(pieces)==5 and pieces[0]=='series':
-                try:rows.append({**row,'season':int(pieces[-2]),'episode':int(pieces[-1])})
+                # Older statistics can lack external IDs; the stored native
+                # item key still identifies the exact SIMKL entry.
+                try:rows.append({**row,'ids':{**(row.get('ids') or {}),'simkl':pieces[2]},
+                                 'season':int(pieces[-2]),'episode':int(pieces[-1])})
                 except ValueError:continue
         return rows
 
@@ -300,7 +303,7 @@ class ActivityDetails:
                 ctx=self.contexts[(part['guild'],part['user'])]
                 prefs=await self.app.storage.get_embed_preferences(part['guild'],part['user'])
                 milestone=part.get('milestone')
-                if refresh and part.get('transition'):
+                if refresh and (part.get('transition') or part['meta'].get('completion_reported')):
                     milestone=await self.milestone(part)
                     part['milestone']=milestone
                 lines=[]

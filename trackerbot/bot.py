@@ -1042,14 +1042,15 @@ async def reconcile_watch_progression(g, uid, u, token, changed_types, request_c
             )
             if base:
                 active_watch_bases.add(base)
-            if full_statistics_snapshot:
-                baseline_entries.append({"media_type":media_type,
-                                         "item_key":f"series:{t}:{episode['simkl_id']}:{episode['season_num']}:{episode['episode_number']}",
-                                         "title":episode.get("show_title") or "Untitled",
-                                         "ids":episode.get("ids") or {},
-                                         "runtime_minutes":episode.get("runtime_minutes"),
-                                         "season":episode["season_num"], "episode":episode["episode_number"],
-                                         "watched_at":episode["watched_raw"],"genres":episode.get("genres") or []})
+            # Each requested media catalogue is a complete history for that
+            # type, even when the other types did not change this poll.
+            baseline_entries.append({"media_type":media_type,
+                                     "item_key":f"series:{t}:{episode['simkl_id']}:{episode['season_num']}:{episode['episode_number']}",
+                                     "title":episode.get("show_title") or "Untitled",
+                                     "ids":episode.get("ids") or {},
+                                     "runtime_minutes":episode.get("runtime_minutes"),
+                                     "season":episode["season_num"], "episode":episode["episode_number"],
+                                     "watched_at":episode["watched_raw"],"genres":episode.get("genres") or []})
 
     result=await storage.reconcile_watch_xp(uid, active_watch_bases, media_types)
     if full_statistics_snapshot:
@@ -1072,7 +1073,7 @@ async def reconcile_watch_progression(g, uid, u, token, changed_types, request_c
             log.info("Restored %d missing historical watch XP for user %s.",restored_xp,uid)
     removed_watches=await storage.reconcile_watch_statistics(
         g,uid,active_watch_bases,media_types,
-        baseline_entries=baseline_entries if full_statistics_snapshot else None,
+        baseline_entries=baseline_entries,
         full_snapshot=full_statistics_snapshot,
     )
     if removed_watches:
