@@ -310,7 +310,7 @@ def test_simkl_episode_13_uses_summary_finale_and_retries_missing_season(tmp_pat
 
 def test_same_poll_unverified_completion_does_not_duplicate_episode_post(tmp_path,monkeypatch):
     async def run():
-        _,app,engine,ch,_,sent,sender=await setup(tmp_path,monkeypatch)
+        _,app,engine,ch,message,sent,sender=await setup(tmp_path,monkeypatch)
         app.tmdb._get_series_details.return_value={}
         await engine.single(sender,ch,discord.Embed(description='Watched S1E08'),'10','1','simkl',
                             {'ids':{'tmdb':1},'season':1,'episodes':[8]})
@@ -319,10 +319,17 @@ def test_same_poll_unverified_completion_does_not_duplicate_episode_post(tmp_pat
         assert await engine.single(sender,ch,rollup,'10','1','simkl',meta)
         assert [embed.description for embed in sent]==['Watched S1E08']
 
+        # A title score arriving later edits the episode post, with no claim
+        # that the show is finished while the catalogue is unavailable.
+        engine.contexts[('10','1')]['state']['ratings']=[normalize({'tmdb':1,'user_rating':8},'show','simkl')]
+        await engine.finish()
+        assert message.edit.await_args.kwargs['embed'].description=='Watched S1E08\n\n💬 Your series rating: **8/10**'
+        assert len(sent)==1
+
         # A status-only change on another poll still has a truthful fallback.
         engine.sent=[]
         assert await engine.single(sender,ch,rollup,'10','1','simkl',meta)
-        assert sent[-1].description=='Marked as watched **Show**'
+        assert sent[-1].description=='Marked as watched **Show**\n\n💬 Your series rating: **8/10**'
     asyncio.run(run())
 
 

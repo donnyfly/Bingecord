@@ -250,8 +250,13 @@ def test_episode_range_records_stats_xp_and_challenges_as_one_group(monkeypatch)
             monkeypatch.setattr(bot,"episode_media",AsyncMock(return_value=(None,None,None,45)))
             monkeypatch.setattr(bot,"build_embed",lambda *args,**kwargs:object())
             monkeypatch.setattr(bot,"send_embed",AsyncMock(return_value=True))
+            monkeypatch.setattr(bot.tmdb,"find_series_by_tvdb",AsyncMock(return_value=1234))
+            async def send_details(sender, channel, embed, guild, user, source, meta):
+                assert meta['ids']=={'simkl':1,'tvdb':10,'tmdb':1234}
+                return True
+            monkeypatch.setattr(bot.activity_details,"single",send_details)
             monkeypatch.setattr(bot,"evaluate_achievements",AsyncMock(return_value=[]))
-            item={"show":{"title":"Show","ids":{"simkl":1}},"seasons":[{
+            item={"show":{"title":"Show","ids":{"simkl":1,"tvdb":10}},"seasons":[{
                 "number":1,"episodes":[{"number":n,"watched_at":"2026-09-26T10:00:00Z"}
                                         for n in range(1,6)],
             }]}

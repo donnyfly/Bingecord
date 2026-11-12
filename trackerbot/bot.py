@@ -603,6 +603,12 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
                     title=english_title
             except Exception:
                 log.warning("TMDB anime series title lookup failed for %s.", title, exc_info=True)
+        series_tmdb_id=anime_tmdb_id or es[0].get('tmdb_id')
+        if not series_tmdb_id and es[0].get('tvdb_id'):
+            try:
+                series_tmdb_id=await tmdb.find_series_by_tvdb(es[0]['tvdb_id'])
+            except Exception:
+                log.warning('TMDB series ID lookup failed for %s.', title, exc_info=True)
         for grp in group_consecutive(es):
             try:
                 image,ep_title,episode_imdb_id,episode_runtime=await episode_media(t,grp[0])
@@ -634,12 +640,6 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
             logo=None
             if p["artwork"] in ("auto", "backdrop"):
                 try:
-                    series_tmdb_id=await resolve_anime_tmdb_id({
-                        "tmdb": grp[0].get("tmdb_id"),
-                        "tvdb": grp[0].get("tvdb_id"),
-                    }) if t=="anime" else grp[0].get("tmdb_id")
-                    if series_tmdb_id is None and grp[0].get("tvdb_id") is not None:
-                        series_tmdb_id=await tmdb.find_series_by_tvdb(grp[0]["tvdb_id"])
                     logo=await tmdb.get_tv_logo(series_tmdb_id) if series_tmdb_id is not None else None
                 except Exception:
                     log.warning("TMDB TV logo lookup failed for %s.", title, exc_info=True)
@@ -673,7 +673,7 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
                 await storage.record_activity_batch(g,uid,keys,watch_times,records)
                 if started:
                     await storage.update_activity_state(g,uid,statuses={f"{t}:{sid}":"watching"})
-            detail_meta={'ids':{**(grp[0].get('ids') or {}),**({'tmdb':anime_tmdb_id} if anime_tmdb_id else {})},'movie':False,'season':sn,
+            detail_meta={'ids':{**(grp[0].get('ids') or {}),**({'tmdb':series_tmdb_id} if series_tmdb_id else {})},'movie':False,'season':sn,
                          'episodes':[x['episode_number'] for x in grp],'new_watch':True,'rewatched':kind=='rewatched',
                          'entry_seasons':sorted({x.get('mapped_tvdb_season_num') for x in grp if x.get('mapped_tvdb_season_num') is not None})}
             if batch is not None:

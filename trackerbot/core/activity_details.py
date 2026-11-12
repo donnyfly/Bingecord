@@ -35,7 +35,7 @@ def rating_for(rows,meta,milestone=None):
         candidates.append(('season','Your season rating',milestone['season'],None))
     if scope=='episode' and len(meta.get('episodes') or [])==1:
         candidates.append(('episode','Your episode rating',meta.get('season'),meta['episodes'][0]))
-    if scope in {'movie','show'} or milestone:
+    if scope in {'movie','show'} or milestone or meta.get('completion_reported'):
         candidates.append(('movie' if movie else 'show','Your rating' if movie else 'Your series rating',None,None))
     for kind,label,season,episode in candidates:
         matches=[row for row in rows if row['kind']==kind and ids_match(row['ids'],meta['ids'])
@@ -321,8 +321,17 @@ class ActivityDetails:
             # A completed status from the same poll adds no separate activity
             # when the episode post is already delivered. Missing catalogue
             # evidence still prevents a completion claim on that episode.
-            if any(matching_episode(other) for record in self.sent for other in record['parts']):
-                return True
+            for record in reversed(self.sent):
+                matched=next((other for other in record['parts'] if matching_episode(other)),None)
+                if matched is not None:
+                    # Keep the status's rating context on the original message
+                    # so this poll and later rating refreshes can edit it.
+                    if await self.valid(part):
+                        updated=copy.deepcopy(record)
+                        next(other for other in updated['parts'] if matching_episode(other))['meta']['completion_reported']=True
+                        await self.app.storage.save_activity_message(updated)
+                        matched['meta']['completion_reported']=True
+                    return True
             # A later rollup is redundant only if a recorded milestone still holds.
             recent=await self.app.storage.get_activity_messages(guild)
             if any(matching_episode(other) and other.get('milestone')
