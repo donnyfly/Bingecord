@@ -38,6 +38,17 @@ def test_completion_requires_full_verified_catalog():
     assert outcome(series,seasons,{(1,1),(1,2)},1) is None
 
 
+def test_finale_can_be_verified_by_series_summary_only_for_same_episode():
+    series,seasons=catalog(finale=False)
+    series['last_episode_to_air']={'season_number':1,'episode_number':2,'id':12,'episode_type':'finale'}
+    assert outcome(series,seasons,{(1,1),(1,2)},1)['kind']=='season'
+    assert outcome(series,seasons,{(1,2)},1) is None
+    for different in ({'id':99},{'episode_number':1},{'season_number':2}):
+        summary=series['last_episode_to_air']
+        assert outcome({**series,'last_episode_to_air':{**summary,**different}},
+                       seasons,{(1,1),(1,2)},1)['kind']=='caught_up'
+
+
 def test_personal_scopes_do_not_substitute_series_for_episode():
     rows=[normalize({'show':{'ids':{'tmdb':1}},'user_rating':9},'show','simkl')]
     meta={'ids':{'tmdb':1},'movie':False,'season':1,'episodes':[2]}
@@ -276,6 +287,24 @@ def test_catalog_fetches_current_season_only_until_near_completion(tmp_path,monk
         await engine.catalog(meta)
         assert app.tmdb._get_series_details.await_count==2
         assert app.tmdb._get_season_details.await_count==1  # Immutable old season reused.
+    asyncio.run(run())
+
+
+def test_simkl_episode_13_uses_summary_finale_and_retries_missing_season(tmp_path,monkeypatch):
+    async def run():
+        store,app,engine,ch,_,sent,sender=await setup(tmp_path,monkeypatch)
+        for number in range(1,13):await watch(store,number)
+        series={'status':'Returning Series','seasons':[{'season_number':1,'episode_count':13}],
+                'last_episode_to_air':{'season_number':1,'episode_number':13,'id':113,'episode_type':'finale'}}
+        episodes=[{'id':100+n,'episode_number':n,'air_date':'2020-01-01'} for n in range(1,14)]
+        app.tmdb._get_series_details.return_value=series
+        app.tmdb._get_season_details.side_effect=[None,{'episodes':episodes}]
+        meta={'ids':{'tmdb':1},'season':1,'episodes':[13],'new_watch':True}
+        # A failed catalogue request must not poison the subsequent watch.
+        _,seasons=await engine.catalog(meta)
+        assert seasons=={}
+        await engine.single(sender,ch,discord.Embed(description='Watched S1E13'),'10','1','simkl',meta)
+        assert sent[-1].description=='Watched S1E13\n\n🏁 Finished **Season 1**.'
     asyncio.run(run())
 
 

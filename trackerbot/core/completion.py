@@ -2,6 +2,14 @@
 from datetime import datetime, timezone
 
 
+FINALE_TYPES={'finale','season_finale','series_finale'}
+
+
+def is_finale(episode):
+    return any(str(episode.get(key) or '').lower() in FINALE_TYPES
+               for key in ('episode_type','milestone'))
+
+
 def aired(episode, now):
     stamp=episode.get('air_datetime') or episode.get('air_date')
     if not stamp:return False
@@ -39,7 +47,13 @@ def outcome(series, seasons, watched, season, *, now=None, display_season=None):
               and all(aired(row,now) for row in episodes))
     required={(season,row['episode_number']) for row in episodes}
     last=max(episodes,key=lambda row:row['episode_number']) if episodes else {}
-    finale=str(last.get('episode_type') or last.get('milestone') or '').lower() in {'finale','season_finale','series_finale'}
+    latest=series.get('last_episode_to_air') or {}
+    # TMDB can expose the finale classification on the series summary even
+    # when it is absent from the season's copy of the same episode.
+    same_episode=(latest.get('season_number')==season
+                  and latest.get('episode_number')==last.get('episode_number')
+                  and (not latest.get('id') or not last.get('id') or latest['id']==last['id']))
+    finale=is_finale(last) or (same_episode and is_finale(latest))
     later=any(number>season and summary.get('air_date') and summary['air_date'][:10]<=now.date().isoformat()
               for number,summary in summaries.items())
     confirmed=ended or finale or later or data.get('is_complete') is True

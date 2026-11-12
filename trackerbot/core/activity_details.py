@@ -165,9 +165,17 @@ class ActivityDetails:
                     return number,await self.app.tmdb._get_season_details(sid,number) or {}
             needed=[number for number in required if number not in seasons]
             for number,data in await asyncio.gather(*(load(number) for number in needed)):
-                seasons[number]=data
+                if data.get('episodes'):
+                    seasons[number]=data
+                else:
+                    # An unavailable season is not a valid cached catalogue.
+                    self.app.tmdb._season_cache.pop((int(sid),number),None)
             value=(series,seasons)
-            self.catalogs[key]=(time.monotonic() if not fresh else cached[0],value)
+            if series:
+                self.catalogs[key]=(time.monotonic() if not fresh else cached[0],value)
+            else:
+                self.catalogs.pop(key,None)
+                self.app.tmdb._series_cache.pop(int(sid),None)
             if len(self.catalogs)>500:self.catalogs.pop(next(iter(self.catalogs)))
             return value
 
@@ -235,8 +243,8 @@ class ActivityDetails:
 
     async def prepare(self,part):
         if not await self.valid(part):return part
-        before=await self.milestone(part,include_sent=True)
         after=await self.milestone(part,additional=True,include_sent=True)
+        before=await self.milestone(part,include_sent=True) if after else None
         # Silent imports and already-completed seasons cannot create new milestones.
         part['transition']=bool(after and (not before or after!=before))
         part['milestone']=after if part['transition'] else None
