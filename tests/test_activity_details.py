@@ -38,6 +38,17 @@ def test_completion_requires_full_verified_catalog():
     assert outcome(series,seasons,{(1,1),(1,2)},1) is None
 
 
+def test_finale_can_be_verified_by_series_summary_only_for_same_episode():
+    series,seasons=catalog(finale=False)
+    series['last_episode_to_air']={'season_number':1,'episode_number':2,'id':12,'episode_type':'finale'}
+    assert outcome(series,seasons,{(1,1),(1,2)},1)['kind']=='season'
+    assert outcome(series,seasons,{(1,2)},1) is None
+    for different in ({'id':99},{'episode_number':1},{'season_number':2}):
+        summary=series['last_episode_to_air']
+        assert outcome({**series,'last_episode_to_air':{**summary,**different}},
+                       seasons,{(1,1),(1,2)},1)['kind']=='caught_up'
+
+
 def test_personal_scopes_do_not_substitute_series_for_episode():
     rows=[normalize({'show':{'ids':{'tmdb':1}},'user_rating':9},'show','simkl')]
     meta={'ids':{'tmdb':1},'movie':False,'season':1,'episodes':[2]}
@@ -252,13 +263,24 @@ def test_simkl_import_before_delivery_and_next_cycle_rollup_do_not_hide_or_dupli
         await watch(store,1)
         part={'guild':'10','user':'1','source':'simkl','account':'1'}
         engine.contexts[('10','1')]['before_watches']=await engine.watches(part)
+        engine.contexts[('10','1')]['state']['ratings']=[normalize({'tmdb':1,'rating':8},'show','simkl')]
         await watch(store,2)  # Full reconciliation precedes actual activity delivery.
         meta={'ids':{'tmdb':1},'season':1,'episodes':[2],'new_watch':True}
         await engine.single(sender,ch,discord.Embed(description='Watched S1E02\n⭐ IMDb 8.2/10'),'10','1','simkl',meta)
         assert 'Finished **Season 1**' in sent[-1].description
+        assert 'Your series rating: **8/10**' in sent[-1].description
+        await engine.finish()
+        message.edit.assert_not_awaited()
+        report=await engine.completion_report('10','1')
+        assert report['missing']==[] and report['current_milestone']=='season'
         engine.sent=[]  # Native completed status arrives on the next poll.
         await engine.single(sender,ch,discord.Embed(description='Completed Show'),'10','1','simkl',{'ids':{'tmdb':1},'status':'completed'})
         assert len(sent)==1
+        # An actual unwatch still removes the milestone on a later poll.
+        await store.reconcile_watch_statistics('10','1',{'episode:series:shows:1:1:1:'},{'episode'})
+        await engine.finish()
+        assert 'Finished' not in message.edit.await_args.kwargs['embed'].description
+        assert (await engine.completion_report('10','1'))['missing']==[2]
     asyncio.run(run())
 
 
@@ -279,6 +301,49 @@ def test_catalog_fetches_current_season_only_until_near_completion(tmp_path,monk
     asyncio.run(run())
 
 
+def test_simkl_episode_13_uses_summary_finale_and_retries_missing_season(tmp_path,monkeypatch):
+    async def run():
+        store,app,engine,ch,_,sent,sender=await setup(tmp_path,monkeypatch)
+        for number in range(1,13):await watch(store,number)
+        series={'status':'Returning Series','seasons':[{'season_number':1,'episode_count':13}],
+                'last_episode_to_air':{'season_number':1,'episode_number':13,'id':113,'episode_type':'finale'}}
+        episodes=[{'id':100+n,'episode_number':n,'air_date':'2020-01-01'} for n in range(1,14)]
+        app.tmdb._get_series_details.return_value=series
+        app.tmdb._get_season_details.side_effect=[None,{'episodes':episodes}]
+        meta={'ids':{'tmdb':1},'season':1,'episodes':[13],'new_watch':True}
+        # A failed catalogue request must not poison the subsequent watch.
+        _,seasons=await engine.catalog(meta)
+        assert seasons=={}
+        await engine.single(sender,ch,discord.Embed(description='Watched S1E13'),'10','1','simkl',meta)
+        assert sent[-1].description=='Watched S1E13\n\n🏁 Finished **Season 1**.'
+    asyncio.run(run())
+
+
+def test_same_poll_unverified_completion_does_not_duplicate_episode_post(tmp_path,monkeypatch):
+    async def run():
+        _,app,engine,ch,message,sent,sender=await setup(tmp_path,monkeypatch)
+        app.tmdb._get_series_details.return_value={}
+        await engine.single(sender,ch,discord.Embed(description='Watched S1E08'),'10','1','simkl',
+                            {'ids':{'tmdb':1},'season':1,'episodes':[8]})
+        rollup=discord.Embed(description='Completed **Show**')
+        meta={'ids':{'tmdb':1},'status':'completed'}
+        assert await engine.single(sender,ch,rollup,'10','1','simkl',meta)
+        assert [embed.description for embed in sent]==['Watched S1E08']
+
+        # A title score arriving later edits the episode post, with no claim
+        # that the show is finished while the catalogue is unavailable.
+        engine.contexts[('10','1')]['state']['ratings']=[normalize({'tmdb':1,'user_rating':8},'show','simkl')]
+        await engine.finish()
+        assert message.edit.await_args.kwargs['embed'].description=='Watched S1E08\n\n💬 Your series rating: **8/10**'
+        assert len(sent)==1
+
+        # A status-only change on another poll still has a truthful fallback.
+        engine.sent=[]
+        assert await engine.single(sender,ch,rollup,'10','1','simkl',meta)
+        assert sent[-1].description=='Marked as watched **Show**\n\n💬 Your series rating: **8/10**'
+    asyncio.run(run())
+
+
 def test_native_status_requires_evidence_and_ended_series_gets_correct_label(tmp_path,monkeypatch):
     async def run():
         store,app,engine,ch,message,sent,sender=await setup(tmp_path,monkeypatch)
@@ -293,6 +358,26 @@ def test_native_status_requires_evidence_and_ended_series_gets_correct_label(tmp
         engine.catalogs.clear();app.tmdb._get_series_details.return_value={}
         await engine.single(sender,ch,discord.Embed(description='Completed **Show**'),'10','1','simkl',meta)
         assert sent[-1].description.startswith('Marked as watched **Show**')
+    asyncio.run(run())
+
+
+def test_completion_report_reads_existing_post_and_identifies_missing_episode(tmp_path,monkeypatch):
+    async def run():
+        store,_,engine,ch,message,_,sender=await setup(tmp_path,monkeypatch,('1','2'))
+        await watch(store,2)
+        await engine.single(sender,ch,discord.Embed(title='Show',description='Watched S1E02'),'10','1','simkl',
+                            {'ids':{'simkl':1,'tmdb':1},'season':1,'episodes':[2]})
+        await engine.single(sender,ch,discord.Embed(description='Completed Show'),'10','1','simkl',
+                            {'ids':{'tmdb':1},'status':'completed'})
+        report=await engine.completion_report('10','1')
+        assert report['missing']==[1] and report['episode_mapped'] and report['last_type']=='finale'
+        assert report['posted_milestone'] is None and report['current_milestone'] is None
+        assert await engine.completion_report('10','2') is None
+        await store.record_watch('10','1','episode','Show','series:shows:1:1:1','2020-01-01T12:00:00Z')
+        assert (await engine.completion_report('10','1'))['current_milestone']=='season'
+        message.edit.assert_not_awaited()
+        await engine.finish()
+        assert 'Finished **Season 1**.' in message.edit.await_args.kwargs['embed'].description
     asyncio.run(run())
 
 

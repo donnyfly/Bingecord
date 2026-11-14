@@ -2224,7 +2224,7 @@ class Storage:
             else:
                 events={key:event for key,event in events.items()
                         if str(key).startswith(("wetrakr:","mdblist:")) or event.get("media_type") not in media_types or _watch_base(event) in active_watch_bases}
-                if full_snapshot and baseline_entries is not None:
+                if baseline_entries is not None:
                     present_bases={_watch_base(event) for event in events.values()}
                     for entry in baseline_entries:
                         base=_watch_base(entry)

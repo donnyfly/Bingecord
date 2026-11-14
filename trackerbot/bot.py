@@ -603,6 +603,12 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
                     title=english_title
             except Exception:
                 log.warning("TMDB anime series title lookup failed for %s.", title, exc_info=True)
+        series_tmdb_id=anime_tmdb_id or es[0].get('tmdb_id')
+        if not series_tmdb_id and es[0].get('tvdb_id'):
+            try:
+                series_tmdb_id=await tmdb.find_series_by_tvdb(es[0]['tvdb_id'])
+            except Exception:
+                log.warning('TMDB series ID lookup failed for %s.', title, exc_info=True)
         for grp in group_consecutive(es):
             try:
                 image,ep_title,episode_imdb_id,episode_runtime=await episode_media(t,grp[0])
@@ -634,12 +640,6 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
             logo=None
             if p["artwork"] in ("auto", "backdrop"):
                 try:
-                    series_tmdb_id=await resolve_anime_tmdb_id({
-                        "tmdb": grp[0].get("tmdb_id"),
-                        "tvdb": grp[0].get("tvdb_id"),
-                    }) if t=="anime" else grp[0].get("tmdb_id")
-                    if series_tmdb_id is None and grp[0].get("tvdb_id") is not None:
-                        series_tmdb_id=await tmdb.find_series_by_tvdb(grp[0]["tvdb_id"])
                     logo=await tmdb.get_tv_logo(series_tmdb_id) if series_tmdb_id is not None else None
                 except Exception:
                     log.warning("TMDB TV logo lookup failed for %s.", title, exc_info=True)
@@ -673,7 +673,7 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
                 await storage.record_activity_batch(g,uid,keys,watch_times,records)
                 if started:
                     await storage.update_activity_state(g,uid,statuses={f"{t}:{sid}":"watching"})
-            detail_meta={'ids':{**(grp[0].get('ids') or {}),**({'tmdb':anime_tmdb_id} if anime_tmdb_id else {})},'movie':False,'season':sn,
+            detail_meta={'ids':{**(grp[0].get('ids') or {}),**({'tmdb':series_tmdb_id} if series_tmdb_id else {})},'movie':False,'season':sn,
                          'episodes':[x['episode_number'] for x in grp],'new_watch':True,'rewatched':kind=='rewatched',
                          'entry_seasons':sorted({x.get('mapped_tvdb_season_num') for x in grp if x.get('mapped_tvdb_season_num') is not None})}
             if batch is not None:
@@ -1042,14 +1042,15 @@ async def reconcile_watch_progression(g, uid, u, token, changed_types, request_c
             )
             if base:
                 active_watch_bases.add(base)
-            if full_statistics_snapshot:
-                baseline_entries.append({"media_type":media_type,
-                                         "item_key":f"series:{t}:{episode['simkl_id']}:{episode['season_num']}:{episode['episode_number']}",
-                                         "title":episode.get("show_title") or "Untitled",
-                                         "ids":episode.get("ids") or {},
-                                         "runtime_minutes":episode.get("runtime_minutes"),
-                                         "season":episode["season_num"], "episode":episode["episode_number"],
-                                         "watched_at":episode["watched_raw"],"genres":episode.get("genres") or []})
+            # Each requested media catalogue is a complete history for that
+            # type, even when the other types did not change this poll.
+            baseline_entries.append({"media_type":media_type,
+                                     "item_key":f"series:{t}:{episode['simkl_id']}:{episode['season_num']}:{episode['episode_number']}",
+                                     "title":episode.get("show_title") or "Untitled",
+                                     "ids":episode.get("ids") or {},
+                                     "runtime_minutes":episode.get("runtime_minutes"),
+                                     "season":episode["season_num"], "episode":episode["episode_number"],
+                                     "watched_at":episode["watched_raw"],"genres":episode.get("genres") or []})
 
     result=await storage.reconcile_watch_xp(uid, active_watch_bases, media_types)
     if full_statistics_snapshot:
@@ -1072,7 +1073,7 @@ async def reconcile_watch_progression(g, uid, u, token, changed_types, request_c
             log.info("Restored %d missing historical watch XP for user %s.",restored_xp,uid)
     removed_watches=await storage.reconcile_watch_statistics(
         g,uid,active_watch_bases,media_types,
-        baseline_entries=baseline_entries if full_statistics_snapshot else None,
+        baseline_entries=baseline_entries,
         full_snapshot=full_statistics_snapshot,
     )
     if removed_watches:
@@ -2741,12 +2742,13 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         app_commands.Choice(name="Rank up", value="rank"),
         app_commands.Choice(name="Achievement unlocked", value="achievement"),
         app_commands.Choice(name="Prestige unlocked", value="prestige"),
+        app_commands.Choice(name="Completion", value="completion"),
     ],
     rank=[app_commands.Choice(name=name,value=minimum) for minimum,name in RANKS],
 )
 @app_commands.autocomplete(achievement=achievement_autocomplete)
 @app_commands.describe(
-    feature="Notification to preview",
+    feature="Notification to preview or completion to inspect",
     achievement="Required for an achievement preview",
     level="Optional target level (2-100) for a level/rank preview",
     rank="Optional rank to preview; a chosen level must belong to it",
@@ -2762,6 +2764,32 @@ async def simkl_debug(
 ):
     if not guild_id(i) or not is_admin(i):
         await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True)
+        return
+    if feature.value == "completion":
+        await i.response.defer(ephemeral=True)
+        try:
+            report=await activity_details.completion_report(str(i.guild.id),str(i.user.id))
+        except Exception:
+            log.exception("Could not inspect recent completion activity.")
+            await i.followup.send("Could not inspect completion metadata. Check the bot logs.",ephemeral=True)
+            return
+        if report is None:
+            await i.followup.send("No recent completion activity found for your selected tracker.",ephemeral=True)
+            return
+        title=discord.utils.escape_markdown(report['title'])[:180]
+        missing=report.get('missing')
+        missing_text=('unknown' if missing is None else 'none' if not missing
+                      else ', '.join(map(str,missing[:20]))+(f" (+{len(missing)-20} more)" if len(missing)>20 else ''))
+        await i.followup.send(
+            f"**Completion check: {title}** ({report['source']})\n"
+            f"Posted: {report['posted_milestone'] or 'none'} · Verified now: {report['current_milestone'] or 'none'}\n"
+            f"TMDB series: {report.get('tmdb') or 'unresolved'} · Status: {report.get('series_status') or 'unknown'}\n"
+            f"Season {report.get('season') or '?'}: {report.get('loaded','?')}/{report.get('expected') or '?'} catalogue episodes · "
+            f"Watched episode mapped: {'yes' if report.get('episode_mapped') else 'no'}\n"
+            f"Episodes missing from Bingecord's watch history: {missing_text}\n"
+            f"Season's last episode: {report.get('last_type') or 'unlabelled'} · Air date: {report.get('last_air_date') or 'unknown'}\n"
+            f"Series summary's latest episode: {report.get('latest') or 'unknown'}",
+            ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
         return
     if feature.value == "achievement":
         if achievement is None or achievement not in ACHIEVEMENTS:

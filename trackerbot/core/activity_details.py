@@ -35,7 +35,7 @@ def rating_for(rows,meta,milestone=None):
         candidates.append(('season','Your season rating',milestone['season'],None))
     if scope=='episode' and len(meta.get('episodes') or [])==1:
         candidates.append(('episode','Your episode rating',meta.get('season'),meta['episodes'][0]))
-    if scope in {'movie','show'} or milestone:
+    if scope in {'movie','show'} or milestone or meta.get('completion_reported'):
         candidates.append(('movie' if movie else 'show','Your rating' if movie else 'Your series rating',None,None))
     for kind,label,season,episode in candidates:
         matches=[row for row in rows if row['kind']==kind and ids_match(row['ids'],meta['ids'])
@@ -121,7 +121,10 @@ class ActivityDetails:
             if 'episode' not in row.get('media_type',''):continue
             pieces=str(row.get('item_key','')).split(':')
             if len(pieces)==5 and pieces[0]=='series':
-                try:rows.append({**row,'season':int(pieces[-2]),'episode':int(pieces[-1])})
+                # Older statistics can lack external IDs; the stored native
+                # item key still identifies the exact SIMKL entry.
+                try:rows.append({**row,'ids':{**(row.get('ids') or {}),'simkl':pieces[2]},
+                                 'season':int(pieces[-2]),'episode':int(pieces[-1])})
                 except ValueError:continue
         return rows
 
@@ -165,18 +168,28 @@ class ActivityDetails:
                     return number,await self.app.tmdb._get_season_details(sid,number) or {}
             needed=[number for number in required if number not in seasons]
             for number,data in await asyncio.gather(*(load(number) for number in needed)):
-                seasons[number]=data
+                if data.get('episodes'):
+                    seasons[number]=data
+                else:
+                    # An unavailable season is not a valid cached catalogue.
+                    self.app.tmdb._season_cache.pop((int(sid),number),None)
             value=(series,seasons)
-            self.catalogs[key]=(time.monotonic() if not fresh else cached[0],value)
+            if series:
+                self.catalogs[key]=(time.monotonic() if not fresh else cached[0],value)
+            else:
+                self.catalogs.pop(key,None)
+                self.app.tmdb._series_cache.pop(int(sid),None)
             if len(self.catalogs)>500:self.catalogs.pop(next(iter(self.catalogs)))
             return value
 
-    async def milestone(self,part,*,additional=False,include_sent=False):
+    async def milestone(self,part,*,additional=False,include_sent=False,diagnostic=None):
         meta=part['meta']
         if meta.get('movie') or (meta.get('season') is None and meta.get('status') not in {'completed','caught_up'}):return None
         ctx=self.contexts.get((part['guild'],part['user'])) or {}
         rows=ctx.get('before_watches') if include_sent else None
         if rows is None:rows=await self.watches(part)
+        if diagnostic is not None:
+            diagnostic['tmdb']=meta['ids'].get('tmdb')
         catalog=await self.catalog(meta,rows)
         if not catalog:return None
         series,seasons=catalog
@@ -220,12 +233,44 @@ class ActivityDetails:
                          'source_episode':raw_numbers[index] if index<len(raw_numbers) else number,
                          'episode_ids':meta.get('episode_ids') if len(meta.get('episodes') or [])==1 else {}})
             if value:added.append(value)
-        if not additional and meta.get('new_watch') and not meta.get('rewatched') and part['source']=='simkl':
+        # A SIMKL snapshot can already contain the pending episode. Subtract
+        # it only when comparing the pre-delivery state, never on a live refresh.
+        if include_sent and not additional and meta.get('new_watch') and not meta.get('rewatched') and part['source']=='simkl':
             points.difference_update(added)
         if additional:points.update(added)
         raw_season=added[-1][0] if added else meta.get('source_season') or meta['season']
+        if diagnostic is not None:
+            data=seasons.get(raw_season) or {}
+            numbered={number for season,number in catalog_points if season==raw_season and isinstance(number,int)}
+            summary=next((row for row in series.get('seasons') or [] if row.get('season_number')==raw_season),{})
+            last=max((row for row in data.get('episodes') or [] if isinstance(row.get('episode_number'),int)),
+                     key=lambda row:row['episode_number'],default={})
+            latest=series.get('last_episode_to_air') or {}
+            diagnostic.update(season=raw_season,series_status=series.get('status'),expected=summary.get('episode_count'),
+                              loaded=len(numbered),missing=sorted(number for number in numbered if (raw_season,number) not in points),
+                              episode_mapped=bool(added),last_air_date=last.get('air_datetime') or last.get('air_date'),
+                              last_type=last.get('episode_type') or last.get('milestone'),
+                              latest=f"S{latest.get('season_number')}E{latest.get('episode_number')} {latest.get('episode_type') or latest.get('milestone') or 'unlabelled'}" if latest else None)
         # Never announce a season in a different numbering namespace as the display season.
         return outcome(series,seasons,points,raw_season,display_season=meta['season'])
+
+    async def completion_report(self,guild,user):
+        source=await self.app.storage.get_activity_provider(guild,user)
+        if not source:return None
+        account=await self.app.provider_registry.get(source).link(user)
+        for record in reversed(await self.app.storage.get_activity_messages(guild)):
+            for part in record['parts']:
+                meta=part['meta']
+                if (part['guild'],part['user'],part['source'],str(part['account']))!=(str(guild),str(user),source,str(account.account_id)):
+                    continue
+                if meta.get('movie') or not meta.get('episodes'):continue
+                if not (part.get('transition') or part.get('milestone') or meta.get('completion_reported')):continue
+                diagnostic={}
+                milestone=await self.milestone(part,diagnostic=diagnostic)
+                return {'title':record['base'].get('title') or 'Episode activity','source':source,
+                        'posted_milestone':(part.get('milestone') or {}).get('kind'),
+                        'current_milestone':(milestone or {}).get('kind'),**diagnostic}
+        return None
 
     def participant(self,guild,user,source,meta):
         ctx=self.contexts.get((str(guild),str(user)))
@@ -235,8 +280,8 @@ class ActivityDetails:
 
     async def prepare(self,part):
         if not await self.valid(part):return part
-        before=await self.milestone(part,include_sent=True)
         after=await self.milestone(part,additional=True,include_sent=True)
+        before=await self.milestone(part,include_sent=True) if after else None
         # Silent imports and already-completed seasons cannot create new milestones.
         part['transition']=bool(after and (not before or after!=before))
         part['milestone']=after if part['transition'] else None
@@ -260,7 +305,7 @@ class ActivityDetails:
                 ctx=self.contexts[(part['guild'],part['user'])]
                 prefs=await self.app.storage.get_embed_preferences(part['guild'],part['user'])
                 milestone=part.get('milestone')
-                if refresh and part.get('transition'):
+                if refresh and (part.get('transition') or part['meta'].get('completion_reported')):
                     milestone=await self.milestone(part)
                     part['milestone']=milestone
                 lines=[]
@@ -301,14 +346,34 @@ class ActivityDetails:
 
     async def single(self,sender,channel,embed,guild,user,source,meta):
         part=self.participant(guild,user,source,meta)
-        if part and meta.get('status')=='completed':
-            # Native rollups arriving after the final watch must not duplicate its milestone.
+        if part and meta.get('status')=='completed' and not meta.get('movie'):
+            def matching_episode(other):
+                watch=other['meta']
+                return (all(other[key]==part[key] for key in ('guild','user','source','account'))
+                        and not watch.get('status') and not watch.get('movie') and watch.get('episodes')
+                        and ids_match(watch['ids'],meta['ids'])
+                        and (meta.get('season') is None
+                             or meta['season'] in (watch.get('season'),watch.get('source_season'))))
+
+            # A completed status from the same poll adds no separate activity
+            # when the episode post is already delivered. Missing catalogue
+            # evidence still prevents a completion claim on that episode.
+            for record in reversed(self.sent):
+                matched=next((other for other in record['parts'] if matching_episode(other)),None)
+                if matched is not None:
+                    # Keep the status's rating context on the original message
+                    # so this poll and later rating refreshes can edit it.
+                    if await self.valid(part):
+                        updated=copy.deepcopy(record)
+                        next(other for other in updated['parts'] if matching_episode(other))['meta']['completion_reported']=True
+                        await self.app.storage.save_activity_message(updated)
+                        matched['meta']['completion_reported']=True
+                    return True
+            # A later rollup is redundant only if a recorded milestone still holds.
             recent=await self.app.storage.get_activity_messages(guild)
-            for previous in reversed(recent+self.sent):
-                for other in previous['parts']:
-                    if (other['guild'],other['user'],other['source'],other['account'])==(part['guild'],part['user'],part['source'],part['account']) and ids_match(other['meta']['ids'],meta['ids']) and not other['meta'].get('status') and not other['meta'].get('movie') and other.get('milestone'):
-                        if not await self.milestone(part):continue
-                        return True
+            if any(matching_episode(other) and other.get('milestone')
+                   for record in recent for other in record['parts']) and await self.milestone(part):
+                return True
         return await self.send(sender,channel,embed,[part])
 
     async def remember(self,message):
