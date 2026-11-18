@@ -210,3 +210,10 @@ missing artwork; the lower gradient must keep white text legible.
 - Preview rank transitions, every prestige emblem, a four-digit prestige and long
   achievement names. Check GIF playback, colour cycling, readable text and small
   attachment sizes. No imagery or presentation change alters progression.
+
+GIF rewards use flat dark fills with a subtle, fixed accent tint and no dithering;
+PNG profile and summary gradients remain unchanged. Check the decoded GIFs for
+uniform blank areas, clean lettering, rank-colour transitions and animated sweeps.
+Prestige seals share one antialiased monoline design across profiles and rewards:
+crown, star, faceted diamond, orbit, shield and sun. Review both the 70px profile
+seal and 36px notification seal, including later prestige colour cycles.

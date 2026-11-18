@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from PIL import Image, ImageDraw
 
 from trackerbot.core.achievements import ACHIEVEMENTS
-from trackerbot.presentation.level_visuals import accent_for_tier, prestige_style, _prestige_emblem
+from trackerbot.presentation.level_visuals import accent_for_tier, draw_prestige_badge
 from trackerbot.core.progression import level_progress, rank_for_level
 
 BG=(12,14,20)
@@ -131,9 +131,7 @@ def render_profile_png(name, data, artwork=None):
     text(60,302,data['rank'],24,accent,True,width=520)
     label(666,140,'Shared progression')
     text(666,166,f"Prestige {data['prestige']}",32,WHITE,True,width=260)
-    finish,emblem=prestige_style(data['prestige'])
-    draw.ellipse((946,151,1016,221),fill=finish,outline=WHITE,width=2)
-    _prestige_emblem(draw,981,186,emblem)
+    draw_prestige_badge(image,981,186,data['prestige'])
     card_label(draw,(666,208),'Current prestige XP',size=12,fill=MUTED)
     text(666,229,f"{data['xp']:,}",27,WHITE,True,width=350)
     progress=min(1,data['xp_within']/max(1,data['xp_needed'])) if data['level']<100 else 1

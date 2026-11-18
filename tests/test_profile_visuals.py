@@ -201,3 +201,17 @@ def test_leaderboard_uses_selected_category_and_hides_disabled_progression(monke
     visuals.render_leaderboard_png('Server','Movies',[row],rank_offset=5,show_progression=False)
     assert '7' in rendered and '06' in rendered
     assert not any('Prestige 2' in value or '100,000' in value for value in rendered)
+
+
+def test_prestige_seals_are_distinct_and_fit_both_card_sizes():
+    from trackerbot.presentation.level_visuals import draw_prestige_badge
+    for radius in (18,35):
+        seals=[]
+        for prestige in range(1,7):
+            image=Image.new('RGBA',(radius*2+8,radius*2+8))
+            draw_prestige_badge(image,radius+4,radius+4,prestige,radius=radius)
+            box=image.getbbox()
+            assert box and box[0]>=4 and box[1]>=4
+            assert box[2]<=radius*2+4 and box[3]<=radius*2+4
+            seals.append(image.tobytes())
+        assert len(set(seals))==6

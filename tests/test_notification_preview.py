@@ -484,3 +484,21 @@ def test_debug_leaderboard_uses_private_real_page_renderer(monkeypatch):
         assert kwargs['ephemeral'] is True and kwargs['file'].filename=='leaderboard.png'
         assert captured[0][0]=='Total watches' and captured[0][1][0]['total']==3
     asyncio.run(scenario())
+
+
+def test_gif_cards_keep_flat_fills_without_dither_noise():
+    from trackerbot.presentation.level_visuals import render_prestige_gif
+    animations=[
+        render_level_up_gif(40,rank_for_level(40),previous_level=39,
+                            previous_rank=rank_for_level(39),prestige=2),
+        render_prestige_gif(3),render_achievement_gif('Milestone',2500),
+    ]
+    for animation in animations:
+        image=Image.open(animation)
+        backgrounds=[]
+        for frame in (0,image.n_frames//2,image.n_frames-1):
+            image.seek(frame);rgb=image.convert('RGB')
+            assert len(rgb.crop((2,2,20,260)).getcolors())==1
+            assert len(rgb.crop((248,72,620,94)).getcolors())==1
+            backgrounds.append(rgb.getpixel((10,10)))
+        assert len(set(backgrounds))==1

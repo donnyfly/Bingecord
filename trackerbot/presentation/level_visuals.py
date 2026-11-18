@@ -148,38 +148,59 @@ def prestige_style(prestige: int) -> tuple[tuple[int, int, int], int]:
     return tuple(round(channel * 255) for channel in rgb), index
 
 
-def _prestige_emblem(draw: ImageDraw.ImageDraw, cx: int, cy: int, style: int):
-    """Six crisp geometric insignias that survive GIF palette conversion."""
-    ink=(25, 30, 43)
-    if style == 0:  # crown
-        draw.polygon(((cx - 18, cy - 8), (cx - 10, cy + 4), (cx, cy - 8), (cx + 10, cy + 4), (cx + 18, cy - 8), (cx + 15, cy + 13), (cx - 15, cy + 13)), fill=ink)
-        draw.rectangle((cx - 15, cy + 15, cx + 15, cy + 19), fill=ink)
-    elif style == 1:  # star
-        points=[]
+def _prestige_emblem(draw, cx, cy, style, *, scale=1, ink=(25,30,43)):
+    """Consistent monoline geometry, scaled before rasterisation."""
+    def points(values):
+        return [(round(cx+x*scale),round(cy+y*scale)) for x,y in values]
+    def line(values,width=2.4):
+        draw.line(points(values),fill=ink,width=max(1,round(width*scale)),joint='curve')
+    def ellipse(box,fill=False,width=2.4):
+        coordinates=[round(cx+box[0]*scale),round(cy+box[1]*scale),
+                     round(cx+box[2]*scale),round(cy+box[3]*scale)]
+        draw.ellipse(coordinates,fill=ink if fill else None,outline=None if fill else ink,
+                     width=max(1,round(width*scale)))
+    if style==0:  # crown
+        line([(-18,-9),(-10,0),(0,-13),(10,0),(18,-9),(14,12),(-14,12),(-18,-9)])
+        line([(-13,18),(13,18)])
+    elif style==1:  # star
+        vertices=[]
         for i in range(10):
-            angle=-math.pi / 2 + i * math.pi / 5
-            radius=19 if i % 2 == 0 else 8
-            points.append((cx + round(math.cos(angle) * radius), cy + round(math.sin(angle) * radius)))
-        draw.polygon(points, fill=ink)
-    elif style == 2:  # diamond
-        draw.polygon(((cx, cy - 19), (cx + 18, cy), (cx, cy + 19), (cx - 18, cy)), fill=ink)
-        draw.line(((cx - 18, cy), (cx + 18, cy)), fill=_TEXT, width=2)
-    elif style == 3:  # orbit
-        draw.ellipse((cx - 15, cy - 15, cx + 15, cy + 15), outline=ink, width=4)
-        draw.ellipse((cx - 5, cy - 5, cx + 5, cy + 5), fill=ink)
-        draw.ellipse((cx + 12, cy - 17, cx + 20, cy - 9), fill=ink)
-    elif style == 4:  # shield
-        draw.polygon(((cx, cy - 19), (cx + 17, cy - 11), (cx + 13, cy + 10), (cx, cy + 20), (cx - 13, cy + 10), (cx - 17, cy - 11)), fill=ink)
-        draw.line(((cx, cy - 11), (cx, cy + 11)), fill=_TEXT, width=3)
+            angle=-math.pi/2+i*math.pi/5;radius=20 if i%2==0 else 9
+            vertices.append((math.cos(angle)*radius,math.sin(angle)*radius))
+        line(vertices+[vertices[0]])
+    elif style==2:  # faceted diamond
+        line([(0,-20),(18,0),(0,20),(-18,0),(0,-20)])
+        line([(-18,0),(18,0)],1.5)
+        line([(0,-20),(-6,0),(0,20),(6,0),(0,-20)],1.5)
+    elif style==3:  # orbit
+        ellipse((-17,-17,17,17));ellipse((-4,-4,4,4),True)
+        ellipse((10,-20,19,-11),True)
+    elif style==4:  # shield
+        line([(0,-20),(17,-12),(14,8),(0,20),(-14,8),(-17,-12),(0,-20)])
+        line([(-7,-1),(-1,5),(8,-6)])
     else:  # sun
-        draw.ellipse((cx - 10, cy - 10, cx + 10, cy + 10), fill=ink)
+        ellipse((-9,-9,9,9))
         for i in range(8):
-            angle=i * math.pi / 4
-            draw.line(((cx + round(math.cos(angle) * 15), cy + round(math.sin(angle) * 15)), (cx + round(math.cos(angle) * 21), cy + round(math.sin(angle) * 21))), fill=ink, width=3)
+            angle=i*math.pi/4
+            line([(math.cos(angle)*15,math.sin(angle)*15),
+                  (math.cos(angle)*21,math.sin(angle)*21)])
+
+
+def draw_prestige_badge(image,cx,cy,prestige,*,radius=35):
+    """An antialiased dark seal shared by profile PNGs and reward GIFs."""
+    finish,style=prestige_style(prestige)
+    diameter=radius*2;factor=4;size=diameter*factor
+    badge=Image.new('RGBA',(size,size));draw=ImageDraw.Draw(badge)
+    draw.rounded_rectangle((factor,factor,size-factor-1,size-factor-1),
+                           radius=round(size*.24),fill=_mix(_BG,finish,.045),
+                           outline=_mix(_BG,finish,.65),width=factor)
+    _prestige_emblem(draw,size/2,size/2,style,scale=size/70,ink=finish)
+    badge=badge.resize((diameter,diameter),Image.Resampling.LANCZOS)
+    image.paste(badge,(cx-radius,cy-radius),badge)
 
 
 def render_prestige_gif(prestige: int) -> BytesIO:
-    prestige=max(1,int(prestige));accent,emblem=prestige_style(prestige)
+    prestige=max(1,int(prestige));accent,_=prestige_style(prestige)
     frames=[]
     for index in range(FRAMES):
         t=index/max(1,FRAMES-1);reveal=_ease_out_cubic(t/.72)
@@ -190,8 +211,7 @@ def render_prestige_gif(prestige: int) -> BytesIO:
         _reward_title(draw,'The next chapter')
         _reward_text(draw,(258,173),'XP carries forward',17,_TEXT,width=350)
         _reward_text(draw,(258,204),'Shared progression · All trackers',13,_MUTED,width=405)
-        draw.ellipse((167,72,203,108),fill=accent)
-        _prestige_emblem(draw,185,90,emblem)
+        draw_prestige_badge(image,185,90,prestige,radius=18)
         frames.append(image)
     return _reward_gif(frames)
 
@@ -217,12 +237,13 @@ def _reward_text(draw,xy,value,size,colour,*,width,weight=600):
     card_text(draw,xy,value,font=face,fill=colour)
 
 
-def _reward_frame(accent,reveal,heading):
-    from trackerbot.presentation.card_theme import background,panel
+def _reward_frame(accent,reveal,heading,*,tint=None):
     from trackerbot.presentation.typography import label
-    image=background((WIDTH,HEIGHT),accent);draw=ImageDraw.Draw(image)
+    base=_mix(_BG,tint or accent,.035)
+    image=Image.new('RGB',(WIDTH,HEIGHT),base);draw=ImageDraw.Draw(image)
     label(draw,(30,20),f'Bingecord · {heading}',size=13,fill=accent)
-    panel(image,(28,60,220,232),22);panel(image,(236,60,692,232),22)
+    for box in ((28,60,220,232),(236,60,692,232)):
+        draw.rounded_rectangle(box,22,fill=_mix(base,_TEXT,.06),outline=_mix(base,_TEXT,.12),width=1)
     # The sweep shares the existing animation timing and stays clear of text.
     draw.rounded_rectangle((30,247,690,251),2,fill=_LINE)
     draw.rounded_rectangle((30,247,30+max(4,int(660*reveal)),251),2,fill=accent)
@@ -242,12 +263,12 @@ def _reward_title(draw,value):
 
 
 def _reward_gif(frames):
-    # Use one RGB palette for smooth gradients and stable colours across frames.
+    # Flat fills and one shared palette avoid GIF gradient banding and colour noise.
     sample=Image.new('RGB',(WIDTH*2,HEIGHT))
     sample.paste(frames[0].convert('RGB'),(0,0))
     sample.paste(frames[-1].convert('RGB'),(WIDTH,0))
     palette=sample.quantize(colors=256,method=Image.Quantize.MEDIANCUT)
-    frames=[frame.convert('RGB').quantize(palette=palette,dither=Image.Dither.FLOYDSTEINBERG) for frame in frames]
+    frames=[frame.convert('RGB').quantize(palette=palette,dither=Image.Dither.NONE) for frame in frames]
     output=BytesIO()
     frames[0].save(output,format='GIF',save_all=True,append_images=frames[1:],
                    duration=DURATION_MS,loop=0,optimize=False,disposal=2)
@@ -266,7 +287,7 @@ def render_level_up_gif(level: int, rank: str, *, previous_level: int | None=Non
     for index in range(FRAMES):
         t=index/max(1,FRAMES-1);reveal=_ease_out_cubic(t/.72)
         accent=_mix(before,after,_ease_out_cubic((t-.14)/.55))
-        image,draw=_reward_frame(accent,reveal,'Rank up' if rank_up else 'Level up')
+        image,draw=_reward_frame(accent,reveal,'Rank up' if rank_up else 'Level up',tint=after)
         _reward_text(draw,(48,77),'LEVEL',14,_MUTED,width=150)
         _reward_text(draw,(48,100),str(previous_level if t<.18 else level),78,
                      _mix(_MUTED,_TEXT,reveal),width=150,weight=800)
@@ -275,8 +296,7 @@ def render_level_up_gif(level: int, rank: str, *, previous_level: int | None=Non
         _reward_text(draw,(258,173),'New rank unlocked' if rank_up else 'Keep the story going',17,accent,width=405)
         _reward_text(draw,(258,204),f'Via {source_label}' if source_label else 'Shared progression · All trackers',13,_MUTED,width=405)
         if prestige:
-            colour,emblem=prestige_style(prestige)
-            draw.ellipse((167,72,203,108),fill=colour);_prestige_emblem(draw,185,90,emblem)
+            draw_prestige_badge(image,185,90,prestige,radius=18)
         frames.append(image)
     return _reward_gif(frames)
 
