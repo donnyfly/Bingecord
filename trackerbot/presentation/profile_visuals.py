@@ -72,6 +72,12 @@ def profile_snapshot(stats, progression, achievements, current_streak, longest_s
     top_titles=sorted(title_counts.items(),key=lambda item:(-item[1],item[0]))[:3]
     grouped={}
     events_by_item={row.get('item_key'):row for row in (stats.get('watch_events') or {}).values()}
+    progression_ids={}
+    for event in events:
+        kind=event.get('media_type');stamp=event.get('at');key=event.get('event_key') or ''
+        if kind in {'movie','anime_movie','episode','anime_episode'} and stamp and key.startswith(kind+':') and key.endswith(':'+stamp):
+            item_key=key[len(kind)+1:-(len(stamp)+1)]
+            progression_ids.setdefault(item_key,{}).update(event.get('ids') or {})
     for key,record in titles.items():
         event=events_by_item.get(key) or {}
         pieces=str(key).split(':')
@@ -79,7 +85,10 @@ def profile_snapshot(stats, progression, achievements, current_streak, longest_s
         entry=grouped.setdefault(title_key,{'key':title_key,'title':record.get('title') or 'Untitled','count':0,
                                            'movie':'movie' in str(record.get('type') or event.get('media_type') or ''),'ids':{}})
         entry['count']+=max(0,int(record.get('count',0)))
-        if event.get('ids') or record.get('ids'):entry['ids']=event.get('ids') or record['ids']
+        # Old per-server statistics may lack the external IDs already hydrated
+        # in shared progression. Join by the exact watch key, never title text.
+        entry['ids']={**entry['ids'],**(progression_ids.get(key) or {}),
+                      **(record.get('ids') or {}),**(event.get('ids') or {})}
     featured=sorted(grouped.values(),key=lambda entry:(-entry['count'],entry['key']))[:7]
     return {
         "featured_titles":featured,"level":level,"rank":rank_for_level(level),"xp":int(progression.get("xp",0)),

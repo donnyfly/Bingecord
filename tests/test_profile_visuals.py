@@ -167,3 +167,12 @@ def test_featured_titles_combine_episode_keys_and_keep_provider_ids():
     result=profile_snapshot(stats,{'xp':0},{},0,0)
     assert result['featured_titles']==[{'key':'series:anime:99','title':'Show','movie':False,'count':13,
                                        'ids':{'simkl':99,'tmdb':10}}]
+
+
+def test_legacy_profile_artwork_recovers_ids_from_exact_progression_watch_key():
+    stats={'titles':{'series:anime:99:1:1':{'title':'Show','type':'anime_episode','count':1}},'watch_events':{}}
+    stamp='2026-11-19T01:00:00Z'
+    progression={'xp':0,'xp_events':[{'media_type':'anime_episode','event_key':f'anime_episode:series:anime:99:1:1:{stamp}',
+                                    'at':stamp,'ids':{'simkl':99,'tvdb':10}}]}
+    result=profile_snapshot(stats,progression,{},0,0)
+    assert result['featured_titles'][0]['ids']=={'simkl':99,'tvdb':10}
