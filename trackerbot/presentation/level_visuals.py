@@ -1,6 +1,6 @@
 """Minimal animated progression cards for Discord notifications.
 
-The renderer is deliberately self-contained: no remote assets, fonts, or image hosts.
+The renderer uses bundled Inter fonts and makes no remote asset requests.
 It returns an in-memory GIF that discord.py can attach directly to a message.
 """
 
@@ -10,8 +10,9 @@ from io import BytesIO
 import colorsys
 import math
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 from trackerbot.core.progression import RANKS, rank_for_level
+from trackerbot.presentation.typography import font as card_font, text as card_text
 
 
 WIDTH = 720
@@ -147,85 +148,72 @@ def prestige_style(prestige: int) -> tuple[tuple[int, int, int], int]:
     return tuple(round(channel * 255) for channel in rgb), index
 
 
-def _prestige_emblem(draw: ImageDraw.ImageDraw, cx: int, cy: int, style: int):
-    """Six crisp geometric insignias that survive GIF palette conversion."""
-    ink=(25, 30, 43)
-    if style == 0:  # crown
-        draw.polygon(((cx - 18, cy - 8), (cx - 10, cy + 4), (cx, cy - 8), (cx + 10, cy + 4), (cx + 18, cy - 8), (cx + 15, cy + 13), (cx - 15, cy + 13)), fill=ink)
-        draw.rectangle((cx - 15, cy + 15, cx + 15, cy + 19), fill=ink)
-    elif style == 1:  # star
-        points=[]
+def _prestige_emblem(draw, cx, cy, style, *, scale=1, ink=(25,30,43)):
+    """Consistent monoline geometry, scaled before rasterisation."""
+    def points(values):
+        return [(round(cx+x*scale),round(cy+y*scale)) for x,y in values]
+    def line(values,width=2.4):
+        draw.line(points(values),fill=ink,width=max(1,round(width*scale)),joint='curve')
+    def ellipse(box,fill=False,width=2.4):
+        coordinates=[round(cx+box[0]*scale),round(cy+box[1]*scale),
+                     round(cx+box[2]*scale),round(cy+box[3]*scale)]
+        draw.ellipse(coordinates,fill=ink if fill else None,outline=None if fill else ink,
+                     width=max(1,round(width*scale)))
+    if style==0:  # crown
+        line([(-18,-9),(-10,0),(0,-13),(10,0),(18,-9),(14,12),(-14,12),(-18,-9)])
+        line([(-13,18),(13,18)])
+    elif style==1:  # star
+        vertices=[]
         for i in range(10):
-            angle=-math.pi / 2 + i * math.pi / 5
-            radius=19 if i % 2 == 0 else 8
-            points.append((cx + round(math.cos(angle) * radius), cy + round(math.sin(angle) * radius)))
-        draw.polygon(points, fill=ink)
-    elif style == 2:  # diamond
-        draw.polygon(((cx, cy - 19), (cx + 18, cy), (cx, cy + 19), (cx - 18, cy)), fill=ink)
-        draw.line(((cx - 18, cy), (cx + 18, cy)), fill=_TEXT, width=2)
-    elif style == 3:  # orbit
-        draw.ellipse((cx - 15, cy - 15, cx + 15, cy + 15), outline=ink, width=4)
-        draw.ellipse((cx - 5, cy - 5, cx + 5, cy + 5), fill=ink)
-        draw.ellipse((cx + 12, cy - 17, cx + 20, cy - 9), fill=ink)
-    elif style == 4:  # shield
-        draw.polygon(((cx, cy - 19), (cx + 17, cy - 11), (cx + 13, cy + 10), (cx, cy + 20), (cx - 13, cy + 10), (cx - 17, cy - 11)), fill=ink)
-        draw.line(((cx, cy - 11), (cx, cy + 11)), fill=_TEXT, width=3)
+            angle=-math.pi/2+i*math.pi/5;radius=20 if i%2==0 else 9
+            vertices.append((math.cos(angle)*radius,math.sin(angle)*radius))
+        line(vertices+[vertices[0]])
+    elif style==2:  # faceted diamond
+        line([(0,-20),(18,0),(0,20),(-18,0),(0,-20)])
+        line([(-18,0),(18,0)],1.5)
+        line([(0,-20),(-6,0),(0,20),(6,0),(0,-20)],1.5)
+    elif style==3:  # orbit
+        ellipse((-17,-17,17,17));ellipse((-4,-4,4,4),True)
+        ellipse((10,-20,19,-11),True)
+    elif style==4:  # shield
+        line([(0,-20),(17,-12),(14,8),(0,20),(-14,8),(-17,-12),(0,-20)])
+        line([(-7,-1),(-1,5),(8,-6)])
     else:  # sun
-        draw.ellipse((cx - 10, cy - 10, cx + 10, cy + 10), fill=ink)
+        ellipse((-9,-9,9,9))
         for i in range(8):
-            angle=i * math.pi / 4
-            draw.line(((cx + round(math.cos(angle) * 15), cy + round(math.sin(angle) * 15)), (cx + round(math.cos(angle) * 21), cy + round(math.sin(angle) * 21))), fill=ink, width=3)
+            angle=i*math.pi/4
+            line([(math.cos(angle)*15,math.sin(angle)*15),
+                  (math.cos(angle)*21,math.sin(angle)*21)])
+
+
+def draw_prestige_badge(image,cx,cy,prestige,*,radius=35):
+    """An antialiased dark seal shared by profile PNGs and reward GIFs."""
+    finish,style=prestige_style(prestige)
+    diameter=radius*2;factor=4;size=diameter*factor
+    badge=Image.new('RGBA',(size,size));draw=ImageDraw.Draw(badge)
+    draw.rounded_rectangle((factor,factor,size-factor-1,size-factor-1),
+                           radius=round(size*.24),fill=_mix(_BG,finish,.045),
+                           outline=_mix(_BG,finish,.65),width=factor)
+    _prestige_emblem(draw,size/2,size/2,style,scale=size/70,ink=finish)
+    badge=badge.resize((diameter,diameter),Image.Resampling.LANCZOS)
+    image.paste(badge,(cx-radius,cy-radius),badge)
 
 
 def render_prestige_gif(prestige: int) -> BytesIO:
-    prestige=max(1, int(prestige))
-    accent, emblem=prestige_style(prestige)
-    soft=_mix(_PANEL, accent, 0.55)
+    prestige=max(1,int(prestige));accent,_=prestige_style(prestige)
     frames=[]
     for index in range(FRAMES):
-        t=index / (FRAMES - 1)
-        reveal=_ease_out_cubic(t / 0.72)
-        pulse=math.sin(t * math.pi) ** 2
-        image=Image.new("RGB", (WIDTH, HEIGHT), _BG)
-        draw=ImageDraw.Draw(image)
-        border=_mix(_LINE,accent,0.35)
-        draw.rounded_rectangle((22, 22, WIDTH - 22, HEIGHT - 22), radius=24, fill=_PANEL, outline=border,width=2)
-        # A restrained highlight differentiates prestige from regular ranks.
-        draw.line((WIDTH-169,36,WIDTH-74,36),fill=_mix(_PANEL,accent,0.25),width=2)
-        draw.rounded_rectangle((48, HEIGHT - 35, 48 + int((WIDTH - 96) * reveal), HEIGHT - 31), radius=2, fill=accent)
-        cx,cy=132,137
-        for ring in range(3):
-            phase=max(0.0, min(1.0, t * 1.35 - ring * 0.12))
-            radius=44 + int(phase * 54)
-            draw.ellipse((cx-radius,cy-radius,cx+radius,cy+radius), outline=_mix(_PANEL,soft,(1-phase)*0.8), width=2)
-        radius=34 + int(4*pulse)
-        draw.ellipse((cx-radius,cy-radius,cx+radius,cy+radius), fill=_mix(soft,accent,0.55 + pulse*0.4))
-        _prestige_emblem(draw,cx,cy-6,emblem)
-        tier_label=f"P{prestige}"
-        tier_font=_font(13)
-        tier_width=draw.textbbox((0,0),tier_label,font=tier_font)[2]
-        pill_left=cx-tier_width/2-12
-        pill_right=cx+tier_width/2+12
-        draw.rounded_rectangle((pill_left,cy+46,pill_right,cy+68),radius=11,fill=_PANEL,outline=_mix(_LINE,accent,0.5))
-        draw.text((cx-tier_width/2,cy+49),tier_label,font=tier_font,fill=accent)
-        draw.text((230,58),"PRESTIGE UNLOCKED",font=_font(18),fill=accent)
-        draw.text((230,82),str(prestige),font=_font(78),fill=_mix(_MUTED,_TEXT,reveal))
-        draw.text((234,180),"A NEW CHAPTER",font=_font(26),fill=_TEXT)
-        draw.text((234,212),"XP CARRIES FORWARD",font=_font(15),fill=accent)
+        t=index/max(1,FRAMES-1);reveal=_ease_out_cubic(t/.72)
+        image,draw=_reward_frame(accent,reveal,'Prestige unlocked')
+        _reward_text(draw,(48,77),'PRESTIGE',14,_MUTED,width=150)
+        _reward_text(draw,(48,100),str(prestige),78,_mix(_MUTED,_TEXT,reveal),weight=800,width=150)
+        _reward_text(draw,(48,204),'A new chapter',13,accent,width=150)
+        _reward_title(draw,'The next chapter')
+        _reward_text(draw,(258,173),'XP carries forward',17,_TEXT,width=350)
+        _reward_text(draw,(258,204),'Shared progression · All trackers',13,_MUTED,width=405)
+        draw_prestige_badge(image,185,90,prestige,radius=18)
         frames.append(image)
-    output=BytesIO()
-    frames[0].save(output,format="GIF",save_all=True,append_images=frames[1:],duration=DURATION_MS,loop=0,optimize=True,disposal=2)
-    output.seek(0)
-    return output
-
-
-def _font(size: int):
-    # Pillow's bundled default font keeps the Docker image self-contained.
-    # Recent Pillow versions support scalable load_default(size=...).
-    try:
-        return ImageFont.load_default(size=size)
-    except TypeError:
-        return ImageFont.load_default()
+    return _reward_gif(frames)
 
 
 def _ease_out_cubic(value: float) -> float:
@@ -238,162 +226,126 @@ def _mix(a: tuple[int, int, int], b: tuple[int, int, int], amount: float):
     return tuple(round(x + (y - x) * amount) for x, y in zip(a, b))
 
 
-def render_level_up_gif(
-    level: int,
-    rank: str,
-    *,
-    previous_level: int | None = None,
-    previous_rank: str | None = None,
-    prestige: int = 0,
-    source_label: str | None = None,
-) -> BytesIO:
-    """Render a compact animated GIF for a level-up notification."""
+def _reward_text(draw,xy,value,size,colour,*,width,weight=600):
+    from trackerbot.presentation.typography import SHAPING
+    value=str(value)
+    while size>14 and draw.textlength(value,font=card_font(size,weight=weight),**SHAPING)>width:
+        size-=1
+    face=card_font(size,weight=weight)
+    while value and draw.textlength(value,font=face,**SHAPING)>width:
+        value=value[:-2]+'…'
+    card_text(draw,xy,value,font=face,fill=colour)
 
-    level = max(1, int(level))
-    previous_level = max(1, int(previous_level or max(1, level - 1)))
-    rank = str(rank or "Newcomer")
-    rank_up = bool(previous_rank and previous_rank != rank)
-    prestige = max(0, int(prestige))
-    previous_accent = accent_for_tier(previous_level,prestige)
-    next_accent = accent_for_tier(level,prestige)
-    prestige_accent, prestige_emblem = prestige_style(prestige) if prestige else (None, None)
 
-    frames: list[Image.Image] = []
-    title_font = _font(18)
-    level_font = _font(78)
-    rank_font = _font(26)
-    small_font = _font(15)
+def _reward_frame(accent,reveal,heading,*,tint=None):
+    from trackerbot.presentation.typography import label
+    base=_mix(_BG,tint or accent,.035)
+    image=Image.new('RGB',(WIDTH,HEIGHT),base);draw=ImageDraw.Draw(image)
+    label(draw,(30,20),f'Bingecord · {heading}',size=13,fill=accent)
+    for box in ((28,60,220,232),(236,60,692,232)):
+        draw.rounded_rectangle(box,22,fill=_mix(base,_TEXT,.06),outline=_mix(base,_TEXT,.12),width=1)
+    # The sweep shares the existing animation timing and stays clear of text.
+    draw.rounded_rectangle((30,247,690,251),2,fill=_LINE)
+    draw.rounded_rectangle((30,247,30+max(4,int(660*reveal)),251),2,fill=accent)
+    return image,draw
 
+
+def _reward_title(draw,value):
+    from trackerbot.presentation.typography import SHAPING
+    words=str(value).split();lines=['']
+    for word in words:
+        candidate=(lines[-1]+' '+word).strip()
+        if lines[-1] and draw.textlength(candidate,font=card_font(27,True),**SHAPING)>405 and len(lines)<2:
+            lines.append(word)
+        else:lines[-1]=candidate
+    for index,line in enumerate(lines):
+        _reward_text(draw,(258,101+index*34),line,27,_TEXT,width=405,weight=700)
+
+
+def _reward_gif(frames):
+    # Flat fills and one shared palette avoid GIF gradient banding and colour noise.
+    sample=Image.new('RGB',(WIDTH*2,HEIGHT))
+    sample.paste(frames[0].convert('RGB'),(0,0))
+    sample.paste(frames[-1].convert('RGB'),(WIDTH,0))
+    palette=sample.quantize(colors=256,method=Image.Quantize.MEDIANCUT)
+    frames=[frame.convert('RGB').quantize(palette=palette,dither=Image.Dither.NONE) for frame in frames]
+    output=BytesIO()
+    frames[0].save(output,format='GIF',save_all=True,append_images=frames[1:],
+                   duration=DURATION_MS,loop=0,optimize=False,disposal=2)
+    output.seek(0);return output
+
+
+def render_level_up_gif(level: int, rank: str, *, previous_level: int | None=None,
+                        previous_rank: str | None=None, prestige: int=0,
+                        source_label: str | None=None) -> BytesIO:
+    """Animated editorial card; progression rules and notification API are unchanged."""
+    level=max(1,int(level));previous_level=max(1,int(previous_level or max(1,level-1)))
+    prestige=max(0,int(prestige));rank=str(rank or 'Newcomer')
+    rank_up=bool(previous_rank and previous_rank!=rank)
+    before=accent_for_tier(previous_level,prestige);after=accent_for_tier(level,prestige)
+    frames=[]
     for index in range(FRAMES):
-        t = index / max(FRAMES - 1, 1)
-        reveal = _ease_out_cubic(min(1.0, t / 0.72))
-        pulse = (math.sin(t * math.pi) ** 2)
-        accent = _mix(previous_accent, next_accent, _ease_out_cubic((t - 0.14) / 0.55))
-        accent_soft = _mix(_PANEL, accent, 0.55)
-
-        image = Image.new("RGB", (WIDTH, HEIGHT), _BG)
-        draw = ImageDraw.Draw(image)
-
-        # Quiet panel with a thin animated signal line.
-        border=_mix(_LINE,prestige_accent,0.35) if prestige_accent else _LINE
-        draw.rounded_rectangle((22, 22, WIDTH - 22, HEIGHT - 22), radius=24, fill=_PANEL, outline=border, width=1)
+        t=index/max(1,FRAMES-1);reveal=_ease_out_cubic(t/.72)
+        accent=_mix(before,after,_ease_out_cubic((t-.14)/.55))
+        image,draw=_reward_frame(accent,reveal,'Rank up' if rank_up else 'Level up',tint=after)
+        _reward_text(draw,(48,77),'LEVEL',14,_MUTED,width=150)
+        _reward_text(draw,(48,100),str(previous_level if t<.18 else level),78,
+                     _mix(_MUTED,_TEXT,reveal),width=150,weight=800)
+        _reward_text(draw,(48,204),f'Prestige {prestige}',13,accent,width=150)
+        _reward_title(draw,rank)
+        _reward_text(draw,(258,173),'New rank unlocked' if rank_up else 'Keep the story going',17,accent,width=405)
+        _reward_text(draw,(258,204),f'Via {source_label}' if source_label else 'Shared progression · All trackers',13,_MUTED,width=405)
         if prestige:
-            draw_prestige_backdrop(draw,(27,27,WIDTH-27,HEIGHT-27),accent,prestige)
-        # Give the signal sweep its own footer lane so it never crosses labels.
-        line_y = HEIGHT - 35
-        line_end = 48 + int((WIDTH - 96) * reveal)
-        draw.rounded_rectangle((48, line_y, line_end, line_y + 4), radius=2, fill=accent)
-
-        # Minimal concentric pulse around the level marker.
-        cx, cy = 132, 137
-        for ring in range(3):
-            phase = max(0.0, min(1.0, t * 1.35 - ring * 0.12))
-            radius = 34 + int(phase * 54)
-            fade = max(0.0, 1.0 - phase)
-            ring_color = _mix(_PANEL, accent_soft, fade * 0.75)
-            draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), outline=ring_color, width=2)
-
-        core_radius = (34 if prestige else 27) + int(4 * pulse)
-        core_color=prestige_accent if prestige else accent
-        draw.ellipse((cx - core_radius, cy - core_radius, cx + core_radius, cy + core_radius), fill=_mix(_mix(_PANEL,core_color,0.55), core_color, 0.55 + pulse * 0.4))
-        if prestige:
-            _prestige_emblem(draw,cx,cy,prestige_emblem)
-        else:
-            draw.ellipse((cx - 8, cy - 8, cx + 8, cy + 8), fill=_TEXT)
-
-        # Typography enters without visual clutter.
-        x = 230
-        title = "RANK UP" if rank_up else "LEVEL UP"
-        draw.text((x, 58), title, font=title_font, fill=accent)
-        if prestige:
-            badge=f"PRESTIGE {prestige}"
-            width=draw.textbbox((0,0),badge,font=small_font)[2]
-            badge_center=610
-            draw.text((badge_center-width/2,60), badge, font=small_font, fill=prestige_accent)
-
-        displayed_level = previous_level if t < 0.18 else level
-        level_color = _mix(_MUTED, _TEXT, reveal)
-        draw.text((x, 82), str(displayed_level), font=level_font, fill=level_color)
-
-        rank_y = 180
-        draw.text((x + 4, rank_y), rank, font=rank_font, fill=_TEXT)
-        if rank_up:
-            draw.text((x + 4, rank_y + 32), "NEW RANK" + (f" · VIA {source_label.upper()}" if source_label else ""), font=small_font, fill=accent)
-        else:
-            draw.text((x + 4, rank_y + 32), f"VIA {source_label.upper()}" if source_label else "TRACKER", font=small_font, fill=_MUTED)
-
+            draw_prestige_badge(image,185,90,prestige,radius=18)
         frames.append(image)
+    return _reward_gif(frames)
 
-    output = BytesIO()
-    frames[0].save(
-        output,
-        format="GIF",
-        save_all=True,
-        append_images=frames[1:],
-        duration=DURATION_MS,
-        loop=0,
-        optimize=True,
-        disposal=2,
-    )
-    output.seek(0)
-    return output
+
+def _achievement_medallion(image,reveal,pulse):
+    """Antialiased trophy and restrained laurels; no gradients or external assets."""
+    factor=4;size=144;tile=Image.new('RGBA',(size*factor,size*factor))
+    draw=ImageDraw.Draw(tile);gold=(239,193,104);soft=(88,72,44)
+    def point(x,y):return (round((72+x)*factor),round((72+y)*factor))
+    def line(points,colour=gold,width=2):
+        draw.line([point(x,y) for x,y in points],fill=colour,width=round(width*factor),joint='curve')
+    def circle(radius,colour,width=1,fill=None):
+        draw.ellipse((*point(-radius,-radius),*point(radius,radius)),fill=fill,
+                     outline=colour,width=round(width*factor))
+    circle(51,soft,fill=(35,30,23))
+    circle(45,_mix(soft,gold,.3))
+    # The short arcs draw in with the unlock, rather than sweeping across text.
+    extent=int(300*reveal)
+    if extent:
+        radius=55+2*pulse
+        draw.arc((*point(-radius,-radius),*point(radius,radius)),210,210+extent,fill=gold,width=round(1.5*factor))
+    cup=_mix(soft,gold,.5+.5*reveal)
+    line([(-18,-19),(-14,0),(-7,8),(7,8),(14,0),(18,-19),(-18,-19)],cup,3)
+    line([(-18,-15),(-28,-15),(-26,-3),(-13,3)],cup,2.5)
+    line([(18,-15),(28,-15),(26,-3),(13,3)],cup,2.5)
+    line([(0,8),(0,23)],cup,3)
+    line([(-14,25),(14,25)],cup,3)
+    # Paired leaves give the medal a celebratory silhouette without confetti noise.
+    for side in (-1,1):
+        for y,x in ((-12,61),(1,63),(14,60)):
+            line([(side*x,y+6),(side*(x+5),y),(side*(x+5),y+5)],_mix(soft,gold,.4+.4*reveal),1.5)
+    tile=tile.resize((size,size),Image.Resampling.LANCZOS)
+    image.paste(tile,(52,60),tile)
 
 
 def render_achievement_gif(name: str, xp: int) -> BytesIO:
-    """Render an achievement card in the same visual language as level-ups."""
-    name = str(name or "Achievement")
-    xp = max(0, int(xp))
-    gold = (239, 193, 104)
-    gold_soft = (111, 80, 45)
-    title_font = _font(18)
-    name_size = 36
-    while name_size > 20:
-        name_font = _font(name_size)
-        if ImageDraw.Draw(Image.new("RGB", (1, 1))).textbbox((0, 0), name, font=name_font)[2] <= WIDTH - 280:
-            break
-        name_size -= 2
-    name_font = _font(name_size)
-    xp_font = _font(26)
-    small_font = _font(15)
-    frames: list[Image.Image] = []
-
+    name=str(name or 'Achievement');xp=max(0,int(xp));accent=(239,193,104)
+    frames=[]
     for index in range(FRAMES):
-        t = index / max(FRAMES - 1, 1)
-        reveal = _ease_out_cubic(min(1.0, t / 0.72))
-        pulse = math.sin(t * math.pi) ** 2
-        image = Image.new("RGB", (WIDTH, HEIGHT), _BG)
-        draw = ImageDraw.Draw(image)
-        draw.rounded_rectangle((22, 22, WIDTH - 22, HEIGHT - 22), radius=24, fill=_PANEL, outline=_LINE, width=1)
-        line_y = HEIGHT - 35
-        line_end = 48 + int((WIDTH - 96) * reveal)
-        draw.rounded_rectangle((48, line_y, line_end, line_y + 4), radius=2, fill=gold)
-
-        cx, cy = 132, 137
-        for ring in range(3):
-            phase = max(0.0, min(1.0, t * 1.35 - ring * 0.12))
-            radius = 34 + int(phase * 54)
-            ring_color = _mix(_PANEL, gold_soft, max(0.0, 1.0 - phase) * 0.8)
-            draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), outline=ring_color, width=2)
-        core_radius = 27 + int(4 * pulse)
-        draw.ellipse((cx - core_radius, cy - core_radius, cx + core_radius, cy + core_radius), fill=_mix(gold_soft, gold, 0.55 + pulse * 0.4))
-        # Draw a small trophy directly so the GIF does not depend on emoji fonts.
-        draw.line(((cx - 12, cy - 8), (cx - 20, cy - 8), (cx - 19, cy + 1), (cx - 10, cy + 4)), fill=_TEXT, width=3, joint="curve")
-        draw.line(((cx + 12, cy - 8), (cx + 20, cy - 8), (cx + 19, cy + 1), (cx + 10, cy + 4)), fill=_TEXT, width=3, joint="curve")
-        draw.polygon(((cx - 13, cy - 12), (cx + 13, cy - 12), (cx + 10, cy + 2), (cx + 5, cy + 8), (cx - 5, cy + 8), (cx - 10, cy + 2)), fill=_TEXT)
-        draw.rectangle((cx - 2, cy + 8, cx + 2, cy + 15), fill=_TEXT)
-        draw.rounded_rectangle((cx - 12, cy + 15, cx + 12, cy + 19), radius=2, fill=_TEXT)
-
-        x = 230
-        draw.text((x, 58), "ACHIEVEMENT UNLOCKED", font=title_font, fill=gold)
-        draw.text((x, 93), name, font=name_font, fill=_mix(_MUTED, _TEXT, reveal))
-        draw.text((x + 4, 175), f"+{xp:,} XP", font=xp_font, fill=gold)
-        draw.text((x + 4, 213), "TRACKER", font=small_font, fill=_MUTED)
+        t=index/max(1,FRAMES-1);reveal=_ease_out_cubic(t/.72)
+        image,draw=_reward_frame(accent,reveal,'Achievement unlocked')
+        _achievement_medallion(image,reveal,math.sin(t*math.pi)**2)
+        _reward_text(draw,(82,204),'ACHIEVED',12,accent,width=130)
+        _reward_title(draw,name)
+        reward=f'+{xp:,} XP'
+        from trackerbot.presentation.typography import SHAPING
+        reward_font=card_font(21,weight=700)
+        width=min(405,round(draw.textlength(reward,font=reward_font,**SHAPING))+32)
+        draw.rounded_rectangle((258,183,258+width,221),12,fill=accent)
+        _reward_text(draw,(274,188),reward,21,(28,24,18),width=width-32,weight=700)
         frames.append(image)
-
-    output = BytesIO()
-    frames[0].save(
-        output, format="GIF", save_all=True, append_images=frames[1:],
-        duration=DURATION_MS, loop=0, optimize=True, disposal=2,
-    )
-    output.seek(0)
-    return output
+    return _reward_gif(frames)

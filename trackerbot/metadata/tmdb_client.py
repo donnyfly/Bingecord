@@ -705,6 +705,13 @@ class TmdbClient:
 
                 if not episode:
                     continue
+                # Reject a special (or a mismatched response) when resolving
+                # a regular season. Missing coordinates remain compatible
+                # with providers that omit them on an exact lookup.
+                if ((episode.get('season') is not None and episode['season'] != season_number)
+                        or (episode.get('number') is not None and episode['number'] != episode_number)
+                        or (season_number > 0 and str(episode.get('type') or '').lower().startswith('special'))):
+                    continue
 
                 imdb_id = (episode.get("externals") or {}).get("imdb")
 
@@ -769,6 +776,8 @@ class TmdbClient:
                                 tmdb_season_number = int(season.get("season_number"))
                             except (TypeError, ValueError):
                                 continue
+                            if tmdb_season_number == 0 and season_number != 0:
+                                continue
 
                             season_data = await self._get_season_details(
                                 current_series_id,
@@ -818,6 +827,8 @@ class TmdbClient:
                             try:
                                 tmdb_season_number = int(season.get("season_number"))
                             except (TypeError, ValueError):
+                                continue
+                            if tmdb_season_number == 0 and season_number != 0:
                                 continue
 
                             season_data = await self._get_season_details(
@@ -970,6 +981,8 @@ class TmdbClient:
                     try:
                         season_number = int(season_number)
                     except (TypeError, ValueError):
+                        continue
+                    if season_number == 0 and 0 not in candidates:
                         continue
 
                     season_data = await self._get_season_details(

@@ -2347,16 +2347,18 @@ async def generate_weekly_recap(guild, period="current"):
     label="Current week" if period=="current" else "Previous week"
     return build_weekly_recap(rows,start,end,guild.name,label,with_visual=True),f"{start.isoformat()} → {end.isoformat()}"
 
-async def send_visual_summary(send, guild_name, heading, result, filename):
+async def send_visual_summary(send, guild_name, heading, result, filename, *, icon=None, preview=False):
     (embed,metrics,leaders),subtitle=result
     try:
-        image=await asyncio.to_thread(render_summary_png,guild_name,heading,subtitle,metrics,leaders)
+        from trackerbot.presentation.discord_artwork import load_discord_artwork
+        art=await load_discord_artwork({'icon':icon}) if icon else {}
+        image=await asyncio.to_thread(render_summary_png,guild_name,heading,subtitle,metrics,leaders,icon=art.get('icon'))
         embed.set_image(url=f"attachment://{filename}")
-        await send(embed=embed,file=discord.File(image,filename=filename))
+        await send(embed=embed,file=discord.File(image,filename=filename),**({'ephemeral':True} if preview else {}))
     except Exception:
         log.exception("Could not render or send %s summary; sending embed fallback.",heading)
         embed.set_image(url=None)
-        await send(embed=embed)
+        await send(embed=embed,**({'ephemeral':True} if preview else {}))
 
 async def send_weekly_recap(guild, period="current"):
     if not await feature_enabled(guild.id,"weekly_recaps"):
@@ -2370,7 +2372,7 @@ async def send_weekly_recap(guild, period="current"):
             channel=await bot.fetch_channel(int(channel_id))
         except Exception:
             return False
-    await send_visual_summary(channel.send,guild.name,"weekly recap",await generate_weekly_recap(guild,period),"weekly-recap.png")
+    await send_visual_summary(channel.send,guild.name,"weekly recap",await generate_weekly_recap(guild,period),"weekly-recap.png",icon=getattr(guild,'icon',None))
     return True
 
 async def send_due_weekly_recaps():
@@ -2540,7 +2542,7 @@ async def simkl_weekly_recap(i, period: app_commands.Choice[str] | None = None):
             return
     selected=period.value if period else "current"
     await i.response.defer(ephemeral=True)
-    await send_visual_summary(channel.send,i.guild.name,"weekly recap",await generate_weekly_recap(i.guild,selected),"weekly-recap.png")
+    await send_visual_summary(channel.send,i.guild.name,"weekly recap",await generate_weekly_recap(i.guild,selected),"weekly-recap.png",icon=getattr(i.guild,'icon',None))
     await i.followup.send(f"Posted the **{'current' if selected == 'current' else 'previous'} week** recap in {channel.mention}.",ephemeral=True)
 
 
@@ -2734,7 +2736,7 @@ async def simkl_achievements(i,user: discord.Member | None = None):
     await i.response.send_message(embeds=embeds)
 
 
-@bingecord_commands.command(name="debug",description="(Admin) Privately preview progression notifications without changing XP.")
+@bingecord_commands.command(name="debug",description="(Admin) Privately preview cards and inspect completion without changing XP.")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.choices(
     feature=[
@@ -2743,6 +2745,10 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         app_commands.Choice(name="Achievement unlocked", value="achievement"),
         app_commands.Choice(name="Prestige unlocked", value="prestige"),
         app_commands.Choice(name="Completion", value="completion"),
+        app_commands.Choice(name="Profile card", value="profile"),
+        app_commands.Choice(name="Leaderboard card", value="leaderboard"),
+        app_commands.Choice(name="Server stats card", value="server_stats"),
+        app_commands.Choice(name="Weekly recap card", value="weekly_recap"),
     ],
     rank=[app_commands.Choice(name=name,value=minimum) for minimum,name in RANKS],
 )
@@ -2764,6 +2770,24 @@ async def simkl_debug(
 ):
     if not guild_id(i) or not is_admin(i):
         await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True)
+        return
+    if feature.value == "leaderboard":
+        await show_leaderboard(i,None,preview=True)
+        return
+    if feature.value in {"server_stats","weekly_recap"}:
+        await i.response.defer(ephemeral=True)
+        if feature.value == 'weekly_recap':
+            result=await generate_weekly_recap(i.guild)
+            heading='weekly recap'
+        else:
+            rows=await storage.get_guild_statistics(str(i.guild.id))
+            result=build_server_stats(rows,i.guild.name,with_visual=True),'All-time statistics · Server-wide'
+            heading='server statistics'
+        await send_visual_summary(i.followup.send,i.guild.name,heading,result,'summary-preview.png',
+                                  icon=getattr(i.guild,'icon',None),preview=True)
+        return
+    if feature.value == "profile":
+        await show_profile(i,None,preview=True)
         return
     if feature.value == "completion":
         await i.response.defer(ephemeral=True)
@@ -2846,13 +2870,13 @@ async def simkl_debug(
     if not sent:
         await i.followup.send("Could not send the preview. Check the bot's permissions and logs.", ephemeral=True)
 
-async def show_profile(i,user):
+async def show_profile(i,user,*,preview=False):
     g=guild_id(i)
     if not g:
         await i.response.send_message("This command must be used in a server.",ephemeral=True); return
     target=user or i.user
-    await i.response.defer()
-    await evaluate_achievements(g,str(target.id))
+    await i.response.defer(ephemeral=preview)
+    if not preview:await evaluate_achievements(g,str(target.id))
     stats=await storage.get_statistics(g,str(target.id))
     source = await storage.get_activity_provider(g, str(target.id)) or 'simkl'
     active_wetrakr = source != 'simkl'
@@ -2876,6 +2900,7 @@ async def show_profile(i,user):
     today=datetime.now(ZoneInfo(timezone_info["name"])).date()
     data=profile_snapshot(stats,progression,unlocked_achievements,current,longest,today=today)
     data["provider_label"] = source_label
+    data["preview"] = preview
     data["achievements_enabled"]=features["achievements"]
     embed=discord.Embed(
         title=f"{target.display_name}'s {source_label} Profile",
@@ -2885,7 +2910,10 @@ async def show_profile(i,user):
         color=discord.Color.from_rgb(*accent_for_tier(data["level"],data["prestige"])),
     )
     try:
-        image=await asyncio.to_thread(render_profile_png,target.display_name,data)
+        from trackerbot.presentation.profile_artwork import load_profile_artwork, enrich_profile_genres
+        await enrich_profile_genres(tmdb,data)
+        artwork=await load_profile_artwork(tmdb,data)
+        image=await asyncio.to_thread(render_profile_png,target.display_name,data,artwork)
         embed.set_image(url="attachment://profile.png")
         await i.followup.send(embed=embed,file=discord.File(image,filename="profile.png"))
     except Exception:
@@ -3207,6 +3235,10 @@ LEADERBOARD_CHOICES=[
 @bingecord_commands.command(name="leaderboard",description="Show the server's tracker watch leaderboard.")
 @app_commands.choices(category=LEADERBOARD_CHOICES)
 async def simkl_leaderboard(i,category: app_commands.Choice[str] | None = None):
+    await show_leaderboard(i,category)
+
+
+async def show_leaderboard(i,category=None,*,preview=False):
     g=guild_id(i)
     if not g:
         await i.response.send_message("This command must be used in a server.",ephemeral=True); return
@@ -3215,7 +3247,7 @@ async def simkl_leaderboard(i,category: app_commands.Choice[str] | None = None):
     if not progression_enabled and category in {"xp","level","prestige"}:
         await i.response.send_message("Progression is disabled in this server. Choose a watch category.",ephemeral=True)
         return
-    await i.response.defer()
+    await i.response.defer(**({'ephemeral':True} if preview else {}))
     rows=await storage.get_guild_leaderboard_snapshot(g)
     values=[]
     for row in rows:
@@ -3243,16 +3275,21 @@ async def simkl_leaderboard(i,category: app_commands.Choice[str] | None = None):
         embed=discord.Embed(title=f"{i.guild.name} · {labels[category]}",color=0xEFBE69)
         embed.set_footer(text=f"Page {page}/{pages} · {len(values):,} members · Server watch counts · Global XP and prestige" if progression_enabled
                          else f"Page {page}/{pages} · {len(values):,} members · Server watch counts")
-        if progression_enabled:
-            try:
-                image=await asyncio.to_thread(render_leaderboard_png,i.guild.name,labels[category],page_rows,rank_offset=start)
-                embed.set_image(url="attachment://leaderboard.png")
-                return embed,discord.File(image,filename="leaderboard.png")
-            except Exception:
-                log.exception("Could not render leaderboard page for guild %s; using embed fallback.",g)
+        try:
+            from trackerbot.presentation.discord_artwork import load_discord_artwork
+            assets={}
+            for row in page_rows:
+                member=i.guild.get_member(int(row['discord_user_id']))
+                if member:assets[str(row['discord_user_id'])]=getattr(member,'display_avatar',None)
+            avatars=await load_discord_artwork(assets)
+            image=await asyncio.to_thread(render_leaderboard_png,i.guild.name,labels[category],page_rows,rank_offset=start,avatars=avatars,show_progression=progression_enabled)
+            embed.set_image(url="attachment://leaderboard.png")
+            return embed,discord.File(image,filename="leaderboard.png")
+        except Exception:
+            log.exception("Could not render leaderboard page for guild %s; using embed fallback.",g)
         embed.description="\n".join(
             f"**{n}.** <@{row['discord_user_id']}> · " +
-            (f"P{row['prestige']} L{row['level']} · {row['xp']:,} XP · {row['total']:,} watches"
+            (f"{row[category]:,} · P{row['prestige']} L{row['level']} · {row['xp']:,} current prestige XP"
              if progression_enabled else f"**{row[category]:,}**")
             for n,row in enumerate(page_rows,start+1))
         return embed,None
@@ -3260,6 +3297,7 @@ async def simkl_leaderboard(i,category: app_commands.Choice[str] | None = None):
     view=MemberPages(i.user.id,values,render_page)
     embed,file=await view.render()
     kwargs={"embed":embed,"view":view,"allowed_mentions":discord.AllowedMentions.none()}
+    if preview:kwargs['ephemeral']=True
     if file:
         kwargs["file"]=file
     view.message=await i.followup.send(**kwargs,wait=True)
@@ -3396,7 +3434,7 @@ async def simkl_server_stats(i):
         return
     await i.response.defer()
     result=build_server_stats(rows,i.guild.name,with_visual=True),"All-time statistics · Server-wide"
-    await send_visual_summary(i.followup.send,i.guild.name,"server statistics",result,"server-stats.png")
+    await send_visual_summary(i.followup.send,i.guild.name,"server statistics",result,"server-stats.png",icon=getattr(i.guild,'icon',None))
 
 
 

@@ -158,3 +158,66 @@ Multi-provider and admin rebuild validation:
 - `/bingecord rebuild user:@member source:MDBList` requires Manage Server at preview and apply. Without source, use the target's selected source. Refuse a member from another server, an untracked target, or a provider not linked in this server. Use the target's OAuth credentials internally; never include credentials in the preview or backup.
 - Bind the apply token to the requesting admin, target member and originating server. Reject another admin, another target, another server, a self-service attempt to use an admin token, revoked permissions, and a member unlinking that provider. Repeated successful tokens do nothing further. An admin command must reject ordinary repair tokens before mutation.
 - The private preview/result must clearly say shared progression across servers. Persist requester/target/server in the receipt/backup, preserve other users and settings, refresh only the target's locks/counters, and never replay historical reward/activity notifications. Apply a fresh live preview before marking native-provider rebuilds live-validated.
+
+## Profile design review
+
+Profiles, leaderboards, server stats, weekly recaps and animated rewards share
+the approved editorial design: tinted backgrounds, rounded panels, Inter and
+clear metric hierarchy. `/bingecord debug feature:Profile card` privately renders the
+same card as `/bingecord stats` with the caller's current data, without awarding
+achievements. Existing debug notification options remain available.
+
+Verify SIMKL, WeTrakr and MDBList source labels, shared progression, long names,
+large counts, every prestige theme and missing artwork. Artwork comes from TMDB
+using stored external IDs; unavailable images become title panels. Movie and
+episode totals include the separately labelled anime counts. No watch-time or
+completed-show totals are inferred from incomplete data. Remote images are
+optional, bounded in size/time and never used for progression calculations.
+
+The profile poster strip uses the seven most recently watched distinct titles,
+with uncropped images contained in 2:3 slots. The featured panel stays most
+watched. Missing genres are enriched from exact TMDB/TVDB/IMDb identifiers in
+batches of up to 24 titles per profile request; subsequent requests continue
+through uncached titles. Successful genre metadata is cached in memory for a
+day (reset on restart). The genre panel labels the percentage of watches with
+known genres; bar percentages use that mapped subset and may overlap. Missing
+external IDs remain unresolved rather than being guessed from title text.
+
+All rendered cards use bundled Inter with Regular body text, SemiBold labels,
+Bold headings and ExtraBold display numbers. Italic is bundled for secondary
+text where needed. Fonts load locally in Docker without runtime downloads.
+Check profile, leaderboard, summary and animated reward debug previews for long
+labels and large counts; Discord's native embed font remains controlled by Discord.
+
+Profile review: uppercase labels use Inter's natural kerning and word spacing.
+The progression balance is labelled Current prestige XP, separately from lifetime
+XP in the footer. Check the featured caption/logo over bright artwork as well as
+missing artwork; the lower gradient must keep white text legible.
+
+## Remaining card validation
+
+- Use `/bingecord debug` with Leaderboard card, Server stats card and Weekly recap
+  card. These privately use the same renderers and data as the live commands,
+  without posting a recap or awarding XP. Existing level, rank, prestige and
+  achievement previews use the redesigned animations.
+- Check every leaderboard category, including Movies and Anime: the selected
+  value is prominent. Browse beyond the first five members and confirm global
+  ranks, owner-only buttons and the final partial page. Avatar failures use initials.
+  With progression disabled, watch cards still render and omit XP/prestige.
+- Compare server and weekly metrics with their text embeds. Anime counts are
+  subsets of episode/movie totals. Dates, empty weeks and long server/member/title
+  names must fit. Server icons are optional; Discord art has a three-second budget.
+- Preview rank transitions, every prestige emblem, a four-digit prestige and long
+  achievement names. Check GIF playback, colour cycling, readable text and small
+  attachment sizes. No imagery or presentation change alters progression.
+
+GIF rewards use flat dark fills with a subtle, fixed accent tint and no dithering;
+PNG profile and summary gradients remain unchanged. Check the decoded GIFs for
+uniform blank areas, clean lettering, rank-colour transitions and animated sweeps.
+Prestige seals share one antialiased monoline design across profiles and rewards:
+crown, star, faceted diamond, orbit, shield and sun. Review both the 70px profile
+seal and 36px notification seal, including later prestige colour cycles.
+
+Achievement GIFs have a dedicated trophy medallion with an animated unlock ring
+and a gold XP reward badge. Preview short and two-line achievement names, large
+rewards and the start/end frames; decoration stays clear of the title and reward.
