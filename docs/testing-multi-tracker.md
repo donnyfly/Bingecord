@@ -217,3 +217,7 @@ uniform blank areas, clean lettering, rank-colour transitions and animated sweep
 Prestige seals share one antialiased monoline design across profiles and rewards:
 crown, star, faceted diamond, orbit, shield and sun. Review both the 70px profile
 seal and 36px notification seal, including later prestige colour cycles.
+
+Achievement GIFs have a dedicated trophy medallion with an animated unlock ring
+and a gold XP reward badge. Preview short and two-line achievement names, large
+rewards and the start/end frames; decoration stays clear of the title and reward.

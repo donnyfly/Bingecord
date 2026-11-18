@@ -301,16 +301,51 @@ def render_level_up_gif(level: int, rank: str, *, previous_level: int | None=Non
     return _reward_gif(frames)
 
 
+def _achievement_medallion(image,reveal,pulse):
+    """Antialiased trophy and restrained laurels; no gradients or external assets."""
+    factor=4;size=144;tile=Image.new('RGBA',(size*factor,size*factor))
+    draw=ImageDraw.Draw(tile);gold=(239,193,104);soft=(88,72,44)
+    def point(x,y):return (round((72+x)*factor),round((72+y)*factor))
+    def line(points,colour=gold,width=2):
+        draw.line([point(x,y) for x,y in points],fill=colour,width=round(width*factor),joint='curve')
+    def circle(radius,colour,width=1,fill=None):
+        draw.ellipse((*point(-radius,-radius),*point(radius,radius)),fill=fill,
+                     outline=colour,width=round(width*factor))
+    circle(51,soft,fill=(35,30,23))
+    circle(45,_mix(soft,gold,.3))
+    # The short arcs draw in with the unlock, rather than sweeping across text.
+    extent=int(300*reveal)
+    if extent:
+        radius=55+2*pulse
+        draw.arc((*point(-radius,-radius),*point(radius,radius)),210,210+extent,fill=gold,width=round(1.5*factor))
+    cup=_mix(soft,gold,.5+.5*reveal)
+    line([(-18,-19),(-14,0),(-7,8),(7,8),(14,0),(18,-19),(-18,-19)],cup,3)
+    line([(-18,-15),(-28,-15),(-26,-3),(-13,3)],cup,2.5)
+    line([(18,-15),(28,-15),(26,-3),(13,3)],cup,2.5)
+    line([(0,8),(0,23)],cup,3)
+    line([(-14,25),(14,25)],cup,3)
+    # Paired leaves give the medal a celebratory silhouette without confetti noise.
+    for side in (-1,1):
+        for y,x in ((-12,61),(1,63),(14,60)):
+            line([(side*x,y+6),(side*(x+5),y),(side*(x+5),y+5)],_mix(soft,gold,.4+.4*reveal),1.5)
+    tile=tile.resize((size,size),Image.Resampling.LANCZOS)
+    image.paste(tile,(52,60),tile)
+
+
 def render_achievement_gif(name: str, xp: int) -> BytesIO:
     name=str(name or 'Achievement');xp=max(0,int(xp));accent=(239,193,104)
     frames=[]
     for index in range(FRAMES):
-        reveal=_ease_out_cubic(index/max(1,FRAMES-1)/.72)
+        t=index/max(1,FRAMES-1);reveal=_ease_out_cubic(t/.72)
         image,draw=_reward_frame(accent,reveal,'Achievement unlocked')
-        _reward_text(draw,(48,77),'REWARD',14,_MUTED,width=150)
-        _reward_text(draw,(48,112),f'+{xp:,}',46,_mix(_MUTED,_TEXT,reveal),width=150,weight=800)
-        _reward_text(draw,(48,204),'XP earned',13,accent,width=150)
+        _achievement_medallion(image,reveal,math.sin(t*math.pi)**2)
+        _reward_text(draw,(82,204),'ACHIEVED',12,accent,width=130)
         _reward_title(draw,name)
-        _reward_text(draw,(258,187),'A milestone worth celebrating',15,accent,width=405)
+        reward=f'+{xp:,} XP'
+        from trackerbot.presentation.typography import SHAPING
+        reward_font=card_font(21,weight=700)
+        width=min(405,round(draw.textlength(reward,font=reward_font,**SHAPING))+32)
+        draw.rounded_rectangle((258,183,258+width,221),12,fill=accent)
+        _reward_text(draw,(274,188),reward,21,(28,24,18),width=width-32,weight=700)
         frames.append(image)
     return _reward_gif(frames)
