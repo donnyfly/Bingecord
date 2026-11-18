@@ -161,9 +161,9 @@ Multi-provider and admin rebuild validation:
 
 ## Profile design review
 
-The profile card is the first stage of the visual redesign. Leaderboards,
-recaps and reward notifications retain their existing designs until the profile
-review is complete. `/bingecord debug feature:Profile card` privately renders the
+Profiles, leaderboards, server stats, weekly recaps and animated rewards share
+the approved editorial design: tinted backgrounds, rounded panels, Inter and
+clear metric hierarchy. `/bingecord debug feature:Profile card` privately renders the
 same card as `/bingecord stats` with the caller's current data, without awarding
 achievements. Existing debug notification options remain available.
 
@@ -193,3 +193,20 @@ Profile review: uppercase labels use Inter's natural kerning and word spacing.
 The progression balance is labelled Current prestige XP, separately from lifetime
 XP in the footer. Check the featured caption/logo over bright artwork as well as
 missing artwork; the lower gradient must keep white text legible.
+
+## Remaining card validation
+
+- Use `/bingecord debug` with Leaderboard card, Server stats card and Weekly recap
+  card. These privately use the same renderers and data as the live commands,
+  without posting a recap or awarding XP. Existing level, rank, prestige and
+  achievement previews use the redesigned animations.
+- Check every leaderboard category, including Movies and Anime: the selected
+  value is prominent. Browse beyond the first five members and confirm global
+  ranks, owner-only buttons and the final partial page. Avatar failures use initials.
+  With progression disabled, watch cards still render and omit XP/prestige.
+- Compare server and weekly metrics with their text embeds. Anime counts are
+  subsets of episode/movie totals. Dates, empty weeks and long server/member/title
+  names must fit. Server icons are optional; Discord art has a three-second budget.
+- Preview rank transitions, every prestige emblem, a four-digit prestige and long
+  achievement names. Check GIF playback, colour cycling, readable text and small
+  attachment sizes. No imagery or presentation change alters progression.

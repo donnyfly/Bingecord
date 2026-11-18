@@ -56,7 +56,7 @@ The bot displays **Playing /bingecord help**. Use `/bingecord help` for a privat
 | `/bingecord weekly-recap` | Manage Server | Post/test a weekly recap |
 | `/bingecord status` | Manage Server | View configuration and sync health; optionally check `user: @username` |
 | `/bingecord checknow` | Manage Server | Check selected providers immediately |
-| `/bingecord debug` | Manage Server | Preview progression notifications without changing XP |
+| `/bingecord debug` | Manage Server | Privately preview profile, leaderboard, server/weekly cards and progression notifications without changing XP |
 
 ### Prefer the simple tracker experience?
 

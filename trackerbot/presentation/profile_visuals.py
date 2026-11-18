@@ -2,12 +2,11 @@
 
 from collections import Counter
 from datetime import date, timedelta
-from io import BytesIO
 
 from PIL import Image, ImageDraw
 
 from trackerbot.core.achievements import ACHIEVEMENTS
-from trackerbot.presentation.level_visuals import accent_for_tier, draw_prestige_backdrop, prestige_style, _prestige_emblem
+from trackerbot.presentation.level_visuals import accent_for_tier, prestige_style, _prestige_emblem
 from trackerbot.core.progression import level_progress, rank_for_level
 
 BG=(12,14,20)
@@ -17,11 +16,7 @@ WHITE=(241,243,248)
 MUTED=(151,158,174)
 
 
-from trackerbot.presentation.typography import font as card_font, text as card_text, label as card_label
-
-
-def _font(size):
-    return card_font(size,weight=700 if size>=22 else 600 if size>=15 else 400)
+from trackerbot.presentation.typography import text as card_text, label as card_label
 
 
 def _short(draw, value, font, width):
@@ -31,15 +26,6 @@ def _short(draw, value, font, width):
     while value and draw.textbbox((0,0),value+"…",font=font)[2] > width:
         value=value[:-1]
     return value+"…"
-
-
-def _panel(draw, box):
-    draw.rounded_rectangle(box,radius=21,fill=PANEL,outline=LINE,width=1)
-
-
-def _metric(draw, x, y, label, value, accent, width=200):
-    card_text(draw,(x,y),label.upper(),font=_font(15),fill=MUTED)
-    card_text(draw,(x,y+25),_short(draw,value,_font(29),width),font=_font(29),fill=accent)
 
 
 def profile_snapshot(stats, progression, achievements, current_streak, longest_streak, *, today=None):
@@ -216,52 +202,75 @@ def render_profile_png(name, data, artwork=None):
     return png(image)
 
 
-def render_leaderboard_png(guild_name, category, rows, *, rank_offset=0):
-    image=Image.new("RGB",(1080,235+min(len(rows),10)*61),BG)
-    draw=ImageDraw.Draw(image)
+def render_leaderboard_png(guild_name, category, rows, *, rank_offset=0, avatars=None, show_progression=True):
+    """Five-member editorial pages; the selected category is the primary value."""
+    from trackerbot.presentation.card_theme import background, panel, cover, font, fit, short, png
+    rows=rows[:5];avatars=avatars or {}
     accent=(239,190,105)
-    card_text(draw,(48,35),"TRACKER / LEADERBOARD",font=_font(19),fill=accent)
-    card_text(draw,(48,67),_short(draw,guild_name,_font(35),830),font=_font(35),fill=WHITE)
-    card_text(draw,(48,112),category.upper(),font=_font(17),fill=MUTED)
-    draw.rounded_rectangle((48,149,1032,154),radius=2,fill=accent)
-    card_text(draw,(68,171),"RANK / MEMBER",font=_font(16),fill=MUTED)
-    card_text(draw,(488,171),"PRESTIGE / LEVEL",font=_font(16),fill=MUTED)
-    card_text(draw,(755,171),"XP / WATCHES",font=_font(16),fill=MUTED)
-    for index,row in enumerate(rows[:10]):
-        y=207+index*61
-        _panel(draw,(48,y,1032,y+54))
-        card_text(draw,(67,y+10),f"{rank_offset+index+1:02}",font=_font(25),fill=accent if rank_offset+index<3 else MUTED)
-        card_text(draw,(125,y+11),_short(draw,row["name"],_font(22),335),font=_font(22),fill=WHITE)
-        card_text(draw,(488,y+13),f"P{row['prestige']}  /  L{row['level']}",font=_font(19),fill=WHITE)
-        card_text(draw,(755,y+7),f"{row['xp']:,} XP",font=_font(19),fill=accent)
-        card_text(draw,(755,y+30),f"{row['total']:,} watches",font=_font(15),fill=MUTED)
-    output=BytesIO()
-    image.save(output,format="PNG",optimize=True)
-    output.seek(0)
-    return output
+    image=background((1080,250+len(rows)*110),accent);draw=ImageDraw.Draw(image)
+    def text(x,y,value,size=20,colour=WHITE,bold=False,width=900):
+        card_text(draw,(x,y),value,font=fit(draw,value,size,width,bold),fill=colour)
+    card_label(draw,(56,38),'Bingecord · Leaderboard',fill=MUTED)
+    text(56,70,short(draw,guild_name,32,968,True),32,bold=True)
+    text(56,120,category,19,accent,True)
+    card_label(draw,(56,165),'Rank / member',fill=MUTED)
+    card_label(draw,(748,165),'Current prestige XP' if category=='XP progression' else category,fill=MUTED)
+    key={'Total watches':'total','Episodes':'episodes','Movies':'movies','Anime':'anime',
+         'XP progression':'xp','Level':'level','Prestige':'prestige'}.get(category,'total')
+    for index,row in enumerate(rows):
+        y=200+index*110;position=rank_offset+index+1
+        panel(image,(56,y,1024,y+96),22)
+        text(76,y+26,f'{position:02}',27,accent if position<=3 else MUTED,True,width=62)
+        uid=str(row.get('discord_user_id',''))
+        avatar=avatars.get(uid)
+        if avatar:cover(image,avatar,(152,y+17,214,y+79),31)
+        else:
+            draw.ellipse((152,y+17,214,y+79),fill=LINE)
+            text(170,y+31,str(row.get('name','?'))[:1].upper(),24,accent,True,width=35)
+        text(236,y+15,short(draw,row['name'],24,480,True),24,bold=True,width=480)
+        text(236,y+54,f"Prestige {row['prestige']} · Level {row['level']}" if show_progression else "Server watch history",15,MUTED,width=470)
+        value=row.get(key,0)
+        text(748,y+12,f'{value:,}',32,accent,True,width=250)
+        secondary=(f"{row['total']:,} watches" if key in {'xp','level','prestige'}
+                   else f"{row['xp']:,} current prestige XP")
+        if show_progression:text(748,y+57,secondary,13,MUTED,width=250)
+    text(56,211+len(rows)*110,'Server watch counts · Shared XP, levels and prestige' if show_progression else 'Server watch counts · Members use their selected source',14,MUTED)
+    return png(image)
 
 
-def render_summary_png(guild_name, heading, subtitle, metrics, leaders):
-    """Shared visual language for weekly recaps and all-time server stats."""
-    image=Image.new("RGB",(1080,735),BG)
-    draw=ImageDraw.Draw(image)
-    accent=(239,190,105)
-    card_text(draw,(48,35),f"TRACKER / {heading.upper()}",font=_font(19),fill=accent)
-    card_text(draw,(48,67),_short(draw,guild_name,_font(35),830),font=_font(35),fill=WHITE)
-    card_text(draw,(48,112),_short(draw,subtitle,_font(17),940),font=_font(17),fill=MUTED)
-    draw.rounded_rectangle((48,149,1032,154),radius=2,fill=accent)
-    _panel(draw,(48,178,1032,405))
-    for index,(label,value) in enumerate(metrics[:6]):
-        x=76+(index%3)*320
-        y=205+(index//3)*103
-        _metric(draw,x,y,label,f"{value:,}" if isinstance(value,int) else value,accent,270)
-    _panel(draw,(48,429,1032,690))
-    card_text(draw,(75,454),"HIGHLIGHTS",font=_font(17),fill=accent)
-    for index,(label,value) in enumerate(leaders[:5]):
-        y=495+index*38
-        card_text(draw,(75,y),_short(draw,label.upper(),_font(15),215),font=_font(15),fill=MUTED)
-        card_text(draw,(310,y-2),_short(draw,value,_font(20),690),font=_font(20),fill=WHITE)
-    output=BytesIO()
-    image.save(output,format="PNG",optimize=True)
-    output.seek(0)
-    return output
+def render_summary_png(guild_name, heading, subtitle, metrics, leaders, *, icon=None):
+    """Provider-neutral server and weekly cards using the profile's visual language."""
+    from trackerbot.presentation.card_theme import background, panel, cover, font, fit, short, png
+    accent=(121,159,235) if 'week' in heading.lower() else (239,190,105)
+    image=background((1080,980),accent);draw=ImageDraw.Draw(image)
+    def text(x,y,value,size=20,colour=WHITE,bold=False,width=900):
+        card_text(draw,(x,y),str(value),font=fit(draw,value,size,width,bold),fill=colour)
+    card_label(draw,(56,38),f'Bingecord · {heading}',fill=MUTED)
+    text(56,70,short(draw,guild_name,32,840,True),32,bold=True)
+    text(56,116,short(draw,subtitle,16,900),16,MUTED)
+    if icon:cover(image,icon,(952,42,1024,114),36)
+    main_label,main_value=metrics[0] if metrics else ('Total watches',0)
+    panel(image,(56,160,600,350))
+    card_label(draw,(80,182),main_label,fill=MUTED)
+    text(80,210,f'{main_value:,}' if isinstance(main_value,int) else main_value,78,WHITE,True,width=492)
+    text(80,312,'Across members’ selected trackers',15,MUTED,width=492)
+    panel(image,(620,160,1024,350))
+    people_label,people_value=leaders[0] if leaders else ('Active users','0')
+    card_label(draw,(646,182),people_label,fill=MUTED)
+    text(646,210,people_value,70,accent,True,width=350)
+    text(646,312,'One count per member',15,MUTED,width=350)
+    for idx,(label,value) in enumerate(metrics[1:6]):
+        x=56+idx*196;panel(image,(x,372,x+184,486),20)
+        text(x+16,387,f'{value:,}' if isinstance(value,int) else value,32,WHITE,True,width=152)
+        text(x+16,440,label.lower(),14,MUTED,width=152)
+    panel(image,(56,508,1024,926))
+    card_label(draw,(82,532),'Community highlights',fill=MUTED)
+    highlights=leaders[1:5]
+    if not highlights:text(82,596,'No activity recorded for this period.',23,MUTED,width=900)
+    for idx,(label,value) in enumerate(highlights):
+        y=578+idx*82
+        card_label(draw,(82,y),label,fill=accent)
+        text(82,y+24,short(draw,value,24,914,True),24,WHITE,True,width=914)
+        if idx<len(highlights)-1:draw.line((82,y+69,998,y+69),fill=LINE)
+    text(56,944,'Anime totals are included in episodes and movies · Members use their selected source',14,MUTED)
+    return png(image)

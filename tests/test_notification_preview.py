@@ -439,3 +439,48 @@ def test_debug_profile_uses_live_renderer_without_awarding_achievements(monkeypa
             assert interaction.followup.send.await_args.kwargs['file'].filename=='profile.png'
             assert await store.get_progression('42')==before
     asyncio.run(scenario())
+
+
+def test_debug_server_cards_are_private_and_use_live_renderers(monkeypatch):
+    async def scenario():
+        from io import BytesIO
+        before=await bot.storage.get_progression('42')
+        rows=[{'discord_user_id':'42','simkl_username':'Viewer','statistics':{
+            'episodes_watched':3,'movies_watched':1,'watch_dates':{},'titles':{}}}]
+        monkeypatch.setattr(bot.storage,'get_guild_statistics',AsyncMock(return_value=rows))
+        captured=[]
+        def render(guild,heading,subtitle,metrics,leaders,**kwargs):
+            captured.append((heading,metrics));return BytesIO(b'preview')
+        monkeypatch.setattr(bot,'render_summary_png',render)
+        evaluator=AsyncMock();monkeypatch.setattr(bot,'evaluate_achievements',evaluator)
+        for feature in ('server_stats','weekly_recap'):
+            interaction=_interaction();interaction.guild.name='Server'
+            await bot.simkl_debug.callback(interaction,app_commands.Choice(name=feature,value=feature))
+            interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+            kwargs=interaction.followup.send.await_args.kwargs
+            assert kwargs['ephemeral'] is True
+            assert kwargs['file'].filename=='summary-preview.png'
+        assert [item[0] for item in captured]==['server statistics','weekly recap']
+        assert captured[0][1][0]==('Total watches',4)
+        evaluator.assert_not_awaited()
+        assert await bot.storage.get_progression('42')==before
+    asyncio.run(scenario())
+
+
+def test_debug_leaderboard_uses_private_real_page_renderer(monkeypatch):
+    async def scenario():
+        from io import BytesIO
+        row=dict(discord_user_id='42',simkl_username='Viewer',xp=200,prestige=0,episodes=2,movies=1,anime=0)
+        monkeypatch.setattr(bot.storage,'get_guild_leaderboard_snapshot',AsyncMock(return_value=[row]))
+        monkeypatch.setattr(bot,'feature_enabled',AsyncMock(return_value=True))
+        captured=[]
+        def render(guild,category,rows,**kwargs):
+            captured.append((category,rows,kwargs));return BytesIO(b'preview')
+        monkeypatch.setattr(bot,'render_leaderboard_png',render)
+        interaction=_interaction();interaction.guild.name='Server';interaction.guild.get_member=lambda uid:None
+        await bot.simkl_debug.callback(interaction,app_commands.Choice(name='Leaderboard card',value='leaderboard'))
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+        kwargs=interaction.followup.send.await_args.kwargs
+        assert kwargs['ephemeral'] is True and kwargs['file'].filename=='leaderboard.png'
+        assert captured[0][0]=='Total watches' and captured[0][1][0]['total']==3
+    asyncio.run(scenario())
