@@ -1,28 +1,20 @@
 """Shared editorial card primitives; renderers own their information hierarchy."""
-from functools import lru_cache
 from io import BytesIO
-from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageOps
 
 WHITE=(246,246,247)
 MUTED=(172,176,185)
 
-@lru_cache(maxsize=80)
-def font(size, bold=False):
-    face='DejaVuSans-Bold.ttf' if bold else 'DejaVuSans.ttf'
-    for path in (Path('/usr/share/fonts/truetype/dejavu')/face,Path(face)):
-        try:return ImageFont.truetype(str(path),size)
-        except OSError:pass
-    return ImageFont.load_default(size=size)
+from trackerbot.presentation.typography import font, SHAPING
 
 def fit(draw,text,size,width,bold=False):
     text=str(text)
-    while size>14 and draw.textlength(text,font=font(size,bold))>width:size-=1
+    while size>14 and draw.textlength(text,font=font(size,bold),**SHAPING)>width:size-=1
     return font(size,bold)
 
 def short(draw,text,size,width,bold=False):
     text=str(text or '—');face=font(size,bold)
-    while text and draw.textlength(text,font=face)>width:
+    while text and draw.textlength(text,font=face,**SHAPING)>width:
         text=text[:-2]+'…' if not text.endswith('…') else text[:-2]+'…'
     return text
 

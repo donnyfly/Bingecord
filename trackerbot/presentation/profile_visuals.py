@@ -4,7 +4,7 @@ from collections import Counter
 from datetime import date, timedelta
 from io import BytesIO
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from trackerbot.core.achievements import ACHIEVEMENTS
 from trackerbot.presentation.level_visuals import accent_for_tier, draw_prestige_backdrop, prestige_style, _prestige_emblem
@@ -17,11 +17,11 @@ WHITE=(241,243,248)
 MUTED=(151,158,174)
 
 
+from trackerbot.presentation.typography import font as card_font, text as card_text, label as card_label
+
+
 def _font(size):
-    try:
-        return ImageFont.load_default(size=size)
-    except TypeError:
-        return ImageFont.load_default()
+    return card_font(size,weight=700 if size>=22 else 600 if size>=15 else 400)
 
 
 def _short(draw, value, font, width):
@@ -38,8 +38,8 @@ def _panel(draw, box):
 
 
 def _metric(draw, x, y, label, value, accent, width=200):
-    draw.text((x,y),label.upper(),font=_font(15),fill=MUTED)
-    draw.text((x,y+25),_short(draw,value,_font(29),width),font=_font(29),fill=accent)
+    card_text(draw,(x,y),label.upper(),font=_font(15),fill=MUTED)
+    card_text(draw,(x,y+25),_short(draw,value,_font(29),width),font=_font(29),fill=accent)
 
 
 def profile_snapshot(stats, progression, achievements, current_streak, longest_streak, *, today=None):
@@ -123,8 +123,8 @@ def render_profile_png(name, data, artwork=None):
     image=background((1080,1380),accent,hero);draw=ImageDraw.Draw(image)
     def text(x,y,value,size=20,colour=WHITE,bold=False,width=None):
         value=str(value);face=fit(draw,value,size,width,bold) if width else font(size,bold)
-        draw.text((x,y),value,font=face,fill=colour)
-    def label(x,y,value):text(x,y,value.upper(),14,MUTED,True)
+        card_text(draw,(x,y),value,font=face,fill=colour)
+    def label(x,y,value):card_label(draw,(x,y),value,fill=MUTED)
     def metric(box,value,title,sub=None):
         panel(image,box);x,y,r,b=box;text(x+20,y+16,value,36,WHITE,True,width=r-x-40)
         text(x+20,y+64,title,16,MUTED)
@@ -135,7 +135,7 @@ def render_profile_png(name, data, artwork=None):
     panel(image,(830,48,1024,93),20);text(850,60,provider,16,accent,True,width=154)
     label(60,132,'Level')
     # Masked type echoes the reference without compromising the smaller labels.
-    face=font(142,True);number=str(data['level']);mask=Image.new('L',(470,180))
+    face=font(142,weight=800);number=str(data['level']);mask=Image.new('L',(470,180))
     ImageDraw.Draw(mask).text((0,-12),number,font=face,fill=255)
     fill=Image.new('RGBA',mask.size,WHITE)
     if hero:
@@ -219,21 +219,21 @@ def render_leaderboard_png(guild_name, category, rows, *, rank_offset=0):
     image=Image.new("RGB",(1080,235+min(len(rows),10)*61),BG)
     draw=ImageDraw.Draw(image)
     accent=(239,190,105)
-    draw.text((48,35),"TRACKER / LEADERBOARD",font=_font(19),fill=accent)
-    draw.text((48,67),_short(draw,guild_name,_font(35),830),font=_font(35),fill=WHITE)
-    draw.text((48,112),category.upper(),font=_font(17),fill=MUTED)
+    card_text(draw,(48,35),"TRACKER / LEADERBOARD",font=_font(19),fill=accent)
+    card_text(draw,(48,67),_short(draw,guild_name,_font(35),830),font=_font(35),fill=WHITE)
+    card_text(draw,(48,112),category.upper(),font=_font(17),fill=MUTED)
     draw.rounded_rectangle((48,149,1032,154),radius=2,fill=accent)
-    draw.text((68,171),"RANK / MEMBER",font=_font(16),fill=MUTED)
-    draw.text((488,171),"PRESTIGE / LEVEL",font=_font(16),fill=MUTED)
-    draw.text((755,171),"XP / WATCHES",font=_font(16),fill=MUTED)
+    card_text(draw,(68,171),"RANK / MEMBER",font=_font(16),fill=MUTED)
+    card_text(draw,(488,171),"PRESTIGE / LEVEL",font=_font(16),fill=MUTED)
+    card_text(draw,(755,171),"XP / WATCHES",font=_font(16),fill=MUTED)
     for index,row in enumerate(rows[:10]):
         y=207+index*61
         _panel(draw,(48,y,1032,y+54))
-        draw.text((67,y+10),f"{rank_offset+index+1:02}",font=_font(25),fill=accent if rank_offset+index<3 else MUTED)
-        draw.text((125,y+11),_short(draw,row["name"],_font(22),335),font=_font(22),fill=WHITE)
-        draw.text((488,y+13),f"P{row['prestige']}  /  L{row['level']}",font=_font(19),fill=WHITE)
-        draw.text((755,y+7),f"{row['xp']:,} XP",font=_font(19),fill=accent)
-        draw.text((755,y+30),f"{row['total']:,} watches",font=_font(15),fill=MUTED)
+        card_text(draw,(67,y+10),f"{rank_offset+index+1:02}",font=_font(25),fill=accent if rank_offset+index<3 else MUTED)
+        card_text(draw,(125,y+11),_short(draw,row["name"],_font(22),335),font=_font(22),fill=WHITE)
+        card_text(draw,(488,y+13),f"P{row['prestige']}  /  L{row['level']}",font=_font(19),fill=WHITE)
+        card_text(draw,(755,y+7),f"{row['xp']:,} XP",font=_font(19),fill=accent)
+        card_text(draw,(755,y+30),f"{row['total']:,} watches",font=_font(15),fill=MUTED)
     output=BytesIO()
     image.save(output,format="PNG",optimize=True)
     output.seek(0)
@@ -245,9 +245,9 @@ def render_summary_png(guild_name, heading, subtitle, metrics, leaders):
     image=Image.new("RGB",(1080,735),BG)
     draw=ImageDraw.Draw(image)
     accent=(239,190,105)
-    draw.text((48,35),f"TRACKER / {heading.upper()}",font=_font(19),fill=accent)
-    draw.text((48,67),_short(draw,guild_name,_font(35),830),font=_font(35),fill=WHITE)
-    draw.text((48,112),_short(draw,subtitle,_font(17),940),font=_font(17),fill=MUTED)
+    card_text(draw,(48,35),f"TRACKER / {heading.upper()}",font=_font(19),fill=accent)
+    card_text(draw,(48,67),_short(draw,guild_name,_font(35),830),font=_font(35),fill=WHITE)
+    card_text(draw,(48,112),_short(draw,subtitle,_font(17),940),font=_font(17),fill=MUTED)
     draw.rounded_rectangle((48,149,1032,154),radius=2,fill=accent)
     _panel(draw,(48,178,1032,405))
     for index,(label,value) in enumerate(metrics[:6]):
@@ -255,11 +255,11 @@ def render_summary_png(guild_name, heading, subtitle, metrics, leaders):
         y=205+(index//3)*103
         _metric(draw,x,y,label,f"{value:,}" if isinstance(value,int) else value,accent,270)
     _panel(draw,(48,429,1032,690))
-    draw.text((75,454),"HIGHLIGHTS",font=_font(17),fill=accent)
+    card_text(draw,(75,454),"HIGHLIGHTS",font=_font(17),fill=accent)
     for index,(label,value) in enumerate(leaders[:5]):
         y=495+index*38
-        draw.text((75,y),_short(draw,label.upper(),_font(15),215),font=_font(15),fill=MUTED)
-        draw.text((310,y-2),_short(draw,value,_font(20),690),font=_font(20),fill=WHITE)
+        card_text(draw,(75,y),_short(draw,label.upper(),_font(15),215),font=_font(15),fill=MUTED)
+        card_text(draw,(310,y-2),_short(draw,value,_font(20),690),font=_font(20),fill=WHITE)
     output=BytesIO()
     image.save(output,format="PNG",optimize=True)
     output.seek(0)

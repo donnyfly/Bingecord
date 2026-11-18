@@ -1,6 +1,6 @@
 """Minimal animated progression cards for Discord notifications.
 
-The renderer is deliberately self-contained: no remote assets, fonts, or image hosts.
+The renderer uses bundled Inter fonts and makes no remote asset requests.
 It returns an in-memory GIF that discord.py can attach directly to a message.
 """
 
@@ -10,8 +10,9 @@ from io import BytesIO
 import colorsys
 import math
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 from trackerbot.core.progression import RANKS, rank_for_level
+from trackerbot.presentation.typography import font as card_font, text as card_text
 
 
 WIDTH = 720
@@ -207,11 +208,11 @@ def render_prestige_gif(prestige: int) -> BytesIO:
         pill_left=cx-tier_width/2-12
         pill_right=cx+tier_width/2+12
         draw.rounded_rectangle((pill_left,cy+46,pill_right,cy+68),radius=11,fill=_PANEL,outline=_mix(_LINE,accent,0.5))
-        draw.text((cx-tier_width/2,cy+49),tier_label,font=tier_font,fill=accent)
-        draw.text((230,58),"PRESTIGE UNLOCKED",font=_font(18),fill=accent)
-        draw.text((230,82),str(prestige),font=_font(78),fill=_mix(_MUTED,_TEXT,reveal))
-        draw.text((234,180),"A NEW CHAPTER",font=_font(26),fill=_TEXT)
-        draw.text((234,212),"XP CARRIES FORWARD",font=_font(15),fill=accent)
+        card_text(draw,(cx-tier_width/2,cy+49),tier_label,font=tier_font,fill=accent)
+        card_text(draw,(230,58),"PRESTIGE UNLOCKED",font=_font(18),fill=accent)
+        card_text(draw,(230,82),str(prestige),font=_font(78),fill=_mix(_MUTED,_TEXT,reveal))
+        card_text(draw,(234,180),"A NEW CHAPTER",font=_font(26),fill=_TEXT)
+        card_text(draw,(234,212),"XP CARRIES FORWARD",font=_font(15),fill=accent)
         frames.append(image)
     output=BytesIO()
     frames[0].save(output,format="GIF",save_all=True,append_images=frames[1:],duration=DURATION_MS,loop=0,optimize=True,disposal=2)
@@ -220,12 +221,7 @@ def render_prestige_gif(prestige: int) -> BytesIO:
 
 
 def _font(size: int):
-    # Pillow's bundled default font keeps the Docker image self-contained.
-    # Recent Pillow versions support scalable load_default(size=...).
-    try:
-        return ImageFont.load_default(size=size)
-    except TypeError:
-        return ImageFont.load_default()
+    return card_font(size,weight=800 if size>=70 else 700 if size>=24 else 600 if size>=18 else 400)
 
 
 def _ease_out_cubic(value: float) -> float:
@@ -304,23 +300,23 @@ def render_level_up_gif(
         # Typography enters without visual clutter.
         x = 230
         title = "RANK UP" if rank_up else "LEVEL UP"
-        draw.text((x, 58), title, font=title_font, fill=accent)
+        card_text(draw,(x, 58), title, font=title_font, fill=accent)
         if prestige:
             badge=f"PRESTIGE {prestige}"
             width=draw.textbbox((0,0),badge,font=small_font)[2]
             badge_center=610
-            draw.text((badge_center-width/2,60), badge, font=small_font, fill=prestige_accent)
+            card_text(draw,(badge_center-width/2,60), badge, font=small_font, fill=prestige_accent)
 
         displayed_level = previous_level if t < 0.18 else level
         level_color = _mix(_MUTED, _TEXT, reveal)
-        draw.text((x, 82), str(displayed_level), font=level_font, fill=level_color)
+        card_text(draw,(x, 82), str(displayed_level), font=level_font, fill=level_color)
 
         rank_y = 180
-        draw.text((x + 4, rank_y), rank, font=rank_font, fill=_TEXT)
+        card_text(draw,(x + 4, rank_y), rank, font=rank_font, fill=_TEXT)
         if rank_up:
-            draw.text((x + 4, rank_y + 32), "NEW RANK" + (f" · VIA {source_label.upper()}" if source_label else ""), font=small_font, fill=accent)
+            card_text(draw,(x + 4, rank_y + 32), "NEW RANK" + (f" · VIA {source_label.upper()}" if source_label else ""), font=small_font, fill=accent)
         else:
-            draw.text((x + 4, rank_y + 32), f"VIA {source_label.upper()}" if source_label else "TRACKER", font=small_font, fill=_MUTED)
+            card_text(draw,(x + 4, rank_y + 32), f"VIA {source_label.upper()}" if source_label else "TRACKER", font=small_font, fill=_MUTED)
 
         frames.append(image)
 
@@ -384,10 +380,10 @@ def render_achievement_gif(name: str, xp: int) -> BytesIO:
         draw.rounded_rectangle((cx - 12, cy + 15, cx + 12, cy + 19), radius=2, fill=_TEXT)
 
         x = 230
-        draw.text((x, 58), "ACHIEVEMENT UNLOCKED", font=title_font, fill=gold)
-        draw.text((x, 93), name, font=name_font, fill=_mix(_MUTED, _TEXT, reveal))
-        draw.text((x + 4, 175), f"+{xp:,} XP", font=xp_font, fill=gold)
-        draw.text((x + 4, 213), "TRACKER", font=small_font, fill=_MUTED)
+        card_text(draw,(x, 58), "ACHIEVEMENT UNLOCKED", font=title_font, fill=gold)
+        card_text(draw,(x, 93), name, font=name_font, fill=_mix(_MUTED, _TEXT, reveal))
+        card_text(draw,(x + 4, 175), f"+{xp:,} XP", font=xp_font, fill=gold)
+        card_text(draw,(x + 4, 213), "TRACKER", font=small_font, fill=_MUTED)
         frames.append(image)
 
     output = BytesIO()

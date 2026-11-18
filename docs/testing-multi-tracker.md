@@ -182,3 +182,9 @@ through uncached titles. Successful genre metadata is cached in memory for a
 day (reset on restart). The genre panel labels the percentage of watches with
 known genres; bar percentages use that mapped subset and may overlap. Missing
 external IDs remain unresolved rather than being guessed from title text.
+
+All rendered cards use bundled Inter with Regular body text, SemiBold labels,
+Bold headings and ExtraBold display numbers. Italic is bundled for secondary
+text where needed. Fonts load locally in Docker without runtime downloads.
+Check profile, leaderboard, summary and animated reward debug previews for long
+labels and large counts; Discord's native embed font remains controlled by Discord.
