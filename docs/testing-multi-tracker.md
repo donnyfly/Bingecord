@@ -188,3 +188,8 @@ Bold headings and ExtraBold display numbers. Italic is bundled for secondary
 text where needed. Fonts load locally in Docker without runtime downloads.
 Check profile, leaderboard, summary and animated reward debug previews for long
 labels and large counts; Discord's native embed font remains controlled by Discord.
+
+Profile review: uppercase labels use Inter's natural kerning and word spacing.
+The progression balance is labelled Current prestige XP, separately from lifetime
+XP in the footer. Check the featured caption/logo over bright artwork as well as
+missing artwork; the lower gradient must keep white text legible.

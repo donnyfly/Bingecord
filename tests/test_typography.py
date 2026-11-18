@@ -23,3 +23,13 @@ def test_shared_text_uses_aligned_numbers():
     if SHAPING:
         assert draw.textlength("1111", font=face, **SHAPING) == draw.textlength("8888", font=face, **SHAPING)
     text(draw, (0, 0), "1,234 XP", font=face, fill="white")
+
+
+def test_labels_keep_inter_kerning_and_word_spaces():
+    from trackerbot.presentation.typography import label
+    actual = Image.new("RGB", (500, 80))
+    expected = actual.copy()
+    label(ImageDraw.Draw(actual), (5, 5), "Bingecord · Watch XP")
+    text(ImageDraw.Draw(expected), (5, 5), "BINGECORD · WATCH XP",
+         font=font(14, weight=600), fill=(172, 176, 185))
+    assert actual.tobytes() == expected.tobytes()

@@ -148,7 +148,8 @@ def render_profile_png(name, data, artwork=None):
     finish,emblem=prestige_style(data['prestige'])
     draw.ellipse((946,151,1016,221),fill=finish,outline=WHITE,width=2)
     _prestige_emblem(draw,981,186,emblem)
-    text(666,220,f"{data['xp']:,} XP",29,WHITE,True,width=350)
+    card_label(draw,(666,208),'Current prestige XP',size=12,fill=MUTED)
+    text(666,229,f"{data['xp']:,}",27,WHITE,True,width=350)
     progress=min(1,data['xp_within']/max(1,data['xp_needed'])) if data['level']<100 else 1
     draw.rounded_rectangle((666,270,1024,280),5,fill=LINE)
     if progress:draw.rounded_rectangle((666,270,666+max(10,int(358*progress)),280),5,fill=accent)
@@ -162,12 +163,12 @@ def render_profile_png(name, data, artwork=None):
     box=(56,501,588,943)
     if hero:cover(image,hero,box)
     else:panel(image,box)
-    # A clipped fade keeps the artwork readable behind white type.
+    # Darken the caption and logo area as well as the bottom count.
     fade=Image.new('RGBA',(532,442));fd=ImageDraw.Draw(fade)
-    for y in range(442):fd.line((0,y,532,y),fill=(8,10,12,int(230*(y/441)**1.7)))
+    for y in range(442):fd.line((0,y,532,y),fill=(8,10,12,int(35+205*min(1,y/330)**1.2)))
     rounded=Image.new('L',(532,442));ImageDraw.Draw(rounded).rounded_rectangle((0,0,531,441),25,fill=255)
     fade.putalpha(Image.composite(fade.getchannel('A'),Image.new('L',fade.size),rounded));image.paste(Image.alpha_composite(image.crop(box),fade),(56,501))
-    label(82,746,'Most watched title' if featured else 'Your watch history')
+    card_label(draw,(82,746),'Most watched title' if featured else 'Your watch history',fill=WHITE)
     title=featured[0]['title'] if featured else 'Your next favourite awaits'
     # Two-line wrapping preserves long anime titles.
     words=title.split();lines=['']

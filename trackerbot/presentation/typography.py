@@ -19,8 +19,6 @@ def text(draw,xy,value,**kwargs):
     draw.text(xy,str(value),**SHAPING,**kwargs)
 
 
-def label(draw,xy,value,*,size=14,fill=(172,176,185),spacing=1.2):
-    x,y=xy;face=font(size,weight=600)
-    for char in str(value).upper():
-        text(draw,(x,y),char,font=face,fill=fill)
-        x+=draw.textlength(char,font=face,**SHAPING)+spacing
+def label(draw,xy,value,*,size=14,fill=(172,176,185)):
+    # Shape the full string so Inter keeps its kerning and natural word spaces.
+    text(draw,xy,str(value).upper(),font=font(size,weight=600),fill=fill)
