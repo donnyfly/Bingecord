@@ -2743,6 +2743,7 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         app_commands.Choice(name="Achievement unlocked", value="achievement"),
         app_commands.Choice(name="Prestige unlocked", value="prestige"),
         app_commands.Choice(name="Completion", value="completion"),
+        app_commands.Choice(name="Profile card", value="profile"),
     ],
     rank=[app_commands.Choice(name=name,value=minimum) for minimum,name in RANKS],
 )
@@ -2764,6 +2765,9 @@ async def simkl_debug(
 ):
     if not guild_id(i) or not is_admin(i):
         await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True)
+        return
+    if feature.value == "profile":
+        await show_profile(i,None,preview=True)
         return
     if feature.value == "completion":
         await i.response.defer(ephemeral=True)
@@ -2846,13 +2850,13 @@ async def simkl_debug(
     if not sent:
         await i.followup.send("Could not send the preview. Check the bot's permissions and logs.", ephemeral=True)
 
-async def show_profile(i,user):
+async def show_profile(i,user,*,preview=False):
     g=guild_id(i)
     if not g:
         await i.response.send_message("This command must be used in a server.",ephemeral=True); return
     target=user or i.user
-    await i.response.defer()
-    await evaluate_achievements(g,str(target.id))
+    await i.response.defer(ephemeral=preview)
+    if not preview:await evaluate_achievements(g,str(target.id))
     stats=await storage.get_statistics(g,str(target.id))
     source = await storage.get_activity_provider(g, str(target.id)) or 'simkl'
     active_wetrakr = source != 'simkl'
@@ -2876,6 +2880,7 @@ async def show_profile(i,user):
     today=datetime.now(ZoneInfo(timezone_info["name"])).date()
     data=profile_snapshot(stats,progression,unlocked_achievements,current,longest,today=today)
     data["provider_label"] = source_label
+    data["preview"] = preview
     data["achievements_enabled"]=features["achievements"]
     embed=discord.Embed(
         title=f"{target.display_name}'s {source_label} Profile",
@@ -2885,7 +2890,9 @@ async def show_profile(i,user):
         color=discord.Color.from_rgb(*accent_for_tier(data["level"],data["prestige"])),
     )
     try:
-        image=await asyncio.to_thread(render_profile_png,target.display_name,data)
+        from trackerbot.presentation.profile_artwork import load_profile_artwork
+        artwork=await load_profile_artwork(tmdb,data)
+        image=await asyncio.to_thread(render_profile_png,target.display_name,data,artwork)
         embed.set_image(url="attachment://profile.png")
         await i.followup.send(embed=embed,file=discord.File(image,filename="profile.png"))
     except Exception:

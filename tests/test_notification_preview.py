@@ -413,3 +413,29 @@ def test_consolidated_xp_leaderboard_orders_prestige_then_xp(monkeypatch):
         assert bot.bingecord_commands.get_command("streak") is None
         assert bot.bingecord_commands.get_command("community") is not None
     asyncio.run(scenario())
+
+
+def test_debug_profile_uses_live_renderer_without_awarding_achievements(monkeypatch):
+    async def scenario():
+        from trackerbot.presentation import profile_artwork
+        with tempfile.TemporaryDirectory() as directory:
+            monkeypatch.setattr(storage_module,'DATA_PATH',f'{directory}/store.json')
+            store=storage_module.Storage();monkeypatch.setattr(bot,'storage',store)
+            await store.link_user('123','42','token',None,'Viewer','2026-09-20T00:00:00Z')
+            await store.record_watch('123','42','episode','Show','series:shows:1:1:1','2026-09-20T00:00:00Z')
+            interaction=_interaction();interaction.user.display_name='Viewer'
+            evaluator=AsyncMock();monkeypatch.setattr(bot,'evaluate_achievements',evaluator)
+            monkeypatch.setattr(profile_artwork,'load_profile_artwork',AsyncMock(return_value={}))
+            # The callback still invokes the same exported renderer as /stats.
+            captured=[]
+            def render(name,data,art):captured.append((name,data,art));return BytesIO(b'profile-preview')
+            from io import BytesIO
+            monkeypatch.setattr(bot,'render_profile_png',render)
+            before=await store.get_progression('42')
+            await bot.simkl_debug.callback(interaction,app_commands.Choice(name='Profile card',value='profile'))
+            evaluator.assert_not_awaited()
+            assert captured[0][0]=='Viewer' and captured[0][1]['provider_label']=='SIMKL'
+            interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+            assert interaction.followup.send.await_args.kwargs['file'].filename=='profile.png'
+            assert await store.get_progression('42')==before
+    asyncio.run(scenario())

@@ -158,3 +158,18 @@ Multi-provider and admin rebuild validation:
 - `/bingecord rebuild user:@member source:MDBList` requires Manage Server at preview and apply. Without source, use the target's selected source. Refuse a member from another server, an untracked target, or a provider not linked in this server. Use the target's OAuth credentials internally; never include credentials in the preview or backup.
 - Bind the apply token to the requesting admin, target member and originating server. Reject another admin, another target, another server, a self-service attempt to use an admin token, revoked permissions, and a member unlinking that provider. Repeated successful tokens do nothing further. An admin command must reject ordinary repair tokens before mutation.
 - The private preview/result must clearly say shared progression across servers. Persist requester/target/server in the receipt/backup, preserve other users and settings, refresh only the target's locks/counters, and never replay historical reward/activity notifications. Apply a fresh live preview before marking native-provider rebuilds live-validated.
+
+## Profile design review
+
+The profile card is the first stage of the visual redesign. Leaderboards,
+recaps and reward notifications retain their existing designs until the profile
+review is complete. `/bingecord debug feature:Profile card` privately renders the
+same card as `/bingecord stats` with the caller's current data, without awarding
+achievements. Existing debug notification options remain available.
+
+Verify SIMKL, WeTrakr and MDBList source labels, shared progression, long names,
+large counts, every prestige theme and missing artwork. Artwork comes from TMDB
+using stored external IDs; unavailable images become title panels. Movie and
+episode totals include the separately labelled anime counts. No watch-time or
+completed-show totals are inferred from incomplete data. Remote images are
+optional, bounded in size/time and never used for progression calculations.

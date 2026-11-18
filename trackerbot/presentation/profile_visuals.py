@@ -70,8 +70,19 @@ def profile_snapshot(stats, progression, achievements, current_streak, longest_s
     community_xp=sum(int(value) for value in (progression.get("community_rewards") or {}).values())
     top_genres=sorted(genres.items(),key=lambda item:(-item[1],item[0]))[:3]
     top_titles=sorted(title_counts.items(),key=lambda item:(-item[1],item[0]))[:3]
+    grouped={}
+    events_by_item={row.get('item_key'):row for row in (stats.get('watch_events') or {}).values()}
+    for key,record in titles.items():
+        event=events_by_item.get(key) or {}
+        pieces=str(key).split(':')
+        title_key=':'.join(pieces[:3]) if pieces[0]=='series' and len(pieces)==5 else key
+        entry=grouped.setdefault(title_key,{'key':title_key,'title':record.get('title') or 'Untitled','count':0,
+                                           'movie':'movie' in str(record.get('type') or event.get('media_type') or ''),'ids':{}})
+        entry['count']+=max(0,int(record.get('count',0)))
+        if event.get('ids') or record.get('ids'):entry['ids']=event.get('ids') or record['ids']
+    featured=sorted(grouped.values(),key=lambda entry:(-entry['count'],entry['key']))[:7]
     return {
-        "level":level,"rank":rank_for_level(level),"xp":int(progression.get("xp",0)),
+        "featured_titles":featured,"level":level,"rank":rank_for_level(level),"xp":int(progression.get("xp",0)),
         "xp_within":within,"xp_needed":needed,"prestige":int(progression.get("prestige",0)),
         "lifetime_xp":int(progression.get("lifetime_xp",0)),
         "watch_xp":watch_xp,"achievement_xp":achievement_xp,"challenge_xp":challenge_xp,"community_xp":community_xp,
@@ -86,85 +97,102 @@ def profile_snapshot(stats, progression, achievements, current_streak, longest_s
     }
 
 
-def render_profile_png(name, data):
-    width,height=1080,1065
-    image=Image.new("RGB",(width,height),BG)
-    draw=ImageDraw.Draw(image)
-    prestige=int(data["prestige"])
-    accent=accent_for_tier(data["level"],prestige)
-    if prestige:
-        # A clipped motif behind the header marks the prestige while keeping
-        # the statistics panels and their small labels on a solid dark surface.
-        header=Image.new("RGB",(984,108),tuple(round(b*0.85+a*0.15) for b,a in zip(BG,accent)))
-        header_draw=ImageDraw.Draw(header)
-        draw_prestige_backdrop(header_draw,(0,0,984,108),accent,prestige)
-        mask=Image.new("L",header.size,0)
-        ImageDraw.Draw(mask).rounded_rectangle((0,0,983,107),radius=20,fill=255)
-        image.paste(header,(48,24),mask)
-        draw=ImageDraw.Draw(image)
-    draw.text((48,36),f"{data.get('provider_label', 'TRACKER').upper()} / PROFILE",font=_font(19),fill=accent)
-    badge_left=933 if prestige else 960
-    name_width=badge_left-48-28
-    draw.text((48,67),_short(draw,name,_font(37),name_width),font=_font(37),fill=WHITE)
-    if prestige:
-        finish, emblem=prestige_style(prestige)
-        draw.ellipse((953,42,1019,108),fill=finish,outline=WHITE,width=2)
-        _prestige_emblem(draw,986,75,emblem)
+def render_profile_png(name, data, artwork=None):
+    """Render the editorial profile; optional images never change the numbers."""
+    from trackerbot.presentation.card_theme import background, panel, cover, font, fit, short, png
+    artwork=artwork or {};featured=data.get('featured_titles') or []
+    hero=artwork.get('hero')
+    accent=accent_for_tier(data['level'],data['prestige'])
+    image=background((1080,1350),accent,hero);draw=ImageDraw.Draw(image)
+    def text(x,y,value,size=20,colour=WHITE,bold=False,width=None):
+        value=str(value);face=fit(draw,value,size,width,bold) if width else font(size,bold)
+        draw.text((x,y),value,font=face,fill=colour)
+    def label(x,y,value):text(x,y,value.upper(),14,MUTED,True)
+    def metric(box,value,title,sub=None):
+        panel(image,box);x,y,r,b=box;text(x+20,y+16,value,36,WHITE,True,width=r-x-40)
+        text(x+20,y+64,title,16,MUTED)
+        if sub:text(x+20,y+88,sub,13,MUTED)
+    label(56,38,'Bingecord · Profile preview' if data.get('preview') else 'Bingecord · Tracker profile')
+    text(56,70,short(draw,name,32,720,True),32,WHITE,True)
+    provider=str(data.get('provider_label','Tracker')).upper()
+    panel(image,(830,48,1024,93),20);text(850,60,provider,16,accent,True,width=154)
+    label(60,132,'Level')
+    # Masked type echoes the reference without compromising the smaller labels.
+    face=font(142,True);number=str(data['level']);mask=Image.new('L',(470,180))
+    ImageDraw.Draw(mask).text((0,-12),number,font=face,fill=255)
+    fill=Image.new('RGBA',mask.size,WHITE)
+    if hero:
+        from PIL import ImageOps, ImageEnhance
+        fill=ImageEnhance.Brightness(ImageOps.fit(hero.convert('RGB'),mask.size)).enhance(1.25).convert('RGBA')
+    image.paste(fill,(50,158),mask)
+    text(60,302,data['rank'],24,accent,True,width=520)
+    label(666,140,'Shared progression')
+    text(666,166,f"Prestige {data['prestige']}",32,WHITE,True,width=260)
+    finish,emblem=prestige_style(data['prestige'])
+    draw.ellipse((946,151,1016,221),fill=finish,outline=WHITE,width=2)
+    _prestige_emblem(draw,981,186,emblem)
+    text(666,220,f"{data['xp']:,} XP",29,WHITE,True,width=350)
+    progress=min(1,data['xp_within']/max(1,data['xp_needed'])) if data['level']<100 else 1
+    draw.rounded_rectangle((666,270,1024,280),5,fill=LINE)
+    if progress:draw.rounded_rectangle((666,270,666+max(10,int(358*progress)),280),5,fill=accent)
+    text(666,291,'MAX LEVEL' if data['level']>=100 else f"{data['xp_within']:,} / {data['xp_needed']:,} to next level",14,MUTED,width=358)
+    for idx,(value,title,sub) in enumerate([
+        (f"{data['total']:,}",'total watches',None),
+        (f"{data['movies']:,}",'movies',f"{data['anime_movies']:,} anime movies included"),
+        (f"{data['episodes']:,}",'episodes',f"{data['anime_episodes']:,} anime episodes included"),
+        (f"{data['unique_titles']:,}",'unique titles',None)]):
+        metric((56+idx*246,354,286+idx*246,479),value,title,sub)
+    box=(56,501,588,943)
+    if hero:cover(image,hero,box)
+    else:panel(image,box)
+    # A clipped fade keeps the artwork readable behind white type.
+    fade=Image.new('RGBA',(532,442));fd=ImageDraw.Draw(fade)
+    for y in range(442):fd.line((0,y,532,y),fill=(8,10,12,int(230*(y/441)**1.7)))
+    rounded=Image.new('L',(532,442));ImageDraw.Draw(rounded).rounded_rectangle((0,0,531,441),25,fill=255)
+    fade.putalpha(Image.composite(fade.getchannel('A'),Image.new('L',fade.size),rounded));image.paste(Image.alpha_composite(image.crop(box),fade),(56,501))
+    label(82,746,'Most watched title' if featured else 'Your watch history')
+    title=featured[0]['title'] if featured else 'Your next favourite awaits'
+    # Two-line wrapping preserves long anime titles.
+    words=title.split();lines=['']
+    for word in words:
+        if draw.textlength((lines[-1]+' '+word).strip(),font=font(27,True))>470 and len(lines)<2:lines.append(word)
+        else:lines[-1]=(lines[-1]+' '+word).strip()
+    if artwork.get('logo'):
+        logo=artwork['logo'].copy();logo.thumbnail((470,82),Image.Resampling.LANCZOS)
+        image.paste(logo.convert('RGBA'),(82,778),logo.convert('RGBA'))
     else:
-        draw.text((badge_left,72),"P0",font=_font(31),fill=accent)
-    draw.rounded_rectangle((48,115,1032,120),radius=2,fill=accent)
-
-    _panel(draw,(48,144,1032,320))
-    if prestige:
-        draw.rounded_rectangle((49,145,54,319),radius=2,fill=accent)
-        draw.arc((815,153,1020,310),190,350,fill=tuple(round(x*0.8+y*0.2) for x,y in zip(PANEL,accent)),width=2)
-    draw.text((75,169),f"LEVEL {data['level']}",font=_font(52),fill=WHITE)
-    draw.text((75,238),_short(draw,data["rank"],_font(27),460),font=_font(27),fill=accent)
-    draw.text((617,172),"CURRENT XP",font=_font(16),fill=MUTED)
-    draw.text((617,199),f"{data['xp']:,}",font=_font(38),fill=WHITE)
-    progress=1 if data["level"]>=100 else min(1,data["xp_within"]/max(1,data["xp_needed"]))
-    draw.rounded_rectangle((617,266,994,274),radius=4,fill=LINE)
-    if progress:
-        draw.rounded_rectangle((617,266,617+round(377*progress),274),radius=4,fill=accent)
-    draw.text((617,285),"MAX LEVEL" if data["level"]>=100 else f"{data['xp_within']:,} / {data['xp_needed']:,} XP to next level",font=_font(15),fill=MUTED)
-
-    _panel(draw,(48,338,1032,542))
-    draw.text((75,355),"WATCH HISTORY",font=_font(17),fill=accent)
-    fields=[("Total watches",data["total"]),("Episodes",data["episodes"]),("Movies",data["movies"]),
-            ("Anime episodes",data["anime_episodes"]),("Anime movies",data["anime_movies"]),("Unique titles",data["unique_titles"])]
-    for index,(label,value) in enumerate(fields):
-        _metric(draw,75+(index%3)*320,394+(index//3)*75,label,f"{value:,}",WHITE)
-
-    _panel(draw,(48,560,1032,755))
-    draw.text((75,578),"MOMENTUM & MILESTONES",font=_font(17),fill=accent)
-    fields=[("Current streak",f"{data['current_streak']} days"),("Longest streak",f"{data['longest_streak']} days"),
-            ("Achievements",f"{data['achievements']} / {data['achievement_total']}" if data.get("achievements_enabled",True) else "Off"),
-            ("Last 30 days",data["last_30"]),("Active days",data["active_days"]),
-            ("Lifetime XP",f"{data['lifetime_xp']:,}")]
-    for index,(label,value) in enumerate(fields):
-        _metric(draw,75+(index%3)*320,615+(index//3)*77,label,value,WHITE)
-
-    _panel(draw,(48,773,1032,895))
-    genre=" · ".join(f"{name} ({count:,})" for name,count in data["top_genres"]) or "No genre data yet"
-    top=" · ".join(f"{name} ({count:,})" for name,count in data["top_titles"]) or "No titles yet"
-    draw.text((75,792),"TOP GENRES",font=_font(15),fill=accent)
-    draw.text((75,813),_short(draw,genre,_font(18),925),font=_font(18),fill=WHITE)
-    draw.text((75,841),"MOST WATCHED",font=_font(15),fill=accent)
-    draw.text((75,862),_short(draw,top,_font(18),925),font=_font(18),fill=WHITE)
-
-    _panel(draw,(48,913,1032,1030))
-    draw.text((75,929),"XP BREAKDOWN & RECENT WATCH",font=_font(17),fill=accent)
-    draw.text((75,960),f"Watch {data['watch_xp']:,}",font=_font(17),fill=WHITE)
-    draw.text((305,960),f"Achievements {data['achievement_xp']:,}",font=_font(17),fill=WHITE)
-    draw.text((580,960),f"Challenges {data['challenge_xp']:,}",font=_font(17),fill=WHITE)
-    draw.text((810,960),f"Community {data['community_xp']:,}",font=_font(17),fill=WHITE)
-    draw.text((75,994),"LATEST",font=_font(15),fill=MUTED)
-    draw.text((150,992),_short(draw,data["recent_title"],_font(18),850),font=_font(18),fill=WHITE)
-
-    output=BytesIO()
-    image.save(output,format="PNG",optimize=True)
-    output.seek(0)
-    return output
+        for idx,line in enumerate(lines):text(82,778+idx*36,short(draw,line,27,470,True),27,WHITE,True)
+    count=featured[0]['count'] if featured else 0
+    text(82,872,f"{count:,}",42,WHITE,True,width=150);text(246,897,'watches',17,MUTED)
+    panel(image,(608,501,1024,778));label(634,524,'Top genres · share of watches')
+    if not data['top_genres']:text(634,580,'No genre data yet',20,MUTED)
+    for idx,(genre,count) in enumerate(data['top_genres']):
+        y=570+idx*66;ratio=min(1,count/max(1,data['total']))
+        text(634,y,short(draw,genre,19,260,True),19,WHITE,True)
+        text(945,y,f"{ratio:.0%}",18,MUTED)
+        draw.rounded_rectangle((634,y+31,998,y+38),4,fill=LINE)
+        if ratio:draw.rounded_rectangle((634,y+31,634+max(8,int(364*ratio)),y+38),4,fill=accent)
+    panel(image,(608,796,1024,943))
+    for x,key,title in [(634,'current_streak','Streak'),(830,'achievements','Achievements')]:
+        label(x,817,title)
+        value=(f"{data[key]} days" if key=='current_streak' else f"{data[key]}/{data['achievement_total']}" if data.get('achievements_enabled',True) else 'Off')
+        text(x,849,value,28,WHITE,True,width=170)
+    text(634,902,f"Best streak {data['longest_streak']} days · {data['active_days']:,} active days",14,MUTED,width=364)
+    label(56,969,'More from your history')
+    posters=artwork.get('posters') or {}
+    for idx,entry in enumerate(featured[:7]):
+        x=56+idx*140;art=posters.get(entry['key'])
+        if art:cover(image,art,(x,1000,x+128,1162),14)
+        else:
+            panel(image,(x,1000,x+128,1162),14)
+            text(x+12,1020,f"{idx+1:02}",27,accent,True)
+            text(x+10,1092,short(draw,entry['title'],13,108),13,WHITE)
+    if not featured:text(56,1024,'Posters appear as your selected tracker supplies title IDs.',18,MUTED)
+    panel(image,(56,1182,1024,1287))
+    for idx,(key,title) in enumerate([('watch_xp','Watch XP'),('achievement_xp','Achievements'),('challenge_xp','Challenges'),('community_xp','Community')]):
+        x=78+idx*240;label(x,1201,title);text(x,1228,f"{data[key]:,}",24,WHITE,True,width=200)
+    text(56,1305,f"{data['lifetime_xp']:,} lifetime XP · {data['last_30']:,} watches in 30 days",14,MUTED)
+    return png(image)
 
 
 def render_leaderboard_png(guild_name, category, rows, *, rank_offset=0):
