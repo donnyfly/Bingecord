@@ -2890,7 +2890,8 @@ async def show_profile(i,user,*,preview=False):
         color=discord.Color.from_rgb(*accent_for_tier(data["level"],data["prestige"])),
     )
     try:
-        from trackerbot.presentation.profile_artwork import load_profile_artwork
+        from trackerbot.presentation.profile_artwork import load_profile_artwork, enrich_profile_genres
+        await enrich_profile_genres(tmdb,data)
         artwork=await load_profile_artwork(tmdb,data)
         image=await asyncio.to_thread(render_profile_png,target.display_name,data,artwork)
         embed.set_image(url="attachment://profile.png")

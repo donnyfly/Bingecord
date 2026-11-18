@@ -22,7 +22,7 @@ def test_profile_recomputes_watch_and_genre_totals_each_view():
     first=profile_snapshot(stats,progression,{},1,3,today=date(2026,9,26))
     assert (first["level"],first["total"],first["top_genres"]) == (10,6,[("Drama",5)])
     first_image=render_profile_png("Viewer",first)
-    assert Image.open(first_image).size==(1080,1350)
+    assert Image.open(first_image).size==(1080,1380)
     stats["episodes_watched"]+=1
     stats["titles"]["one"]["count"]+=1
     second=profile_snapshot(stats,progression,{"first_watch":{}},1,3,today=date(2026,9,26))
@@ -73,7 +73,7 @@ def test_long_profile_name_and_wide_prestige_render():
     stats={"episodes_watched":0,"movies_watched":0,"titles":{},"watch_dates":{}}
     snapshot=profile_snapshot(stats,{"xp":0,"prestige":1000}, {},0,0,today=date(2026,9,26))
     card=Image.open(render_profile_png("A Very Long Discord Display Name That Should Fit Properly",snapshot))
-    assert card.size==(1080,1350)
+    assert card.size==(1080,1380)
 
 
 def test_prestige_rollover_is_automatic_and_atomic():
@@ -176,3 +176,15 @@ def test_legacy_profile_artwork_recovers_ids_from_exact_progression_watch_key():
                                     'at':stamp,'ids':{'simkl':99,'tvdb':10}}]}
     result=profile_snapshot(stats,progression,{},0,0)
     assert result['featured_titles'][0]['ids']=={'simkl':99,'tvdb':10}
+
+
+def test_recent_titles_use_latest_watch_per_title_separately_from_favourite():
+    stats={'titles':{
+        'series:shows:1:1:1':{'title':'Favourite','type':'episode','count':20,'last_watched':'2026-10-01T10:00:00Z'},
+        'series:shows:1:1:2':{'title':'Favourite','type':'episode','count':1,'last_watched':'2026-11-15T10:00:00Z'},
+        'movies:2':{'title':'Latest film','type':'movie','count':1,'last_watched':'2026-11-19T10:00:00Z'},
+        'movies:3':{'title':'Unknown date','type':'movie','count':2}}}
+    result=profile_snapshot(stats,{'xp':0},{},0,0)
+    assert result['featured_titles'][0]['title']=='Favourite'
+    assert [entry['title'] for entry in result['recent_titles']]==['Latest film','Favourite']
+    assert result['recent_titles'][1]['count']==21

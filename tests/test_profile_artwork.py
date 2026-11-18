@@ -21,3 +21,21 @@ def test_artwork_download_decodes_complete_chunked_file_and_limits_bytes():
         session.get=lambda *a,**k:Response([b'x'*2_000_000]*3)
         assert await download_card_image(session,'/poster.png','w342') is None
     asyncio.run(run())
+
+
+def test_genres_fill_in_bounded_batches_and_report_actual_coverage():
+    from unittest.mock import AsyncMock
+    from trackerbot.presentation.profile_artwork import enrich_profile_genres
+    async def run():
+        tmdb=SimpleNamespace(_get_series_details=AsyncMock(return_value={'genres':[{'name':'Drama'}]}))
+        data={'total':30,'genre_missing':{str(n):1 for n in range(30)},'genre_counts':{},
+              'history_titles':[{'key':str(n),'movie':False,'ids':{'tmdb':n+1}} for n in range(30)]}
+        await enrich_profile_genres(tmdb,data)
+        assert tmdb._get_series_details.await_count==24
+        assert data['genre_covered_watches']==24 and data['top_genres']==[('Drama',24)]
+        await enrich_profile_genres(tmdb,data)
+        assert tmdb._get_series_details.await_count==30
+        assert data['genre_covered_watches']==30 and data['top_genres']==[('Drama',30)]
+        await enrich_profile_genres(tmdb,data)
+        assert tmdb._get_series_details.await_count==30 and data['genre_covered_watches']==30
+    asyncio.run(run())

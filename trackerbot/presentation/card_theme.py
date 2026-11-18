@@ -41,8 +41,14 @@ def panel(image,box,radius=25):
     ImageDraw.Draw(layer).rounded_rectangle(box,radius,fill=(255,255,255,16),outline=(255,255,255,27),width=1)
     image.paste(Image.alpha_composite(image,layer))
 
-def cover(image,art,box,radius=25):
-    x,y,r,b=box;tile=ImageOps.fit(art.convert('RGBA'),(r-x,b-y),method=Image.Resampling.LANCZOS)
+def cover(image,art,box,radius=25,*,contain=False):
+    x,y,r,b=box
+    if contain:
+        tile=Image.new('RGBA',(r-x,b-y),(18,18,20,255))
+        fitted=ImageOps.contain(art.convert('RGBA'),tile.size,method=Image.Resampling.LANCZOS)
+        tile.paste(fitted,((tile.width-fitted.width)//2,(tile.height-fitted.height)//2),fitted)
+    else:
+        tile=ImageOps.fit(art.convert('RGBA'),(r-x,b-y),method=Image.Resampling.LANCZOS)
     mask=Image.new('L',tile.size);ImageDraw.Draw(mask).rounded_rectangle((0,0,tile.width-1,tile.height-1),radius,fill=255)
     image.paste(tile,(x,y),mask)
 

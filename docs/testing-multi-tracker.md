@@ -173,3 +173,12 @@ using stored external IDs; unavailable images become title panels. Movie and
 episode totals include the separately labelled anime counts. No watch-time or
 completed-show totals are inferred from incomplete data. Remote images are
 optional, bounded in size/time and never used for progression calculations.
+
+The profile poster strip uses the seven most recently watched distinct titles,
+with uncropped images contained in 2:3 slots. The featured panel stays most
+watched. Missing genres are enriched from exact TMDB/TVDB/IMDb identifiers in
+batches of up to 24 titles per profile request; subsequent requests continue
+through uncached titles. Successful genre metadata is cached in memory for a
+day (reset on restart). The genre panel labels the percentage of watches with
+known genres; bar percentages use that mapped subset and may overlap. Missing
+external IDs remain unresolved rather than being guessed from title text.
