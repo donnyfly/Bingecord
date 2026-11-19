@@ -151,8 +151,9 @@ def artwork_mask(size):
     for y in range(start,height):
         t=(y-start)/max(1,height-1-start)
         pixels[0,y]=round(255*(1-t*t*(3-2*t)))
-    for y in range(min(48,height)):
-        t=y/max(1,min(48,height)-1)
+    top_fade=min(200,round(height*.38))
+    for y in range(top_fade):
+        t=y/max(1,top_fade-1)
         pixels[0,y]=min(pixels[0,y],round(255*t*t*(3-2*t)))
     return fade.resize(size)
 

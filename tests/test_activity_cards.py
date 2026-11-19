@@ -241,6 +241,7 @@ def test_ambient_artwork_dissolves_into_sampled_background():
     assert mask.getpixel((492,200))==255
     assert mask.getpixel((0,200))==255 and mask.getpixel((983,200))==255
     assert mask.getpixel((492,0))==0
+    assert 0<mask.getpixel((492,100))<200
     assert 0<mask.getpixel((492,430))<255
     assert mask.getpixel((492,519))==0
     embed,part=example(True);model=card_model(embed,part);layout=activity_layout(model)
