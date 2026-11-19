@@ -154,7 +154,7 @@ def activity_layout(model):
         name=rating[:match.start()].strip(' :') if match else rating
         name=name.replace('Your episode rating','Your episode').replace('Your series rating','Your series').replace('Your season-entry rating','Your season entry').replace('Your season rating','Your season')
         value=match.group() if match else '—'
-        width=min(984,max(132,int(max(draw.textlength(name.upper(),font=font(12,weight=600),**SHAPING),draw.textlength(value,font=font(26,True),**SHAPING)))+72))
+        width=min(984,max(132,int(max(draw.textlength(name.upper(),font=font(15,weight=600),**SHAPING),draw.textlength(value,font=font(34,True),**SHAPING)))+94))
         ratings.append((name,value,width))
     for note in (model.get('notes') or [])[:3]:
         width=min(984,int(draw.textlength(note,font=font(17,True),**SHAPING))+66)
@@ -162,12 +162,16 @@ def activity_layout(model):
     rating_positions,rating_rows=_flows([r[2] for r in ratings],984)
     note_positions,note_rows=_flows([n[1] for n in notes],984)
     hero_top=126;hero_height=460 if model['movie'] else 520;hero_bottom=hero_top+hero_height
-    ratings_top=hero_bottom+16;ratings_height=rating_rows*76-12 if ratings else 26
+    action_lines=_wrap(draw,model['action'],34,984,2,True)
+    caption_lines=_wrap(draw,model.get('episode_title') or model['title'],40,984,2,True)
+    action_top=hero_bottom+22;caption_top=action_top+len(action_lines)*42+8
+    ratings_top=caption_top+len(caption_lines)*48+20;ratings_height=rating_rows*98-12 if ratings else 0
     notes_top=ratings_top+ratings_height+14
     bottom=notes_top+(note_rows*48-10 if notes else 0)
     return dict(ratings=ratings,notes=notes,rating_positions=rating_positions,note_positions=note_positions,
                 hero_top=hero_top,hero_height=hero_height,hero_bottom=hero_bottom,
-                ratings_top=ratings_top,notes_top=notes_top,height=bottom+54)
+                action_top=action_top,caption_top=caption_top,action_lines=action_lines,caption_lines=caption_lines,
+                ratings_top=ratings_top,notes_top=notes_top,height=bottom+82)
 
 
 def render_activity_png(model,artwork=None):
@@ -184,21 +188,13 @@ def render_activity_png(model,artwork=None):
     else:
         draw.ellipse((48,62,92,106),fill=LINE)
         paint(draw,(70,84),model['author'][:1].upper(),font=font(20,True),fill=accent,anchor='mm')
-    text(106,71,model['author'],20,WHITE,width=650)
-    top=layout['hero_top'];h=layout['hero_height'];bottom=layout['hero_bottom']
+    text(106,68,model['author'],28,WHITE,True,width=650)
+    top=layout['hero_top'];h=layout['hero_height']
     if hero:tile=cinematic_art(hero,(984,h))
     else:
         tile=background((984,h),accent)
         td=ImageDraw.Draw(tile);td.rounded_rectangle((425,h//2-48,559,h//2+48),18,outline=accent,width=3)
         td.polygon(((480,h//2-25),(480,h//2+25),(516,h//2)),fill=accent)
-    # Independently fade the brand and episode/title captions, leaving the
-    # centre of the scene unobscured and the source frame uncropped.
-    gradient=Image.new('RGBA',(1,h));pixels=gradient.load()
-    for y in range(h):
-        upper=max(0,1-y/175)*.65
-        lower=max(0,(y-(h-190))/190)*.92
-        pixels[0,y]=(5,7,12,int(255*max(upper,lower)))
-    tile=Image.alpha_composite(tile,gradient.resize(tile.size))
     mask=Image.new('L',tile.size);ImageDraw.Draw(mask).rounded_rectangle((0,0,983,h-1),22,fill=255)
     image.paste(tile,(48,top),mask)
     logo=artwork.get('logo')
@@ -206,33 +202,22 @@ def render_activity_png(model,artwork=None):
         fitted=ImageOps.contain(logo.convert('RGBA'),(242,76),method=Image.Resampling.LANCZOS)
         image.paste(fitted,(1032-fitted.width,42+(76-fitted.height)//2),fitted)
     else:
-        for index,line in enumerate(_wrap(draw,model['title'],36,936,2,True)):
-            text(72,top+22+index*43,line,36,WHITE,True,width=936)
-    action=model['action'];code=re.search(r'\bS\d+E\d+(?:[-–](?:S\d+)?E?\d+)?\b',action,re.I)
-    verb=action[:code.start()].strip() if code else action
-    caption=model.get('episode_title')
-    badge_y=bottom-(111 if caption else 64)
-    verb_width=min(680,int(draw.textlength(verb.upper(),font=font(14,weight=600),**SHAPING))+28)
-    draw.rounded_rectangle((72,badge_y,72+verb_width,badge_y+32),10,fill=(12,15,23,255))
-    label(draw,(86,badge_y+7),short(draw,verb,14,verb_width-28,True),size=14,fill=WHITE)
-    if code:
-        value=code.group();x=84+verb_width;w=int(draw.textlength(value,font=font(17,True),**SHAPING))+28
-        draw.rounded_rectangle((x,badge_y,x+w,badge_y+32),10,fill=accent)
-        text(x+14,badge_y+4,value,17,(14,16,24),True,width=936-(x-72)-28)
-    if caption:
-        lines=_wrap(draw,caption,30,936,2,True)
-        for n,line in enumerate(lines):text(72,bottom-(78 if len(lines)>1 else 64)+n*34,line,30,WHITE,True,width=936)
+        for index,line in enumerate(_wrap(draw,model['title'],24,242,2,True)):
+            text(790,48+index*29,line,24,WHITE,True,width=242)
+    for index,line in enumerate(layout['action_lines']):
+        text(48,layout['action_top']+index*42,line,34,accent,True,width=984)
+    for index,line in enumerate(layout['caption_lines']):
+        text(48,layout['caption_top']+index*48,line,40,WHITE,True,width=984)
     for (name,value,width),(x,row) in zip(layout['ratings'],layout['rating_positions']):
-        x+=48;y=layout['ratings_top']+row*76
-        panel(image,(x,y,x+width,y+64),16)
+        x+=48;y=layout['ratings_top']+row*98
+        panel(image,(x,y,x+width,y+86),16)
         service=rating_service(name,model.get('tracker'))
         mark=service_logo(service) if service else None
         if mark:
-            fitted=ImageOps.contain(mark,(30,30),method=Image.Resampling.LANCZOS)
-            image.paste(fitted,(x+14+(30-fitted.width)//2,y+17+(30-fitted.height)//2),fitted)
-        label(draw,(x+54,y+9),name,size=12,fill=MUTED)
-        text(x+54,y+27,value,26,accent,True,width=width-66)
-    if not layout['ratings']:text(48,layout['ratings_top']+3,'No ratings shown',14,MUTED,width=984)
+            fitted=ImageOps.contain(mark,(42,42),method=Image.Resampling.LANCZOS)
+            image.paste(fitted,(x+14+(42-fitted.width)//2,y+22+(42-fitted.height)//2),fitted)
+        label(draw,(x+70,y+11),name,size=15,fill=MUTED)
+        text(x+70,y+33,value,34,accent,True,width=width-82)
     for (note,width),(x,row) in zip(layout['notes'],layout['note_positions']):
         x+=48;y=layout['notes_top']+row*48
         colour=accent if note.startswith('NEW') else (82,196,166)
@@ -243,7 +228,7 @@ def render_activity_png(model,artwork=None):
             draw.line((x+17,y+19,x+27,y+19),fill=colour,width=2)
         else:draw.line((x+17,y+19,x+21,y+23,x+27,y+15),fill=colour,width=2)
         text(x+42,y+7,note,17,colour,True,width=width-54)
-    footer_y=height-28
+    footer_y=height-38
     # Draw a media glyph rather than relying on an unsupported emoji font.
     if model['movie']:
         draw.rounded_rectangle((48,footer_y+1,66,footer_y+15),2,outline=MUTED,width=1)
@@ -253,9 +238,9 @@ def render_activity_png(model,artwork=None):
         draw.rounded_rectangle((48,footer_y,66,footer_y+12),2,outline=MUTED,width=1)
         draw.line((57,footer_y+12,57,footer_y+15),fill=MUTED);draw.line((52,footer_y+15,62,footer_y+15),fill=MUTED)
     source=re.sub(r'^[^\w]+','',model['source'])
-    text(76,footer_y,source,12,MUTED,width=330)
+    text(76,footer_y,source,16,MUTED,width=320)
     if model.get('timestamp'):
-        paint(draw,(1032,footer_y),local_timestamp(model),font=font(12),fill=MUTED,anchor='ra')
+        paint(draw,(1032,footer_y),local_timestamp(model),font=fit(draw,local_timestamp(model),16,620),fill=MUTED,anchor='ra')
     return png(image)
 
 
@@ -284,10 +269,14 @@ async def activity_card_kwargs(embed,part,*,preview=False,sample=False):
             _cards[key]=data
             while len(_cards)>16 or sum(map(len,_cards.values()))>24_000_000:_cards.popitem(last=False)
         else:_cards.move_to_end(key)
-    compact=embed.copy();compact.description='Preview only · No XP changes.' if preview else None
-    compact.clear_fields();compact.set_thumbnail(url=None);compact.set_image(url='attachment://activity.png')
     view=await details_view(embed,owner=part.get('user') if preview else None,guild=part.get('guild'))
-    return {'embed':compact,'file':discord.File(BytesIO(data),filename='activity.png'),'view':view}
+    target=str(embed.url or '')
+    if urlparse(target).scheme=='https':
+        service={'simkl':'SIMKL','wetrakr':'WeTrakr','mdblist':'MDBList'}.get(model['tracker'],'tracker')
+        view.add_item(discord.ui.Button(label='View on '+service,url=target))
+    # Explicit None also removes the legacy rich embed when refreshing an old card.
+    return {'embed':None,'file':discord.File(BytesIO(data),filename='activity.png',description=(model['title']+' · '+model['action'])[:1024]), 'view':view}
+
 
 
 def eligible(parts):

@@ -62,9 +62,10 @@ def test_render_cache_and_native_links_preserved(monkeypatch):
         one=await activity_card_kwargs(embed,part,preview=True)
         two=await activity_card_kwargs(embed,part,preview=True)
         assert render.call_count==1
-        assert one['embed'].url==embed.url and one['embed'].author.url==embed.author.url
-        assert not one['embed'].thumbnail and one['file'].filename=='activity.png'
-        assert one['embed'].image.url=='attachment://activity.png' and embed.to_dict()==before
+        assert one['embed'] is None and one['file'].filename=='activity.png'
+        assert one['view'].children[-1].url==embed.url
+        assert one['view'].children[-1].label=='View on SIMKL'
+        assert embed.to_dict()==before
         embed.description+='\n\n✅ Completed this series.'
         await activity_card_kwargs(embed,part,preview=True)
         assert render.call_count==2
@@ -79,7 +80,7 @@ def test_opt_in_send_persists_card_binding_and_default_stays_native(monkeypatch)
     async def run():
         embed,part=example();post={'base':embed.to_dict(),'rendered':embed.to_dict(),'parts':[part]}
         monkeypatch.setattr(bot,'prefs',AsyncMock(return_value={'style':'rich'}))
-        render=AsyncMock(return_value={'embed':discord.Embed(title='Compact'),'file':'card','view':'details'})
+        render=AsyncMock(return_value={'embed':None,'file':'card','view':'details'})
         monkeypatch.setattr(cards,'activity_card_kwargs',render)
         remember=AsyncMock();monkeypatch.setattr(bot.activity_details,'remember',remember)
         channel=SimpleNamespace(send=AsyncMock(return_value=SimpleNamespace(id=7)))
@@ -90,6 +91,7 @@ def test_opt_in_send_persists_card_binding_and_default_stays_native(monkeypatch)
             bot.prefs.return_value={'style':'card'}
             assert await bot.send_embed(channel,embed,'watch')
             assert channel.send.await_args.kwargs['file']=='card' and post['presentation']=='card'
+            assert channel.send.await_args.kwargs['embed'] is None
             render.side_effect=ValueError('Artwork unavailable');post.pop('presentation')
             assert await bot.send_embed(channel,embed,'watch')
             assert 'file' not in channel.send.await_args.kwargs and 'presentation' not in post
@@ -108,11 +110,12 @@ def test_late_rating_card_regenerates_attachment_and_retries_failures(tmp_path,m
         assert await engine.single(sender,ch,embed,'10','1','simkl',part['meta'])
         record=(await store.get_activity_messages('10'))[0];record['presentation']='card';await store.save_activity_message(record)
         before=await store.get_progression('1')
-        render=AsyncMock(return_value={'embed':discord.Embed(title='Updated card'),'file':'updated-png','view':'new-details'})
+        render=AsyncMock(return_value={'embed':None,'file':'updated-png','view':'new-details'})
         monkeypatch.setattr(cards,'activity_card_kwargs',render)
         engine.contexts[('10','1')]['state']['ratings']=[normalize({'tmdb':'1','rating':7},'movie','mdblist')]
         await engine.finish()
         assert message.edit.await_args.kwargs['attachments']==['updated-png']
+        assert message.edit.await_args.kwargs['embed'] is None
         assert '**7/10**' in render.await_args.args[0].description
         saved=(await store.get_activity_messages('10'))[0]
         assert saved['presentation']=='card' and 'attachment://' not in str(saved['base'])
