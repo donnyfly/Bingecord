@@ -261,16 +261,18 @@ def test_together_model_keeps_member_ratings_scopes_and_trackers():
     embed.description='<@1> and <@2> watched **Example Film** together\n⭐ IMDb 8.0/10\n💬 <@1> · Your rating: **7/10**\n💬 <@2> · Your rating: **9/10**'
     parts=[dict(part,card_name='Donny'),dict(part,user='2',source='mdblist',card_name='Adele')]
     model=together_model(embed,parts)
-    assert model['author']=='Watched Together' and model['action']=='Watched together'
+    assert model['author']=='Watched Together' and model['action']=='Watched'
     assert model['ratings']==['IMDb 8.0/10']
     assert [(m['name'],m['score'],m['tracker']) for m in model['members']]==[('Donny','7/10','simkl'),('Adele','9/10','mdblist')]
     layout=activity_layout(model)
-    assert layout['members_top']+160<layout['height']
+    assert layout['member_positions']==[(0,0),(498,0)]
+    assert layout['members_top']+112<layout['height']
+    assert layout['ratings_top']==layout['action_top']
     assert Image.open(render_activity_png(model)).height==layout['height']
     embed.description='<@1> and <@2> watched **S4E02** of **Example Series** together\n*Episode title*\n⭐ IMDb 9.5/10\n🆕 <@2> started this series.'
     for p in parts:p['meta']={'movie':False,'episodes':[2]}
     model=together_model(embed,parts)
-    assert model['action']=='Watched together · S4E02'
+    assert model['action']=='Watched S4E02'
     assert model['episode_title']=='Episode title'
     assert 'Adele' in model['notes'][0] and '<@' not in str(model)
     assert all(m['score'] is None for m in model['members'])
@@ -428,3 +430,17 @@ def test_visual_default_and_legacy_preferences_remain_explicit(tmp_path,monkeypa
         assert (await restarted.get_embed_preferences('10','1'))['style']=='card'
         assert {c.value:c.name for c in bot.STYLE_CHOICES}=={'card':'Visual card','rich':'Rich (Legacy)','minimal':'Minimal (Legacy)'}
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('count',[3,5,8])
+def test_together_member_tiles_stay_within_grid_and_footer(count):
+    from trackerbot.presentation.activity_cards import together_model,activity_layout
+    embed,part=example(True);embed.description='<@1> and <@2> watched **Example Film** together\n⭐ IMDb 8.0/10'
+    parts=[dict(part,user=str(n),card_name='A very long participant display name '+str(n)) for n in range(1,count+1)]
+    model=together_model(embed,parts);layout=activity_layout(model)
+    assert len(model['members'])==min(count,5) and model['extra_members']==max(0,count-5)
+    assert len(set(layout['member_positions']))==min(count,5)
+    for x,row in layout['member_positions']:
+        assert 0<=x and x+486<=984
+        assert layout['members_top']+row*124+112<layout['height']-32
+    assert Image.open(render_activity_png(model)).height==layout['height']

@@ -353,7 +353,9 @@ or award XP. Enable live testing with `/bingecord style style:Visual card`.
 Use Rich or Minimal to return to native embeds for subsequent watches.
 
 Watched Together also supports visual cards, showing up to five participants with
-avatars and separate personal ratings using each member’s tracker icon. Group
+avatars and separate personal ratings using each member’s tracker icon.
+Participants appear in compact two-column tiles beneath the title and public ratings;
+a missing or hidden score is labelled “No rating shared”. Group
 presentation and timestamp follow the first participant’s style and timezone.
 Visual card also covers Planned, Watching, Paused, Dropped and completion status
 updates. These use TMDB landscape artwork, never posters: a known episode still

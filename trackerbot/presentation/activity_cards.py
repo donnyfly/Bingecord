@@ -78,7 +78,7 @@ def together_model(embed,parts,*,preview=False,sample=False):
     model=card_model(public,parts[0],preview=preview,sample=sample)
     first=description.splitlines()[0] if description else ''
     code=re.search(r'\bS\d+E\d+(?:[-–](?:S\d+)?E?\d+)?\b',clean(first),re.I)
-    model['action']=('Rewatched' if 'rewatched' in first.lower() else 'Watched')+' together'+(' · '+code[0] if code else '')
+    model['action']=('Rewatched' if 'rewatched' in first.lower() else 'Watched')+(' '+code[0] if code else '')
     model['author']='Watched Together';model['avatar']=None;model['members']=[]
     for part in parts[:5]:
         uid=str(part['user']);score=None
@@ -219,7 +219,7 @@ def local_timestamp(model):
 def activity_layout(model):
     """Keep individual status/title and ratings in a stable two-column metadata area."""
     draw=ImageDraw.Draw(Image.new('RGB',(1,1)));ratings=[];notes=[]
-    side_ratings=not model.get('members');text_width=516 if side_ratings else 984
+    side_ratings=True;text_width=516
     rating_label_size=15;rating_size=34
     rating_gap=98;rating_height=86
     for rating in model.get('ratings',[])[:3]:
@@ -245,17 +245,20 @@ def activity_layout(model):
     ratings_height=(rating_rows-1)*rating_gap+rating_height if ratings else 0
     if side_ratings:
         ratings_top=action_top
-        notes_top=action_top+max(184,caption_top-action_top+len(caption_lines)*48,ratings_height)+14
+        notes_top=action_top+max(98 if model.get('members') else 184,caption_top-action_top+len(caption_lines)*48,ratings_height)+14
     else:
         ratings_top=caption_top+len(caption_lines)*48+20
         notes_top=ratings_top+ratings_height+14
     members_top=notes_top+(note_rows*48 if notes else 0)
-    bottom=members_top+len(model.get('members',[]))*80+(30 if model.get('extra_members') else 0)
+    member_positions=[(index%2*498,index//2) for index in range(len(model.get('members',[])))]
+    members_height=((len(member_positions)+1)//2)*124-12 if member_positions else 0
+    bottom=members_top+members_height+(30 if model.get('extra_members') else 0)
     return dict(ratings=ratings,notes=notes,rating_positions=rating_positions,note_positions=note_positions,
                 hero_top=hero_top,hero_height=hero_height,hero_bottom=hero_bottom,
                 action_top=action_top,caption_top=caption_top,action_lines=action_lines,caption_lines=caption_lines,
                 ratings_top=ratings_top,notes_top=notes_top,members_top=members_top,height=bottom+58,
-                side_ratings=side_ratings,text_width=text_width,rating_gap=rating_gap,rating_height=rating_height)
+                side_ratings=side_ratings,text_width=text_width,rating_gap=rating_gap,rating_height=rating_height,
+                member_positions=member_positions,members_height=members_height)
 
 
 def render_activity_png(model,artwork=None):
@@ -318,23 +321,24 @@ def render_activity_png(model,artwork=None):
             draw.line((x+17,y+19,x+27,y+19),fill=colour,width=2)
         else:draw.line((x+17,y+19,x+21,y+23,x+27,y+15),fill=colour,width=2)
         text(x+42,y+7,note,17,colour,True,width=width-54)
-    for index,member in enumerate(model.get('members',[])):
-        y=layout['members_top']+index*80
+    for index,(member,(column,row)) in enumerate(zip(model.get('members',[]),layout['member_positions'])):
+        x=48+column;y=layout['members_top']+row*124
+        panel(image,(x,y,x+486,y+112),18)
         avatar=artwork.get('member:'+str(index))
-        if avatar:cover(image,avatar,(48,y+8,100,y+60),26)
+        if avatar:cover(image,avatar,(x+18,y+22,x+70,y+74),26)
         else:
-            draw.ellipse((48,y+8,100,y+60),fill=LINE)
-            paint(draw,(74,y+34),member['name'][:1].upper(),font=font(24,True),fill=accent,anchor='mm')
-        text(118,y+15,member['name'],26,WHITE,True,width=480)
+            draw.ellipse((x+18,y+22,x+70,y+74),fill=LINE)
+            paint(draw,(x+44,y+48),member['name'][:1].upper(),font=font(24,True),fill=accent,anchor='mm')
+        text(x+88,y+15,member['name'],26,WHITE,True,width=380)
         if member['score']:
             mark=service_logo(member['tracker'])
             if mark:
                 fitted=ImageOps.contain(mark,(32,32),method=Image.Resampling.LANCZOS)
-                image.paste(fitted,(700,y+21),fitted)
-            text(746,y+3,'Personal rating',14,MUTED,width=280)
-            text(746,y+23,member['score'],30,accent,True,width=280)
+                image.paste(fitted,(x+88,y+58),fitted)
+            text(x+132,y+53,member['score'],32,accent,True,width=334)
+        else:text(x+88,y+60,'No rating shared',18,MUTED,width=380)
     if model.get('extra_members'):
-        text(48,layout['members_top']+len(model['members'])*80,'+'+str(model['extra_members'])+' more · View details',18,MUTED)
+        text(48,layout['members_top']+layout['members_height']+8,'+'+str(model['extra_members'])+' more · View details',18,MUTED)
     footer_y=height-32
     # Draw a media glyph rather than relying on an unsupported emoji font.
     if model['movie']:
