@@ -111,7 +111,20 @@ def cinematic_art(art,size):
     base=ImageOps.fit(source,size,method=Image.Resampling.LANCZOS)
     base=ImageEnhance.Brightness(base.filter(ImageFilter.GaussianBlur(28))).enhance(.48).convert('RGBA')
     frame=ImageOps.contain(source,size,method=Image.Resampling.LANCZOS)
-    base.paste(frame,((size[0]-frame.width)//2,(size[1]-frame.height)//2))
+    # Feather only the narrow seam against the blurred fill; never crop the frame.
+    x,y=(size[0]-frame.width)//2,(size[1]-frame.height)//2
+    mask=Image.new('L',frame.size,255)
+    edge=max(1,min(18,min(frame.size)//2))
+    pen=ImageDraw.Draw(mask)
+    for n in range(edge):
+        alpha=round(255*(n+1)/edge)
+        if x:
+            pen.line((n,0,n,frame.height-1),fill=alpha)
+            pen.line((frame.width-1-n,0,frame.width-1-n,frame.height-1),fill=alpha)
+        if y:
+            pen.line((0,n,frame.width-1,n),fill=alpha)
+            pen.line((0,frame.height-1-n,frame.width-1,frame.height-1-n),fill=alpha)
+    base.paste(frame,(x,y),mask)
     return base
 
 
@@ -143,7 +156,9 @@ def local_timestamp(model):
     except (ValueError,ZoneInfoNotFoundError):zone=ZoneInfo('UTC')
     at=datetime.fromisoformat(model['timestamp']).astimezone(zone)
     offset=at.strftime('%z');offset=offset[:3]+':'+offset[3:]
-    return at.strftime('%Y-%m-%d %H:%M')+' '+zone.key+' (UTC'+offset+')'
+    name='SGT' if zone.key in {'Asia/Singapore','Singapore'} else at.tzname()
+    if not name or name.startswith(('+','-')):name='UTC'+offset
+    return at.strftime('%d %b')+' · '+at.strftime('%I:%M %p').lstrip('0')+' '+name
 
 
 def activity_layout(model):
@@ -171,7 +186,7 @@ def activity_layout(model):
     return dict(ratings=ratings,notes=notes,rating_positions=rating_positions,note_positions=note_positions,
                 hero_top=hero_top,hero_height=hero_height,hero_bottom=hero_bottom,
                 action_top=action_top,caption_top=caption_top,action_lines=action_lines,caption_lines=caption_lines,
-                ratings_top=ratings_top,notes_top=notes_top,height=bottom+82)
+                ratings_top=ratings_top,notes_top=notes_top,height=bottom+58)
 
 
 def render_activity_png(model,artwork=None):
@@ -228,7 +243,7 @@ def render_activity_png(model,artwork=None):
             draw.line((x+17,y+19,x+27,y+19),fill=colour,width=2)
         else:draw.line((x+17,y+19,x+21,y+23,x+27,y+15),fill=colour,width=2)
         text(x+42,y+7,note,17,colour,True,width=width-54)
-    footer_y=height-38
+    footer_y=height-32
     # Draw a media glyph rather than relying on an unsupported emoji font.
     if model['movie']:
         draw.rounded_rectangle((48,footer_y+1,66,footer_y+15),2,outline=MUTED,width=1)

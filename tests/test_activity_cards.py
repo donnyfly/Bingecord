@@ -159,8 +159,8 @@ def test_cinematic_fill_preserves_full_four_three_frame_and_colours_sidebars():
     from PIL import ImageDraw
     draw=ImageDraw.Draw(frame);draw.rectangle((0,0,20,299),fill='red');draw.rectangle((379,0,399,299),fill='lime')
     art=cinematic_art(frame,(984,520)).convert('RGB')
-    assert art.getpixel((148,260))[0]>200
-    assert art.getpixel((836,260))[1]>200
+    assert art.getpixel((165,260))[0]>200
+    assert art.getpixel((819,260))[1]>200
     assert sum(art.getpixel((20,260)))>20
     embed,part=example();model=card_model(embed,part)
     full=activity_layout(model)
@@ -179,10 +179,10 @@ def test_rating_marks_and_watcher_timezone():
         assert rating_service(label,'simkl')==service
         assert service_logo(service).mode=='RGBA'
     base={'timestamp':'2026-11-19T09:48:00+00:00','timezone':'Asia/Singapore'}
-    assert local_timestamp(base)=='2026-11-19 17:48 Asia/Singapore (UTC+08:00)'
-    assert local_timestamp(dict(base,timezone='America/New_York')).endswith('(UTC-05:00)')
-    assert local_timestamp(dict(base,timezone='America/New_York',timestamp='2026-07-19T09:48:00+00:00')).endswith('(UTC-04:00)')
-    assert local_timestamp(dict(base,timezone='Invalid/Zone')).endswith('UTC (UTC+00:00)')
+    assert local_timestamp(base)=='19 Nov · 5:48 PM SGT'
+    assert local_timestamp(dict(base,timezone='America/New_York')).endswith('EST')
+    assert local_timestamp(dict(base,timezone='America/New_York',timestamp='2026-07-19T09:48:00+00:00')).endswith('EDT')
+    assert local_timestamp(dict(base,timezone='Invalid/Zone')).endswith('UTC')
     embed,part=example();model=card_model(embed,dict(part,display_timezone='Asia/Singapore'))
     assert model['timezone']=='Asia/Singapore' and model['tracker']=='simkl'
 
