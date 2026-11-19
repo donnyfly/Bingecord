@@ -47,7 +47,7 @@ _lock = asyncio.Lock()
 _write_lock = asyncio.Lock()
 
 DEFAULT_EMBED_PREFERENCES = {
-    "style": "rich",
+    "style": "card",
     "artwork": "backdrop",
     "activity_text": "detailed",
     "show_imdb": True,
@@ -577,7 +577,7 @@ def _normalise_user(user: dict) -> None:
     if prefs.get("style") == "poster":
         prefs["style"] = "rich"
         prefs["artwork"] = "poster"
-    prefs.setdefault("style", "rich")
+    prefs.setdefault("style", "card")
     prefs.setdefault("artwork", "backdrop")
     prefs.setdefault("activity_text", "detailed")
     prefs.setdefault("show_imdb", True)
@@ -681,7 +681,7 @@ def _normalise_guild(guild: dict) -> None:
     if guild["embed_preferences"].get("style") == "poster":
         guild["embed_preferences"]["style"] = "rich"
         guild["embed_preferences"]["artwork"] = "poster"
-    guild["embed_preferences"].setdefault("style", "rich")
+    guild["embed_preferences"].setdefault("style", "card")
     guild["embed_preferences"].setdefault("artwork", "backdrop")
     guild["embed_preferences"].setdefault("activity_text", "detailed")
     guild["embed_preferences"].setdefault("show_imdb", True)

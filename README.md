@@ -320,21 +320,22 @@ Completed pages and enrichment batches are staged in the existing data volume an
 
 Users can run `/bingecord style` to choose:
 
-- **Rich**, **Minimal**, or **Visual card (experimental)** watch presentation
+- **Visual card** (default), **Rich (Legacy)**, or **Minimal (Legacy)** watch presentation
 - Automatic, poster, or backdrop artwork
 - Short or detailed activity text
 - Rating visibility
 - Personal-rating visibility, independently of public IMDb/MAL scores
 
-Server admins can set defaults with `/bingecord style-server`. Personal settings override server defaults.
+Server admins can set defaults with `/bingecord style-server`. Personal settings override server defaults. Visual card is the default for new or reset preferences; existing saved style selections are retained.
 
-The experimental **Visual card** style currently covers individual episode/range
+The default **Visual card** style currently covers individual episode/range
 and film watches for SIMKL, WeTrakr and MDBList. It uses Inter typography, the
 already-resolved still/backdrop and logo, compact rating chips, personal rating and
 verified completion/NEW badges. The card is sent directly as an image attachment, without an outer embed box.
 The backdrop spans the full card width without an inset frame, blending into the
 header and an ambient background sampled from its own colours.
-Larger watched/episode text and rating chips sit below the artwork;
+Status/title text sits below the artwork on the left, with ratings on the right.
+A consistent metadata area keeps ordinary rated and unrated cards the same size;
 4:3 and other aspect ratios retain the full frame over a blurred, darkened fill.
 The title logo replaces duplicate heading text when available, and card height adapts
 to its rating and milestone rows. A View on tracker button opens the title page,
@@ -348,7 +349,7 @@ Try `/bingecord debug feature:Episode activity card` and
 `/bingecord debug feature:Film activity card` first. Previews use your most recent
 cached single-user watch from the selected source, or clearly labelled illustrative
 sample data when none is available. They do not poll providers, change preferences
-or award XP. Enable live testing with `/bingecord style style:Visual card (experimental)`.
+or award XP. Enable live testing with `/bingecord style style:Visual card`.
 Use Rich or Minimal to return to native embeds for subsequent watches.
 
 Watched Together also supports visual cards, showing up to five participants with

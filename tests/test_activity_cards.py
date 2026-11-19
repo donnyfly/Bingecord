@@ -393,3 +393,37 @@ def test_together_debug_resolves_members_from_older_native_records(monkeypatch):
         assert all('card_name' not in p for p in parts)
         assert i.followup.send.await_args.kwargs['ephemeral']
     asyncio.run(run())
+
+
+def test_single_card_ratings_share_title_area_without_changing_height():
+    from trackerbot.presentation.activity_cards import activity_layout
+    embed,part=example(True);model=card_model(embed,part)
+    layouts=[activity_layout(dict(model,ratings=ratings)) for ratings in ([],['IMDb 8.0/10'],['IMDb 8.0/10','MAL 8.50/10','Your rating: 9/10'])]
+    assert len({l['height'] for l in layouts})==1
+    for layout in layouts:
+        assert layout['ratings_top']==layout['action_top']
+        for (x,row),(_,_,width) in zip(layout['rating_positions'],layout['ratings']):
+            assert x>=layout['text_width']+24 and x+width<=984
+            assert layout['ratings_top']+row*layout['rating_gap']+layout['rating_height']<layout['notes_top']
+    long=activity_layout(dict(model,title='A title with many words that must wrap within its own column'))
+    assert len(long['caption_lines'])==2 and long['notes_top']>long['caption_top']+90
+
+
+def test_visual_default_and_legacy_preferences_remain_explicit(tmp_path,monkeypatch):
+    from trackerbot.core import storage as module
+    from test_notification_preview import bot
+    async def run():
+        monkeypatch.setattr(module,'DATA_PATH',str(tmp_path/'styles.json'));store=module.Storage()
+        await store.link_user('10','1','token',None,'Viewer','2026-11-20T00:00:00Z')
+        assert (await store.get_embed_preferences('10','1'))['style']=='card'
+        await store.set_embed_preferences('1',style='rich')
+        restarted=module.Storage()
+        assert (await restarted.get_embed_preferences('10','1'))['style']=='rich'
+        await restarted.set_server_embed_preferences('10',style='minimal',force_override=True)
+        assert (await restarted.get_embed_preferences('10','1'))['style']=='minimal'
+        await restarted.reset_server_embed_preferences('10')
+        assert (await restarted.get_embed_preferences('10','1'))['style']=='rich'
+        await restarted.reset_embed_preferences('1')
+        assert (await restarted.get_embed_preferences('10','1'))['style']=='card'
+        assert {c.value:c.name for c in bot.STYLE_CHOICES}=={'card':'Visual card','rich':'Rich (Legacy)','minimal':'Minimal (Legacy)'}
+    asyncio.run(run())

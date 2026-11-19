@@ -442,7 +442,7 @@ async def get_show_ratings(tmdb_id):
         return None
 
 def build_embed(t,desc,ts,name,member,image,profile,title=None,title_url=None,poster=None,logo=None,preferences=None,status_activity=False,provider="SIMKL"):
-    color,label=MEDIA_STYLES[t]; p={"style":"rich","artwork":"auto","activity_text":"short","show_imdb":True,"show_mal":True}; p.update(preferences or {})
+    color,label=MEDIA_STYLES[t]; p={"style":"card","artwork":"auto","activity_text":"short","show_imdb":True,"show_mal":True}; p.update(preferences or {})
     e=discord.Embed(title=title,url=title_url,description=desc,color=color,timestamp=ts)
     e.set_author(name=f"{name}'s Activity",url=profile,icon_url=member.display_avatar.url if member else None)
     # Visual cards always use landscape art; native status styles retain posters.
@@ -2457,7 +2457,7 @@ async def send_due_weekly_recaps():
         except Exception:
             log.exception("Weekly recap failed for guild %s.",guild.id)
 
-STYLE_CHOICES=[app_commands.Choice(name="Rich (large artwork)",value="rich"),app_commands.Choice(name="Minimal (small artwork)",value="minimal"),app_commands.Choice(name="Visual card (experimental)",value="card")]
+STYLE_CHOICES=[app_commands.Choice(name="Visual card",value="card"),app_commands.Choice(name="Rich (Legacy)",value="rich"),app_commands.Choice(name="Minimal (Legacy)",value="minimal")]
 ARTWORK_CHOICES=[app_commands.Choice(name="Automatic",value="auto"),app_commands.Choice(name="Poster only",value="poster"),app_commands.Choice(name="Backdrop",value="backdrop")]
 TEXT_CHOICES=[app_commands.Choice(name="Short",value="short"),app_commands.Choice(name="Detailed",value="detailed")]
 EPISODE_FORMAT_CHOICES=[
@@ -4505,7 +4505,7 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
     embed=build_embed(media,description,parse_iso(play['watched_at']),name,member,image,provider.profile_url(account),
         title=title,title_url=provider.title_url('movies' if movie else 'shows',ids),poster=poster,logo=logo,preferences=p,provider='MDBList')
     # A missing still must not suppress an independently available title logo.
-    if logo and p.get('style','rich')!='minimal' and p.get('artwork','auto') in {'auto','backdrop'}:
+    if logo and p.get('style','card')!='minimal' and p.get('artwork','auto') in {'auto','backdrop'}:
         embed.set_thumbnail(url=logo)
     end=last_play or play
     detail_meta={'ids':ids,'movie':movie,'season':None if movie else play['season'],
