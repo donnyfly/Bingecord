@@ -52,3 +52,22 @@ def test_status_member_filter_and_bounded_summary(monkeypatch):
         assert '15' in text and len(text)<4096
         guild.fetch_member.assert_not_awaited()
     asyncio.run(run())
+
+
+def test_image_only_pages_clear_attachments_and_fallback_embeds():
+    import discord
+    async def run():
+        fallback=discord.Embed(title='Text fallback')
+        renderer=AsyncMock(side_effect=[(None,'first.png'),(fallback,None),(None,'next.png')])
+        view=MemberPages(42,list(range(8)),renderer)
+        i=SimpleNamespace(response=SimpleNamespace(defer=AsyncMock()),edit_original_response=AsyncMock())
+        await view.show(i)
+        assert i.edit_original_response.await_args.kwargs['embed'] is None
+        assert i.edit_original_response.await_args.kwargs['attachments']==['first.png']
+        await view.show(i)
+        assert i.edit_original_response.await_args.kwargs['embed'] is fallback
+        assert i.edit_original_response.await_args.kwargs['attachments']==[]
+        await view.show(i)
+        assert i.edit_original_response.await_args.kwargs['embed'] is None
+        assert i.edit_original_response.await_args.kwargs['attachments']==['next.png']
+    asyncio.run(run())

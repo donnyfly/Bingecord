@@ -2001,8 +2001,9 @@ async def send_achievement_notification(send, mention, achievement_id, *, previe
         options["ephemeral"]=True
     try:
         animation=await asyncio.to_thread(render_achievement_gif, achievement["name"], achievement.get("xp", 0))
-        embed.set_image(url="attachment://achievement.gif")
-        await send(embed=embed, file=discord.File(animation, filename="achievement.gif"), **options)
+        from trackerbot.presentation.card_details import standalone_card
+        card=await standalone_card(embed,animation,'achievement.gif',transient=preview)
+        await send(**card,content=mention if not preview else None,**options)
         return True
     except Exception:
         log.exception("Animated achievement notification failed for %s; trying embed fallback.", achievement_id)
@@ -2029,8 +2030,9 @@ async def send_prestige_notification(send, mention, prestige, lifetime_xp, *, pr
         options["ephemeral"]=True
     try:
         animation=await asyncio.to_thread(render_prestige_gif, prestige)
-        embed.set_image(url="attachment://prestige.gif")
-        await send(embed=embed, file=discord.File(animation, filename="prestige.gif"), **options)
+        from trackerbot.presentation.card_details import standalone_card
+        card=await standalone_card(embed,animation,'prestige.gif',transient=preview)
+        await send(**card,content=mention if not preview else None,**options)
         return True
     except Exception:
         log.exception("Prestige animation failed for prestige %s; trying embed fallback.", prestige)
@@ -2113,13 +2115,9 @@ async def notify_level_up(guild_id_value, uid, before_progression, after_progres
             prestige=after_prestige,
             source_label=source_label,
         )
-        file = discord.File(animation, filename="level-up.gif")
-        embed.set_image(url="attachment://level-up.gif")
-        await send(
-            embed=embed,
-            file=file,
-            **options,
-        )
+        from trackerbot.presentation.card_details import standalone_card
+        card=await standalone_card(embed,animation,'level-up.gif',transient=preview_interaction is not None)
+        await send(**card,content=mention if preview_interaction is None else None,**options)
         log.info(
             "Sent animated level-up notification for user %s in guild %s: level %d -> %d%s.",
             uid,
@@ -2408,8 +2406,7 @@ async def send_visual_summary(send,guild_name,heading,result,filename,*,icon=Non
                                       icon=art.pop('icon',None),story=story,avatars=art,artwork=title_art)
         from trackerbot.presentation.card_details import details_view
         kwargs['view']=await details_view(embed,guild=getattr(guild,'id',None))
-        embed=discord.Embed(title=embed.title,description=subtitle+('\nPreview only · No XP changes.' if preview else ''),color=embed.color)
-        embed.set_image(url=f'attachment://{filename}');kwargs['file']=discord.File(image,filename=filename)
+        kwargs['file']=discord.File(image,filename=filename,description=str(embed.title or heading)[:1024]);embed=None
     except Exception:
         log.exception('Could not render %s summary; using text fallback.',heading)
         embed.set_image(url=None)
@@ -3057,8 +3054,11 @@ async def show_profile(i,user,*,preview=False):
         await enrich_profile_genres(tmdb,data)
         artwork=await load_profile_artwork(tmdb,data)
         image=await asyncio.to_thread(render_profile_png,target.display_name,data,artwork)
-        embed.set_image(url="attachment://profile.png")
-        await i.followup.send(embed=embed,file=discord.File(image,filename="profile.png"))
+        from trackerbot.presentation.card_details import standalone_card
+        detail=embed.copy()
+        detail.add_field(name='Watch history',value=f"{data['episodes']:,} episodes · {data['movies']:,} movies · {data['anime_episodes']:,} anime episodes · {data['anime_movies']:,} anime movies",inline=False)
+        detail.add_field(name='Streak',value=f"{current} current · {longest} longest",inline=False)
+        await i.followup.send(**await standalone_card(detail,image,'profile.png',owner=i.user.id if preview else None,guild=g,transient=preview),allowed_mentions=discord.AllowedMentions.none())
     except Exception:
         log.exception("Could not send profile image for %s; sending embed fallback.",target.id)
         embed.set_image(url=None)
@@ -3432,8 +3432,6 @@ async def show_leaderboard(i,category=None,*,period=None,preview=False):
         full.add_field(name='Rankings',value='\n'.join(f"**{n}.** <@{r['discord_user_id']}> · **{r['progression_xp'] if category=='xp' else r.get(category,0):,}**" for n,r in enumerate(display,start+1)) or 'No activity yet.',inline=False)
         full.set_footer(text=f'Page {page}/{max(1,pages)} · Selected tracker history · Shared global progression')
         view.details_embed=full
-        compact=discord.Embed(title=full.title,description=periods[period]+(' · Preview only · No XP changes.' if preview else ''),color=full.color)
-        compact.set_footer(text=f'Page {page}/{max(1,pages)} · {len(view.rows)} members')
         try:
             assets={uid:m.display_avatar for uid,m in members.items()};assets['icon']=getattr(i.guild,'icon',None)
             avatars=await load_discord_artwork(assets,limit=6);icon=avatars.pop('icon',None)
@@ -3443,7 +3441,7 @@ async def show_leaderboard(i,category=None,*,period=None,preview=False):
             image=await asyncio.to_thread(render_leaderboard_png,i.guild.name,labels[category],display,
                 rank_offset=start,avatars=avatars,show_progression=progression_enabled,icon=icon,artwork=artwork,
                 period_label=periods[period],max_value=max((r['progression_xp'] if category=='xp' else r.get(category,0) for r in view.rows),default=1))
-            compact.set_image(url='attachment://leaderboard.png');return compact,discord.File(image,filename='leaderboard.png')
+            return None,discord.File(image,filename='leaderboard.png',description=full.title[:1024])
         except Exception:
             log.exception('Leaderboard artwork unavailable for guild %s; using text.',g)
             return full,None

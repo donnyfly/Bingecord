@@ -172,8 +172,7 @@ def test_mdblist_shared_challenges_and_mapping_commands(tmp_path,monkeypatch):
         await bot.simkl_challenges.callback(i)
         embed=i.followup.send.await_args.kwargs['embed']
         i.response.defer.assert_awaited_once()
-        assert embed.title=='Personal Challenges'
-        assert not embed.fields and 'Daily resets' in embed.description
+        assert embed is None
         assert i.followup.send.await_args.kwargs['view'] is not None
         assert i.followup.send.await_args.kwargs['file'].filename=='challenges.png'
         i=interaction()

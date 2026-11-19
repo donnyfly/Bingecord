@@ -90,7 +90,7 @@ def test_community_announcement_names_every_contributor_and_acknowledges(tmp_pat
         channel.send=AsyncMock()
         assert await bot.notify_community_rewards("123",channel,notification)
         public=channel.send.await_args.kwargs['embed']
-        assert not public.fields
+        assert public is None
         view=channel.send.await_args.kwargs['view']
         if hasattr(view,'embed'):embed=view.embed
         else:

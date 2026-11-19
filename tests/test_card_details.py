@@ -47,8 +47,8 @@ def test_successful_personal_card_is_compact_but_details_retain_objectives(monke
         monkeypatch.setattr(delivery,'render_challenges_png',Mock(return_value=BytesIO(b'png')))
         send=AsyncMock();await delivery.challenge_card(send,user,state,now=datetime(2026,11,24,tzinfo=timezone.utc),ephemeral=True)
         kwargs=send.await_args.kwargs
-        assert not kwargs['embed'].fields and 'Daily resets' in kwargs['embed'].description
-        assert 'Preview only' in kwargs['embed'].description
+        assert kwargs['embed'] is None and kwargs['file'].filename=='challenges.png'
+        assert 'Preview' in kwargs['view'].embed.title
         assert len(kwargs['view'].embed.fields)==2
     asyncio.run(run())
 
@@ -65,7 +65,7 @@ def test_community_compact_results_and_text_fallback(monkeypatch):
         monkeypatch.setattr(delivery,'render_community_png',Mock(return_value=BytesIO(b'png')))
         send=AsyncMock();await delivery.community_card(send,guild,s)
         kwargs=send.await_args.kwargs
-        assert not kwargs['embed'].fields and 'Rewards settled' in kwargs['embed'].description
+        assert kwargs['embed'] is None and kwargs['file'].filename=='community.png'
         detail=kwargs['view'].embed
         assert detail.fields[0].name=='Reward results' and '+1,440 XP' in detail.fields[0].value
         monkeypatch.setattr(delivery,'render_community_png',Mock(side_effect=ValueError('unavailable')))

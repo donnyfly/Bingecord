@@ -422,6 +422,14 @@ Episode runtime comes from provider metadata or cached TMDB season details. If a
 
 ## Visual cards and leaderboards
 
+All rendered cards are sent as standalone image attachments, without an outer
+embed box. This includes profiles/stats, leaderboards, server summaries, weekly
+recaps, personal/community challenges and animated progression notifications.
+View details opens the complete text privately; leaderboards retain category,
+period and page controls below the image. Live progression notifications retain
+the recipient mention. If rendering fails, a readable text embed is sent instead.
+Native watch embed styles remain available separately.
+
 Challenge, community and summary embeds keep their heading, reporting period or
 reset/deadline countdown above the image. **View details** opens the full text
 privately. If a card cannot render, the full text is shown automatically. Private

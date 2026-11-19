@@ -66,13 +66,7 @@ async def community_card(send,guild,state,*,viewer=None,preview=False,heading=No
         if viewer:detail.add_field(name='Member contribution',value=f"<@{viewer}> · {(state.get('contributions') or {}).get(str(viewer),0):g} {unit}",inline=False)
         from .card_details import details_view
         kwargs['view']=await details_view(detail,owner=viewer if preview else None,guild=getattr(guild,'id',None))
-        embed.clear_fields()
-        embed.description={'active':'In progress','goal_reached':'Goal reached · Rewards pending','settling':'Sync grace · Rewards pending',
-                           'completed':'Event ended · Rewards settled','missed':'Event ended · Goal not reached'}.get(state.get('status'),'In progress')
-        try:embed.description+=(' · Ended ' if state.get('status') in {'completed','missed','settling'} else ' · Ends ')+discord.utils.format_dt(datetime.fromisoformat(state['end']),'R')
-        except (KeyError,ValueError,TypeError):pass
-        if preview:embed.description+='\nPreview only · No XP changes.'
-        embed.set_image(url='attachment://community.png');kwargs['file']=discord.File(image,filename='community.png')
+        kwargs.update(embed=None,file=discord.File(image,filename='community.png',description=(heading or title)[:1024]))
     except Exception:
         lines=[f"{discord.utils.escape_markdown(names[uid])} · {value:,.1f} {unit}" for uid,value in rows]
         if lines:embed.add_field(name='Contributors · Top five',value='\n'.join(lines),inline=False)
