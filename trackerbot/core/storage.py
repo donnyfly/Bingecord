@@ -2044,6 +2044,23 @@ class Storage:
         await self.flush()
         return list(guild.get('users',{}))
 
+    async def save_card_details(self,token,record):
+        async with _lock:
+            records=self._data.setdefault('card_details',{})
+            now=datetime.now(timezone.utc)
+            records[token]={**copy.deepcopy(record),'expires_at':(now+timedelta(days=30)).isoformat()}
+            for key in list(records):
+                if records[key].get('expires_at','')<now.isoformat():del records[key]
+            while len(records)>1000:del records[next(iter(records))]
+            self._dirty=True
+        await self.flush()
+
+    async def get_card_details(self,token):
+        async with _lock:
+            record=(self._data.get('card_details') or {}).get(token)
+            if not record or record.get('expires_at','')<datetime.now(timezone.utc).isoformat():return None
+            return copy.deepcopy(record)
+
     async def get_challenge_state(self, discord_user_id: str) -> dict:
         async with _lock:
             user = self._user(discord_user_id)
@@ -2533,7 +2550,10 @@ class Storage:
                 p=global_user.get("progression") or {}
                 provider=user.get("activity_provider","simkl")
                 stats=_statistics_for_provider(user,provider,guild.get("timezone"))
+                from .server_cards import board_facts
+                facts=board_facts(stats,str(_resolve_timezone(guild.get('timezone'))),datetime.now(_resolve_timezone(guild.get('timezone'))).date(),p)
                 rows.append({
+                    **facts,
                     "discord_user_id":uid,
                     "simkl_username":((global_user.get(provider) or {}).get("username")
                                       if provider!="simkl" else

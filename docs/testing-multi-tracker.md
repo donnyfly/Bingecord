@@ -304,3 +304,26 @@ support. Removing that support revokes Roll Credits and dependent discovery rewa
 Test removals and re-additions, idempotence, reward reversals crossing prestige,
 notification retries, silent imports and the next normal poll cycle. Polling should
 retry metadata-dependent objectives and deliver pending challenge notifications.
+
+## Compact embeds, podiums and recap artwork
+
+Check personal/community cards, server stats and weekly recaps show short captions
+when rendering succeeds. Full text must remain in View details, privately, with
+AllowedMentions.none(). Test rendering failure, missing artwork, failed Discord
+send (do not send a second fallback after a failed send), persisted details after
+restart, expiry and private preview owner/server restrictions. Verify results still
+show each recipient's XP correction in details, with no more than five recipients.
+
+Preview leaderboard and weekly recap via `/bingecord debug`. Verify podium artwork,
+server icon, avatars, long names, first/subsequent pages, zero rows after filtering,
+empty weeks, a full seven-day chart and uncropped 2:3 posters. Recap titles must come
+from the requested period, never all-time favourites. Test exact old watch-key joins
+for artwork when server statistics lack the IDs already in shared progression.
+
+Test leaderboard category and period dropdowns: all-time, this week and last 30 days;
+unique titles group episodes by stored show IDs/keys. Periods use server-local dates
+and ignore future days. Current streak excludes invalid/empty/future dates. Progression
+categories stay all-time and sort prestige then current prestige XP; the displayed
+XP progression value includes completed prestige tiers. Disabled progression must
+hide its category options and progression labels. Non-owners may view details but
+cannot change pages, categories or periods. Each change resets pagination safely.

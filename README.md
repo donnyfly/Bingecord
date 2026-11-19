@@ -385,6 +385,34 @@ The bot uses the completed item's catalog runtime, not time spent with playback 
 
 Episode runtime comes from provider metadata or cached TMDB season details. If an exact episode runtime is unavailable, the series' typical episode runtime is used. If no valid catalog runtime can be found, the fallback is **25 minutes / 100 XP for an episode** or **90 minutes / 360 XP for a movie**. Estimated duration also counts toward minute-based challenges.
 
+## Visual cards and leaderboards
+
+Challenge, community and summary embeds keep their heading, reporting period or
+reset/deadline countdown above the image. **View details** opens the full text
+privately. If a card cannot render, the full text is shown automatically. Private
+previews retain their no-XP-change label. Saved card details remain available for
+up to 30 days across bot restarts; older snapshots may expire.
+
+`/bingecord leaderboard` offers category and period dropdowns as well as command
+options. Watch categories include total watches, episodes, films, anime and
+**unique titles**; choose all-time, this week or the last 30 days. **Current streak**
+uses the server timezone and current activity. XP, level and prestige rank shared
+global progression and remain all-time. These categories are hidden when progression
+is disabled in the server. Pages show at most five members, and only the requester
+can change the category, period or page. Other members can open the current page's
+text details privately while its controls are active.
+
+The top three appear on an artwork-backed podium; other positions retain compact
+rows. Artwork comes from each member's most-watched title in the selected period.
+Watch rankings use each member's selected provider. Unique-title counts use exact
+external IDs where available, otherwise stored provider title keys. Historical
+records without IDs are not matched by title-name guesses.
+
+Weekly recap cards include member avatars, daily watch activity, a title spotlight
+and a poster gallery from that recap's dated watch records. Titles are ordered by
+how many members watched them, then watch count. Metadata and artwork failures leave
+the recorded counts intact. Daily bars and reporting periods use the server timezone.
+
 ## Personal daily and weekly challenges
 
 `/bingecord challenges` displays your avatar, daily and weekly objective cards,

@@ -49,11 +49,11 @@ def test_empty_genre_state_and_leaderboard_card():
     board=render_leaderboard_png("Server","XP progression",[
         {"name":"Viewer","prestige":1,"level":9,"xp":500,"total":5},
     ])
-    assert Image.open(board).size==(1080,360)
+    assert Image.open(board).size==(1080,600)
     assert _short(ImageDraw.Draw(Image.new("RGB",(100,100))),0,ImageFont.load_default(),80)=="0"
     for heading in ("weekly recap","server statistics"):
         card=render_summary_png("Server",heading,"This week",[("Episodes",32),("Movies",4)],[("Top watcher","Viewer · 12 watches")])
-        assert Image.open(card).size==(1080,980)
+        assert Image.open(card).size==(1080,1420 if heading=='weekly recap' else 980)
 
 
 def test_prestige_emblems_and_accents_vary():
@@ -193,10 +193,11 @@ def test_recent_titles_use_latest_watch_per_title_separately_from_favourite():
 def test_leaderboard_uses_selected_category_and_hides_disabled_progression(monkeypatch):
     import trackerbot.presentation.profile_visuals as visuals
     rendered=[]
-    original=visuals.card_text
+    import trackerbot.presentation.social_visuals as social
+    original=social.paint
     def capture(draw,xy,value,**kwargs):
         rendered.append(str(value));return original(draw,xy,value,**kwargs)
-    monkeypatch.setattr(visuals,'card_text',capture)
+    monkeypatch.setattr(social,'paint',capture)
     row=dict(discord_user_id='42',name='Viewer',prestige=2,level=34,xp=100000,total=72,movies=7)
     visuals.render_leaderboard_png('Server','Movies',[row],rank_offset=5,show_progression=False)
     assert '7' in rendered and '06' in rendered

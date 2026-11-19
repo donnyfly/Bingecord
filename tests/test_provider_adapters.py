@@ -173,8 +173,8 @@ def test_mdblist_shared_challenges_and_mapping_commands(tmp_path,monkeypatch):
         embed=i.followup.send.await_args.kwargs['embed']
         i.response.defer.assert_awaited_once()
         assert embed.title=='Personal Challenges'
-        assert embed.fields[0].name.startswith('Daily · Resets')
-        assert embed.fields[1].name.startswith('Weekly · Resets')
+        assert not embed.fields and 'Daily resets' in embed.description
+        assert i.followup.send.await_args.kwargs['view'] is not None
         assert i.followup.send.await_args.kwargs['file'].filename=='challenges.png'
         i=interaction()
         await bot.tracker_mapping.callback(i)

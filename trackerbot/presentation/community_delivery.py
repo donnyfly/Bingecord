@@ -57,6 +57,21 @@ async def community_card(send,guild,state,*,viewer=None,preview=False,heading=No
     try:
         image=await asyncio.to_thread(render_community_png,guild.name if guild else 'Community',state,
                                       names=names,avatars=avatars,viewer=viewer,posters=posters,heading=heading,server_icon=server_icon)
+        # Retain the complete accessible snapshot behind a private details button.
+        detail=embed.copy()
+        lines=[f"{discord.utils.escape_markdown(names[uid])} · {value:,.1f} {unit}" for uid,value in rows]
+        if lines:detail.add_field(name='Contributors · Top five',value='\n'.join(lines),inline=False)
+        objectives=state.get('objectives') or []
+        if objectives:detail.add_field(name='Objectives',value='\n'.join(('Complete: ' if o['done'] else 'Needed: ')+o['label']+(f" · {o['count']}/{o['target']} titles" if 'count' in o else '') for o in objectives[:12])[:1024],inline=False)
+        if viewer:detail.add_field(name='Member contribution',value=f"<@{viewer}> · {(state.get('contributions') or {}).get(str(viewer),0):g} {unit}",inline=False)
+        from .card_details import details_view
+        kwargs['view']=await details_view(detail,owner=viewer if preview else None,guild=getattr(guild,'id',None))
+        embed.clear_fields()
+        embed.description={'active':'In progress','goal_reached':'Goal reached · Rewards pending','settling':'Sync grace · Rewards pending',
+                           'completed':'Event ended · Rewards settled','missed':'Event ended · Goal not reached'}.get(state.get('status'),'In progress')
+        try:embed.description+=(' · Ended ' if state.get('status') in {'completed','missed','settling'} else ' · Ends ')+discord.utils.format_dt(datetime.fromisoformat(state['end']),'R')
+        except (KeyError,ValueError,TypeError):pass
+        if preview:embed.description+='\nPreview only · No XP changes.'
         embed.set_image(url='attachment://community.png');kwargs['file']=discord.File(image,filename='community.png')
     except Exception:
         lines=[f"{discord.utils.escape_markdown(names[uid])} · {value:,.1f} {unit}" for uid,value in rows]

@@ -122,6 +122,8 @@ class BingecordBot(discord.Client):
     def __init__(self):
         super().__init__(intents=discord.Intents.default(),activity=discord.Game(name="/bingecord help")); self.tree=FeatureCommandTree(self)
     async def setup_hook(self):
+        from trackerbot.presentation.card_details import CardDetails
+        self.add_dynamic_items(CardDetails)
         await self.tree.sync()
 
         dev_guild_id = os.getenv("DISCORD_DEV_GUILD_ID", "").strip()
@@ -171,6 +173,8 @@ class BingecordBot(discord.Client):
                 pass
         await super().close()
 bot=BingecordBot()
+from trackerbot.presentation.card_details import configure as configure_card_details
+configure_card_details(lambda:storage)
 bingecord_commands=app_commands.Group(name="bingecord",description="Track watches, discover titles and view your progression.")
 bot.tree.add_command(bingecord_commands)
 
@@ -2356,20 +2360,35 @@ async def generate_weekly_recap(guild, period="current"):
     start,end=weekly_period(timezone_info["name"],period)
     rows=await storage.get_guild_statistics(guild.id)
     label="Current week" if period=="current" else "Previous week"
-    return build_weekly_recap(rows,start,end,guild.name,label,with_visual=True),f"{start.isoformat()} → {end.isoformat()}"
+    from trackerbot.core.server_cards import recap_facts
+    base=build_weekly_recap(rows,start,end,guild.name,label,with_visual=True)
+    story=recap_facts(rows,start,end,timezone_info['name'])
+    return (*base,{'story':story,'guild':guild}),f"{start.isoformat()} → {end.isoformat()}"
 
-async def send_visual_summary(send, guild_name, heading, result, filename, *, icon=None, preview=False):
-    (embed,metrics,leaders),subtitle=result
+async def send_visual_summary(send,guild_name,heading,result,filename,*,icon=None,preview=False):
+    parts,subtitle=result;embed,metrics,leaders=parts[:3];extras=parts[3] if len(parts)>3 else {}
+    kwargs={'allowed_mentions':discord.AllowedMentions.none()}
+    if preview:kwargs['ephemeral']=True
     try:
-        from trackerbot.presentation.discord_artwork import load_discord_artwork
-        art=await load_discord_artwork({'icon':icon}) if icon else {}
-        image=await asyncio.to_thread(render_summary_png,guild_name,heading,subtitle,metrics,leaders,icon=art.get('icon'))
-        embed.set_image(url=f"attachment://{filename}")
-        await send(embed=embed,file=discord.File(image,filename=filename),**({'ephemeral':True} if preview else {}))
+        from trackerbot.presentation.discord_artwork import load_discord_artwork,resolve_card_members
+        from trackerbot.presentation.server_artwork import load_server_artwork
+        story=extras.get('story') or {};guild=extras.get('guild');members=story.get('members') or []
+        resolved=await resolve_card_members(guild,[m['discord_user_id'] for m in members],bot) if guild else {}
+        assets={uid:m.display_avatar for uid,m in resolved.items()};assets['icon']=icon
+        art=await load_discord_artwork(assets,limit=6)
+        story={**story,'members':[{**m,'name':resolved[str(m['discord_user_id'])].display_name
+            if str(m['discord_user_id']) in resolved else m['name']} for m in members]}
+        title_art=await load_server_artwork(tmdb,story.get('titles') or []) if story.get('titles') else {}
+        image=await asyncio.to_thread(render_summary_png,guild_name,heading,subtitle,metrics,leaders,
+                                      icon=art.pop('icon',None),story=story,avatars=art,artwork=title_art)
+        from trackerbot.presentation.card_details import details_view
+        kwargs['view']=await details_view(embed,guild=getattr(guild,'id',None))
+        embed=discord.Embed(title=embed.title,description=subtitle+('\nPreview only · No XP changes.' if preview else ''),color=embed.color)
+        embed.set_image(url=f'attachment://{filename}');kwargs['file']=discord.File(image,filename=filename)
     except Exception:
-        log.exception("Could not render or send %s summary; sending embed fallback.",heading)
+        log.exception('Could not render %s summary; using text fallback.',heading)
         embed.set_image(url=None)
-        await send(embed=embed,**({'ephemeral':True} if preview else {}))
+    return await send(embed=embed,**kwargs)
 
 async def send_weekly_recap(guild, period="current"):
     if not await feature_enabled(guild.id,"weekly_recaps"):
@@ -3280,80 +3299,106 @@ LEADERBOARD_CHOICES=[
     app_commands.Choice(name="Episodes",value="episodes"),
     app_commands.Choice(name="Movies",value="movies"),
     app_commands.Choice(name="Anime",value="anime"),
+    app_commands.Choice(name="Unique titles",value="titles"),
+    app_commands.Choice(name="Current streak",value="streak"),
     app_commands.Choice(name="XP / progression",value="xp"),
     app_commands.Choice(name="Level",value="level"),
     app_commands.Choice(name="Prestige",value="prestige"),
 ]
 
-@bingecord_commands.command(name="leaderboard",description="Show the server's tracker watch leaderboard.")
-@app_commands.choices(category=LEADERBOARD_CHOICES)
-async def simkl_leaderboard(i,category: app_commands.Choice[str] | None = None):
-    await show_leaderboard(i,category)
+LEADERBOARD_PERIODS=[app_commands.Choice(name=name,value=value) for value,name in
+                     [('all','All-time'),('week','This week'),('month','Last 30 days')]]
+
+@bingecord_commands.command(name="leaderboard",description="Browse server rankings by watches, titles, streak or progression.")
+@app_commands.choices(category=LEADERBOARD_CHOICES,period=LEADERBOARD_PERIODS)
+async def simkl_leaderboard(i,category:app_commands.Choice[str]|None=None,period:app_commands.Choice[str]|None=None):
+    await show_leaderboard(i,category,period=period)
 
 
-async def show_leaderboard(i,category=None,*,preview=False):
+async def show_leaderboard(i,category=None,*,period=None,preview=False):
     g=guild_id(i)
     if not g:
-        await i.response.send_message("This command must be used in a server.",ephemeral=True); return
-    category=category.value if category else "total"
-    progression_enabled=await feature_enabled(g,"progression")
-    if not progression_enabled and category in {"xp","level","prestige"}:
-        await i.response.send_message("Progression is disabled in this server. Choose a watch category.",ephemeral=True)
-        return
+        await i.response.send_message('This command must be used in a server.',ephemeral=True);return
+    category=category.value if category else 'total';period=period.value if period else 'all'
+    progression_enabled=await feature_enabled(g,'progression')
+    global_categories={'xp','level','prestige','streak'}
+    if not progression_enabled and category in {'xp','level','prestige'}:
+        await i.response.send_message('Progression is disabled in this server. Choose a watch category.',ephemeral=True);return
+    if category in global_categories:period='all'
     await i.response.defer(**({'ephemeral':True} if preview else {}))
     rows=await storage.get_guild_leaderboard_snapshot(g)
-    values=[]
-    for row in rows:
-        row["total"]=row["episodes"]+row["movies"]
-        row["level"]=level_progress(row["xp"])[0]
-        value=row[category]
-        if value>0 or (category in {"xp","level","prestige"} and (row["total"]>0 or row["xp"]>0 or row["prestige"]>0)):
-            member=i.guild.get_member(int(row["discord_user_id"]))
-            row["name"]=member.display_name if member else row["simkl_username"]
-            values.append(row)
-    if category in {"xp","level","prestige"}:
-        values.sort(key=lambda row:(-row["prestige"],-row["xp"],row["name"].casefold()))
-    else:
-        values.sort(key=lambda row:(-row[category],-row["prestige"],-row["xp"],row["name"].casefold()))
+    labels={'total':'Total watches','episodes':'Episodes','movies':'Movies','anime':'Anime','titles':'Unique titles',
+            'streak':'Current streak','xp':'XP progression','level':'Level','prestige':'Prestige'}
+    periods={'all':'All-time','week':'This week','month':'Last 30 days'}
+    def ranked():
+        values=[]
+        for raw in rows:
+            row=dict(raw);row['total']=row['episodes']+row['movies'];row['level']=level_progress(row['xp'])[0]
+            row['progression_xp']=row['prestige']*xp_for_level(100)+row['xp']
+            selected=(row.get('periods') or {}).get(period,{})
+            if period!='all' or selected:row.update({k:v for k,v in selected.items() if k not in {'featured'}})
+            if period!='all' and not selected:
+                for key in ('total','episodes','movies','anime','titles'):row[key]=0
+            row['featured']=selected.get('featured',[])
+            row.setdefault('titles',0);row.setdefault('streak',0)
+            member=i.guild.get_member(int(row['discord_user_id']))
+            row['name']=member.display_name if member else row.get('simkl_username') if row.get('simkl_username') and not str(row['simkl_username']).isdigit() else 'Member '+str(row['discord_user_id'])[-4:]
+            if row.get(category,0)>0 or category in {'xp','level','prestige'} and (row['total'] or row['xp'] or row['prestige']):values.append(row)
+        if category in {'xp','level','prestige'}:
+            values.sort(key=lambda r:(-r['prestige'],-r['xp'],str(r['discord_user_id'])))
+        else:values.sort(key=lambda r:(-r[category],str(r['discord_user_id'])))
+        return values
+    values=ranked()
     if not values:
-        pending=sum(not row.get("history_seeded",True) for row in rows)
-        message=(f"History import is pending for **{pending}** linked user(s). Try again after it finishes."
-                 if pending else "No leaderboard data has been recorded in this server yet.")
-        await i.followup.send(message,ephemeral=True); return
-    labels={"total":"Total watches","episodes":"Episodes","movies":"Movies","anime":"Anime","xp":"XP progression","level":"Level","prestige":"Prestige"}
-    if not progression_enabled:
-        values.sort(key=lambda row:(-row[category],row["name"].casefold()))
+        await i.followup.send('No recorded activity for this category and period yet.',ephemeral=True);return
 
-    async def render_page(page_rows, start, page, pages):
-        embed=discord.Embed(title=f"{i.guild.name} · {labels[category]}",color=0xEFBE69)
-        embed.set_footer(text=f"Page {page}/{pages} · {len(values):,} members · Server watch counts · Global XP and prestige" if progression_enabled
-                         else f"Page {page}/{pages} · {len(values):,} members · Server watch counts")
+    async def render_page(page_rows,start,page,pages):
+        from trackerbot.presentation.discord_artwork import load_discord_artwork,resolve_card_members
+        from trackerbot.presentation.server_artwork import load_server_artwork
+        members=await resolve_card_members(i.guild,[r['discord_user_id'] for r in page_rows],bot)
+        display=[{**r,'name':members[str(r['discord_user_id'])].display_name if str(r['discord_user_id']) in members else r['name']} for r in page_rows]
+        full=discord.Embed(title=f'{i.guild.name} · {labels[category]}',description=periods[period],color=0xEFBE69)
+        full.add_field(name='Rankings',value='\n'.join(f"**{n}.** <@{r['discord_user_id']}> · **{r['progression_xp'] if category=='xp' else r.get(category,0):,}**" for n,r in enumerate(display,start+1)) or 'No activity yet.',inline=False)
+        full.set_footer(text=f'Page {page}/{max(1,pages)} · Selected tracker history · Shared global progression')
+        view.details_embed=full
+        compact=discord.Embed(title=full.title,description=periods[period]+(' · Preview only · No XP changes.' if preview else ''),color=full.color)
+        compact.set_footer(text=f'Page {page}/{max(1,pages)} · {len(view.rows)} members')
         try:
-            from trackerbot.presentation.discord_artwork import load_discord_artwork,resolve_card_members
-            members=await resolve_card_members(i.guild,[row['discord_user_id'] for row in page_rows],bot)
-            assets={uid:member.display_avatar for uid,member in members.items()}
-            avatars=await load_discord_artwork(assets)
-            display_rows=[{**row,'name':members[str(row['discord_user_id'])].display_name
-                           if str(row['discord_user_id']) in members else row['name']} for row in page_rows]
-            image=await asyncio.to_thread(render_leaderboard_png,i.guild.name,labels[category],display_rows,rank_offset=start,avatars=avatars,show_progression=progression_enabled)
-            embed.set_image(url="attachment://leaderboard.png")
-            return embed,discord.File(image,filename="leaderboard.png")
+            assets={uid:m.display_avatar for uid,m in members.items()};assets['icon']=getattr(i.guild,'icon',None)
+            avatars=await load_discord_artwork(assets,limit=6);icon=avatars.pop('icon',None)
+            entries=[e for row in display for e in row.get('featured',[])[:1]]
+            art=await load_server_artwork(tmdb,entries) if entries else {}
+            artwork={str(row['discord_user_id']):art.get(row['featured'][0]['key'],{}) for row in display if row.get('featured')}
+            image=await asyncio.to_thread(render_leaderboard_png,i.guild.name,labels[category],display,
+                rank_offset=start,avatars=avatars,show_progression=progression_enabled,icon=icon,artwork=artwork,
+                period_label=periods[period],max_value=max((r['progression_xp'] if category=='xp' else r.get(category,0) for r in view.rows),default=1))
+            compact.set_image(url='attachment://leaderboard.png');return compact,discord.File(image,filename='leaderboard.png')
         except Exception:
-            log.exception("Could not render leaderboard page for guild %s; using embed fallback.",g)
-        embed.description="\n".join(
-            f"**{n}.** <@{row['discord_user_id']}> · " +
-            (f"{row[category]:,} · P{row['prestige']} L{row['level']} · {row['xp']:,} current prestige XP"
-             if progression_enabled else f"**{row[category]:,}**")
-            for n,row in enumerate(page_rows,start+1))
-        return embed,None
+            log.exception('Leaderboard artwork unavailable for guild %s; using text.',g)
+            return full,None
 
     view=MemberPages(i.user.id,values,render_page)
-    embed,file=await view.render()
-    kwargs={"embed":embed,"view":view,"allowed_mentions":discord.AllowedMentions.none()}
+    for child in view.children:child.row=2
+    category_select=discord.ui.Select(placeholder='Ranking category',row=0)
+    period_select=discord.ui.Select(placeholder='Ranking period',row=1)
+    def controls():
+        category_select.options=[discord.SelectOption(label=c.name,value=c.value,default=c.value==category) for c in LEADERBOARD_CHOICES if progression_enabled or c.value not in {'xp','level','prestige'}]
+        period_select.options=[discord.SelectOption(label=c.name,value=c.value,default=c.value==period) for c in LEADERBOARD_PERIODS]
+        period_select.disabled=category in global_categories
+    async def choose_category(interaction):
+        nonlocal category,period
+        category=category_select.values[0]
+        if category in global_categories:period='all'
+        view.rows=ranked();view.page=0;controls();await view.show(interaction)
+    async def choose_period(interaction):
+        nonlocal period
+        period=period_select.values[0];view.rows=ranked();view.page=0;controls();await view.show(interaction)
+    category_select.callback=choose_category;period_select.callback=choose_period
+    view.add_item(category_select);view.add_item(period_select);controls()
+    embed,file=await view.render();kwargs={'embed':embed,'view':view,'allowed_mentions':discord.AllowedMentions.none(),'wait':True}
     if preview:kwargs['ephemeral']=True
-    if file:
-        kwargs["file"]=file
-    view.message=await i.followup.send(**kwargs,wait=True)
+    if file:kwargs['file']=file
+    view.message=await i.followup.send(**kwargs)
 
 
 def build_server_stats(rows, guild_name, *, with_visual=False):

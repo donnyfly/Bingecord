@@ -200,45 +200,17 @@ def render_profile_png(name, data, artwork=None):
     return png(image)
 
 
-def render_leaderboard_png(guild_name, category, rows, *, rank_offset=0, avatars=None, show_progression=True):
-    """Five-member editorial pages; the selected category is the primary value."""
-    from trackerbot.presentation.card_theme import background, panel, cover, font, fit, short, png
-    rows=rows[:5];avatars=avatars or {}
-    accent=(239,190,105)
-    image=background((1080,250+len(rows)*110),accent);draw=ImageDraw.Draw(image)
-    def text(x,y,value,size=20,colour=WHITE,bold=False,width=900):
-        card_text(draw,(x,y),value,font=fit(draw,value,size,width,bold),fill=colour)
-    card_label(draw,(56,38),'Bingecord · Leaderboard',fill=MUTED)
-    text(56,70,short(draw,guild_name,32,968,True),32,bold=True)
-    text(56,120,category,19,accent,True)
-    card_label(draw,(56,165),'Rank / member',fill=MUTED)
-    card_label(draw,(748,165),'Current prestige XP' if category=='XP progression' else category,fill=MUTED)
-    key={'Total watches':'total','Episodes':'episodes','Movies':'movies','Anime':'anime',
-         'XP progression':'xp','Level':'level','Prestige':'prestige'}.get(category,'total')
-    for index,row in enumerate(rows):
-        y=200+index*110;position=rank_offset+index+1
-        panel(image,(56,y,1024,y+96),22)
-        text(76,y+26,f'{position:02}',27,accent if position<=3 else MUTED,True,width=62)
-        uid=str(row.get('discord_user_id',''))
-        avatar=avatars.get(uid)
-        if avatar:cover(image,avatar,(152,y+17,214,y+79),31)
-        else:
-            draw.ellipse((152,y+17,214,y+79),fill=LINE)
-            text(170,y+31,str(row.get('name','?'))[:1].upper(),24,accent,True,width=35)
-        text(236,y+15,short(draw,row['name'],24,480,True),24,bold=True,width=480)
-        text(236,y+54,f"Prestige {row['prestige']} · Level {row['level']}" if show_progression else "Server watch history",15,MUTED,width=470)
-        value=row.get(key,0)
-        text(748,y+12,f'{value:,}',32,accent,True,width=250)
-        secondary=(f"{row['total']:,} watches" if key in {'xp','level','prestige'}
-                   else f"{row['xp']:,} current prestige XP")
-        if show_progression:text(748,y+57,secondary,13,MUTED,width=250)
-    text(56,211+len(rows)*110,'Server watch counts · Shared XP, levels and prestige' if show_progression else 'Server watch counts · Members use their selected source',14,MUTED)
-    return png(image)
+def render_leaderboard_png(guild_name,category,rows,**kwargs):
+    from .social_visuals import render_board
+    return render_board(guild_name,category,rows,**kwargs)
 
 
-def render_summary_png(guild_name, heading, subtitle, metrics, leaders, *, icon=None):
+def render_summary_png(guild_name, heading, subtitle, metrics, leaders, *, icon=None,story=None,avatars=None,artwork=None):
     """Provider-neutral server and weekly cards using the profile's visual language."""
     from trackerbot.presentation.card_theme import background, panel, cover, font, fit, short, png
+    if 'week' in heading.lower():
+        from .social_visuals import render_recap
+        return render_recap(guild_name,subtitle,metrics,leaders,icon=icon,story=story,avatars=avatars,artwork=artwork)
     accent=(121,159,235) if 'week' in heading.lower() else (239,190,105)
     image=background((1080,980),accent);draw=ImageDraw.Draw(image)
     def text(x,y,value,size=20,colour=WHITE,bold=False,width=900):

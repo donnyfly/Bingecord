@@ -39,6 +39,12 @@ async def challenge_card(send,user,state,*,now,ephemeral=False):
         embed.add_field(name=section['scope'].title()+' · Resets '+discord.utils.format_dt(datetime.fromisoformat(section['end']),'R'),value=text,inline=False)
     try:
         data=await asyncio.to_thread(render_challenges_png,user.display_name,state,avatar=images.get('avatar'),posters=posters,now=now)
+        from .card_details import details_view
+        detail=embed.copy();detail.title=user.display_name+' · Personal Challenges'+(' · Preview' if state.get('preview') else '')
+        kwargs['view']=await details_view(detail,owner=user.id if ephemeral else None)
+        embed.clear_fields()
+        embed.description=' · '.join(section['scope'].title()+' resets '+discord.utils.format_dt(datetime.fromisoformat(section['end']),'R') for section in state['sections'])
+        if state.get('preview'):embed.description+='\nPreview only · No XP changes.'
         embed.set_image(url='attachment://challenges.png');kwargs['file']=discord.File(data,filename='challenges.png')
     except Exception:
         embed.set_footer(text='Resets at 00:00 UTC · Shared progression across trackers')
