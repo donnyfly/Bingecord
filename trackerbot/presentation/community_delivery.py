@@ -3,16 +3,19 @@ import asyncio
 from datetime import datetime
 import discord
 from .community_visuals import render_community_png
-from .discord_artwork import load_discord_artwork
+from .discord_artwork import load_discord_artwork,resolve_card_members
 
 
-async def community_card(send,guild,state,*,viewer=None,preview=False,heading=None):
+async def community_card(send,guild,state,*,viewer=None,preview=False,heading=None,client=None):
     names={};assets={};rows=sorted((state.get('contributions') or {}).items(),key=lambda kv:(-kv[1],kv[0]))[:5]
+    members=await resolve_card_members(guild,[uid for uid,_ in rows],client)
     for uid,_ in rows:
-        member=guild.get_member(int(uid)) if guild and hasattr(guild,'get_member') else None
-        names[uid]=member.display_name if member else f'<@{uid}>'
+        member=members.get(uid)
+        names[uid]=member.display_name if member else 'Member '+str(uid)[-4:]
         if member:assets[uid]=member.display_avatar
-    avatars=await load_discord_artwork(assets)
+    assets['server_icon']=getattr(guild,'icon',None) if guild else None
+    avatars=await load_discord_artwork(assets,limit=6)
+    server_icon=avatars.pop('server_icon',None)
     posters={}
     entries=state.get('art_entries') or []
     if entries:
@@ -53,7 +56,7 @@ async def community_card(send,guild,state,*,viewer=None,preview=False,heading=No
     if preview:kwargs['ephemeral']=True
     try:
         image=await asyncio.to_thread(render_community_png,guild.name if guild else 'Community',state,
-                                      names=names,avatars=avatars,viewer=viewer,posters=posters,heading=heading)
+                                      names=names,avatars=avatars,viewer=viewer,posters=posters,heading=heading,server_icon=server_icon)
         embed.set_image(url='attachment://community.png');kwargs['file']=discord.File(image,filename='community.png')
     except Exception:
         lines=[f"{discord.utils.escape_markdown(names[uid])} · {value:,.1f} {unit}" for uid,value in rows]

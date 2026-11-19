@@ -16,7 +16,7 @@ WHITE=(241,243,248)
 MUTED=(151,158,174)
 
 
-from trackerbot.presentation.typography import text as card_text, label as card_label
+from trackerbot.presentation.typography import text as card_text, label as card_label, number_unit, unit_label
 
 
 def _short(draw, value, font, width):
@@ -165,7 +165,7 @@ def render_profile_png(name, data, artwork=None):
     else:
         for idx,line in enumerate(lines):text(82,778+idx*36,short(draw,line,27,470,True),27,WHITE,True)
     count=featured[0]['count'] if featured else 0
-    text(82,872,f"{count:,}",42,WHITE,True,width=150);text(246,897,'watches',17,MUTED)
+    number_unit(draw,(82,913),f'{count:,}',unit_label('watches',count),size=42,unit_size=17,fill=WHITE,unit_fill=MUTED,width=470)
     panel(image,(608,501,1024,778))
     coverage=min(1,data.get('genre_covered_watches',data['total'])/max(1,data['total']))
     text(634,524,f'TOP GENRES · {coverage:.0%} OF WATCHES MAPPED',13,MUTED,True,width=364)

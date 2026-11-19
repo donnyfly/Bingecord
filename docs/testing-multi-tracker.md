@@ -260,3 +260,11 @@ last verified evidence; removing a supporting watch or changing account prevents
 it from qualifying a title. Test this alternate path with one finale watched
 during the event, while earlier episodes were watched before it. Test reward
 reversal across a prestige boundary as well as within one level range.
+
+Card identity/layout checks: restart with an empty Discord member cache and
+confirm the top five contributors show server display names and avatars. The
+server icon belongs beside the server name. Member lookup and artwork failures
+must keep the card usable without raw mention syntax or extra pings; no privileged
+member intent is required. Check `1 square`, `2 titles`, `203 watches` and large
+counts for a close, shared-baseline unit label. Check 0%, 66% and 100% are centered
+in the Watchathon ring. Live cards and private debug previews share this layout.

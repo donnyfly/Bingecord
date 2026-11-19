@@ -89,3 +89,23 @@ def test_failed_reward_notice_does_not_fall_through_to_second_results_post(monke
         await bot.refresh_community_state('1')
         assert send.await_count==2;ack.assert_awaited_once()
     asyncio.run(run())
+
+
+def test_card_delivery_resolves_uncached_names_and_supplies_server_icon(monkeypatch):
+    import trackerbot.presentation.community_delivery as delivery
+    async def run():
+        member=SimpleNamespace(display_name='Adele',display_avatar='avatar-asset')
+        guild=SimpleNamespace(id=9,name='Basement buddies',icon='server-asset',
+                              get_member=lambda uid:None,fetch_member=AsyncMock(return_value=member))
+        s=state();s['contributions']={'123':120}
+        artwork=AsyncMock(return_value={'123':'avatar-image','server_icon':'server-image'})
+        monkeypatch.setattr(delivery,'load_discord_artwork',artwork)
+        from unittest.mock import Mock
+        render=Mock(return_value=BytesIO(b'png'))
+        monkeypatch.setattr(delivery,'render_community_png',render)
+        await delivery.community_card(AsyncMock(),guild,s,viewer='123')
+        assert render.call_args.kwargs['names']=={'123':'Adele'}
+        assert render.call_args.kwargs['avatars']=={'123':'avatar-image'}
+        assert render.call_args.kwargs['server_icon']=='server-image'
+        assert artwork.await_args.args[0]=={'123':'avatar-asset','server_icon':'server-asset'}
+    asyncio.run(run())

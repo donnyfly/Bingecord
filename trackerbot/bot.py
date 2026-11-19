@@ -2170,7 +2170,7 @@ async def notify_challenge_rewards(guild_id_value,uid,channel):
 
 async def send_community_card(send,guild,state,**kwargs):
     from trackerbot.presentation.community_delivery import community_card
-    return await community_card(send,guild,state,**kwargs)
+    return await community_card(send,guild,state,client=bot,**kwargs)
 
 
 async def notify_community_rewards(guild_id_value,channel,notification):
@@ -3301,13 +3301,13 @@ async def show_leaderboard(i,category=None,*,preview=False):
         embed.set_footer(text=f"Page {page}/{pages} · {len(values):,} members · Server watch counts · Global XP and prestige" if progression_enabled
                          else f"Page {page}/{pages} · {len(values):,} members · Server watch counts")
         try:
-            from trackerbot.presentation.discord_artwork import load_discord_artwork
-            assets={}
-            for row in page_rows:
-                member=i.guild.get_member(int(row['discord_user_id']))
-                if member:assets[str(row['discord_user_id'])]=getattr(member,'display_avatar',None)
+            from trackerbot.presentation.discord_artwork import load_discord_artwork,resolve_card_members
+            members=await resolve_card_members(i.guild,[row['discord_user_id'] for row in page_rows],bot)
+            assets={uid:member.display_avatar for uid,member in members.items()}
             avatars=await load_discord_artwork(assets)
-            image=await asyncio.to_thread(render_leaderboard_png,i.guild.name,labels[category],page_rows,rank_offset=start,avatars=avatars,show_progression=progression_enabled)
+            display_rows=[{**row,'name':members[str(row['discord_user_id'])].display_name
+                           if str(row['discord_user_id']) in members else row['name']} for row in page_rows]
+            image=await asyncio.to_thread(render_leaderboard_png,i.guild.name,labels[category],display_rows,rank_offset=start,avatars=avatars,show_progression=progression_enabled)
             embed.set_image(url="attachment://leaderboard.png")
             return embed,discord.File(image,filename="leaderboard.png")
         except Exception:
