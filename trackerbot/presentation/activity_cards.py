@@ -2,7 +2,10 @@
 import asyncio
 from collections import OrderedDict
 from io import BytesIO
-from datetime import timezone
+from datetime import datetime,timezone
+from zoneinfo import ZoneInfo,ZoneInfoNotFoundError
+from pathlib import Path
+from functools import lru_cache
 import hashlib
 import json
 import re
@@ -59,6 +62,7 @@ def card_model(embed,part,*,preview=False,sample=False):
             'episode_title':' · '.join(episode_title),'ratings':ratings,'notes':notes,'source':footer,
             'image':getattr(embed.image,'url',None),'logo':getattr(embed.thumbnail,'url',None),
             'avatar':getattr(embed.author,'icon_url',None),'timestamp':embed.timestamp.astimezone(timezone.utc).isoformat() if embed.timestamp else None,
+            'tracker':str(part.get('source','')).lower(),'timezone':part.get('display_timezone','UTC'),
             'movie':bool(part.get('meta',{}).get('movie')),'preview':preview,'sample':sample}
 
 
@@ -119,6 +123,29 @@ def _flows(items,width,gap=12):
     return positions,(row+1 if items else 0)
 
 
+@lru_cache(maxsize=8)
+def service_logo(service):
+    path=Path(__file__).with_name('service_logos')/(service+'.png')
+    if not path.is_file():return None
+    with Image.open(path) as image:return image.convert('RGBA').copy()
+
+
+def rating_service(name,tracker):
+    if name.lower().startswith('your'):return tracker if tracker in {'simkl','wetrakr','mdblist'} else None
+    if name.lower()=='imdb':return 'imdb'
+    if name.lower()=='mal':return 'mal'
+    return None
+
+
+def local_timestamp(model):
+    if not model.get('timestamp'):return ''
+    try:zone=ZoneInfo(model.get('timezone') or 'UTC')
+    except (ValueError,ZoneInfoNotFoundError):zone=ZoneInfo('UTC')
+    at=datetime.fromisoformat(model['timestamp']).astimezone(zone)
+    offset=at.strftime('%z');offset=offset[:3]+':'+offset[3:]
+    return at.strftime('%Y-%m-%d %H:%M')+' '+zone.key+' (UTC'+offset+')'
+
+
 def activity_layout(model):
     """Size chips and rows from real text, without reserving empty sidebar space."""
     draw=ImageDraw.Draw(Image.new('RGB',(1,1)));ratings=[];notes=[]
@@ -127,7 +154,7 @@ def activity_layout(model):
         name=rating[:match.start()].strip(' :') if match else rating
         name=name.replace('Your episode rating','Your episode').replace('Your series rating','Your series').replace('Your season-entry rating','Your season entry').replace('Your season rating','Your season')
         value=match.group() if match else '—'
-        width=min(984,max(132,int(max(draw.textlength(name.upper(),font=font(12,weight=600),**SHAPING),draw.textlength(value,font=font(26,True),**SHAPING)))+36))
+        width=min(984,max(132,int(max(draw.textlength(name.upper(),font=font(12,weight=600),**SHAPING),draw.textlength(value,font=font(26,True),**SHAPING)))+72))
         ratings.append((name,value,width))
     for note in (model.get('notes') or [])[:3]:
         width=min(984,int(draw.textlength(note,font=font(17,True),**SHAPING))+66)
@@ -157,7 +184,7 @@ def render_activity_png(model,artwork=None):
     else:
         draw.ellipse((48,62,92,106),fill=LINE)
         paint(draw,(70,84),model['author'][:1].upper(),font=font(20,True),fill=accent,anchor='mm')
-    text(106,71,model['author'],20,WHITE,width=760)
+    text(106,71,model['author'],20,WHITE,width=650)
     top=layout['hero_top'];h=layout['hero_height'];bottom=layout['hero_bottom']
     if hero:tile=cinematic_art(hero,(984,h))
     else:
@@ -176,8 +203,8 @@ def render_activity_png(model,artwork=None):
     image.paste(tile,(48,top),mask)
     logo=artwork.get('logo')
     if logo:
-        fitted=ImageOps.contain(logo.convert('RGBA'),(430,108),method=Image.Resampling.LANCZOS)
-        image.paste(fitted,(72,top+24),fitted)
+        fitted=ImageOps.contain(logo.convert('RGBA'),(242,76),method=Image.Resampling.LANCZOS)
+        image.paste(fitted,(1032-fitted.width,42+(76-fitted.height)//2),fitted)
     else:
         for index,line in enumerate(_wrap(draw,model['title'],36,936,2,True)):
             text(72,top+22+index*43,line,36,WHITE,True,width=936)
@@ -198,8 +225,13 @@ def render_activity_png(model,artwork=None):
     for (name,value,width),(x,row) in zip(layout['ratings'],layout['rating_positions']):
         x+=48;y=layout['ratings_top']+row*76
         panel(image,(x,y,x+width,y+64),16)
-        label(draw,(x+18,y+9),name,size=12,fill=MUTED)
-        text(x+18,y+27,value,26,accent,True,width=width-36)
+        service=rating_service(name,model.get('tracker'))
+        mark=service_logo(service) if service else None
+        if mark:
+            fitted=ImageOps.contain(mark,(30,30),method=Image.Resampling.LANCZOS)
+            image.paste(fitted,(x+14+(30-fitted.width)//2,y+17+(30-fitted.height)//2),fitted)
+        label(draw,(x+54,y+9),name,size=12,fill=MUTED)
+        text(x+54,y+27,value,26,accent,True,width=width-66)
     if not layout['ratings']:text(48,layout['ratings_top']+3,'No ratings shown',14,MUTED,width=984)
     for (note,width),(x,row) in zip(layout['notes'],layout['note_positions']):
         x+=48;y=layout['notes_top']+row*48
@@ -221,9 +253,9 @@ def render_activity_png(model,artwork=None):
         draw.rounded_rectangle((48,footer_y,66,footer_y+12),2,outline=MUTED,width=1)
         draw.line((57,footer_y+12,57,footer_y+15),fill=MUTED);draw.line((52,footer_y+15,62,footer_y+15),fill=MUTED)
     source=re.sub(r'^[^\w]+','',model['source'])
-    text(76,footer_y,source,12,MUTED,width=620)
+    text(76,footer_y,source,12,MUTED,width=330)
     if model.get('timestamp'):
-        paint(draw,(1032,footer_y),model['timestamp'].replace('T',' ')[:16]+' UTC',font=font(12),fill=MUTED,anchor='ra')
+        paint(draw,(1032,footer_y),local_timestamp(model),font=font(12),fill=MUTED,anchor='ra')
     return png(image)
 
 

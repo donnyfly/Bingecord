@@ -165,3 +165,68 @@ def test_cinematic_fill_preserves_full_four_three_frame_and_colours_sidebars():
     assert simple['height']<full['height']
     assert full['ratings'][1][0]=='Your episode'
     for (name,value,width),(x,row) in zip(full['ratings'],full['rating_positions']):assert x+width<=984
+
+
+def test_rating_marks_and_watcher_timezone():
+    from trackerbot.presentation.activity_cards import rating_service,service_logo,local_timestamp
+    for service in ('simkl','wetrakr','mdblist'):
+        assert rating_service('Your season entry',service)==service
+        assert service_logo(service).width>=48
+    for label,service in (('IMDb','imdb'),('MAL','mal')):
+        assert rating_service(label,'simkl')==service
+        assert service_logo(service).mode=='RGBA'
+    base={'timestamp':'2026-11-19T09:48:00+00:00','timezone':'Asia/Singapore'}
+    assert local_timestamp(base)=='2026-11-19 17:48 Asia/Singapore (UTC+08:00)'
+    assert local_timestamp(dict(base,timezone='America/New_York')).endswith('(UTC-05:00)')
+    assert local_timestamp(dict(base,timezone='America/New_York',timestamp='2026-07-19T09:48:00+00:00')).endswith('(UTC-04:00)')
+    assert local_timestamp(dict(base,timezone='Invalid/Zone')).endswith('UTC (UTC+00:00)')
+    embed,part=example();model=card_model(embed,dict(part,display_timezone='Asia/Singapore'))
+    assert model['timezone']=='Asia/Singapore' and model['tracker']=='simkl'
+
+
+def test_title_mark_stays_in_header_outside_artwork():
+    from trackerbot.presentation.activity_cards import activity_layout
+    embed,part=example();model=card_model(embed,part)
+    colour=(255,0,255,255)
+    image=Image.open(render_activity_png(model,{'logo':Image.new('RGBA',(242,76),colour)})).convert('RGBA')
+    assert image.getpixel((1031,117))==colour
+    assert activity_layout(model)['hero_top']>118
+    # The old top-left artwork placement must not contain the supplied mark.
+    assert image.getpixel((73,149))!=colour
+
+
+def test_personal_timezone_persists_isolated_and_reset_follows_server(tmp_path,monkeypatch):
+    from trackerbot.core import storage as module
+    async def run():
+        monkeypatch.setattr(module,'DATA_PATH',str(tmp_path/'timezone.json'))
+        store=module.Storage()
+        for uid in ('1','2'):
+            await store.link_user('10',uid,'token',None,'Viewer','2026-10-01T00:00:00Z')
+        await store.set_timezone('10','UTC')
+        await store.set_activity_timezone('1','America/New_York')
+        assert (await store.get_activity_timezone('10','1'))=={'name':'America/New_York','source':'personal'}
+        assert (await store.get_activity_timezone('10','2'))['name']=='UTC'
+        assert (await store.get_timezone('10'))['name']=='UTC'
+        restarted=module.Storage()
+        assert (await restarted.get_activity_timezone('10','1'))['name']=='America/New_York'
+        from zoneinfo import ZoneInfoNotFoundError
+        with pytest.raises(ZoneInfoNotFoundError):await store.set_activity_timezone('1','Invalid/Zone')
+        await store.set_activity_timezone('1',None)
+        assert (await store.get_activity_timezone('10','1'))['name']=='UTC'
+    asyncio.run(run())
+
+
+def test_personal_timezone_command_available_to_non_admin(monkeypatch):
+    from test_notification_preview import bot,_interaction
+    async def run():
+        i=_interaction();i.user.guild_permissions.manage_guild=False
+        setter=AsyncMock();monkeypatch.setattr(bot.storage,'set_activity_timezone',setter)
+        server=AsyncMock();monkeypatch.setattr(bot.storage,'set_timezone',server)
+        monkeypatch.setattr(bot.storage,'get_activity_timezone',AsyncMock(return_value={'name':'Asia/Singapore','source':'personal'}))
+        await bot.simkl_timezone.callback(i,'Asia/Singapore',personal=True)
+        setter.assert_awaited_once_with('42','Asia/Singapore')
+        assert 'Asia/Singapore' in i.response.send_message.await_args.args[0]
+        await bot.simkl_timezone.callback(i,'UTC')
+        server.assert_not_awaited()
+        assert i.response.send_message.await_args.args[0]==bot.NOT_ADMIN_MESSAGE
+    asyncio.run(run())

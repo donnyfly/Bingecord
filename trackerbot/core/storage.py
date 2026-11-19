@@ -1399,6 +1399,23 @@ class Storage:
                 default_name = "UTC"
             return {"name": default_name, "source": "environment" if os.getenv("SIMKL_DEFAULT_TIMEZONE") else "built-in"}
 
+    async def get_activity_timezone(self,guild_id,user_id):
+        async with _lock:
+            user=self._user(str(user_id)) or {}
+            value=user.get('activity_timezone')
+            if value:
+                try:ZoneInfo(value);return {'name':value,'source':'personal'}
+                except (ValueError,ZoneInfoNotFoundError):pass
+        return await self.get_timezone(guild_id)
+
+    async def set_activity_timezone(self,user_id,value):
+        if value:ZoneInfo(value)
+        async with _lock:
+            user=self._user(str(user_id))
+            if not user:raise ValueError('Link a tracker account first.')
+            user['activity_timezone']=value;self._dirty=True
+        await self.flush()
+
     async def set_timezone(self, guild_id: int | str, timezone_name: str | None) -> None:
         async with _lock:
             self._migrate_legacy_guild_locked(str(guild_id))

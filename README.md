@@ -52,7 +52,7 @@ The bot displays **Playing /bingecord help**. Use `/bingecord help` for a privat
 | `/bingecord setchannel` | Manage Server | Choose the activity channel |
 | `/bingecord style-server` | Manage Server | Set server-wide style defaults |
 | `/bingecord features` | Manage Server | Enable or disable optional feature groups |
-| `/bingecord timezone` | Manage Server | Set the server timezone |
+| `/bingecord timezone` | Everyone (personal); Manage Server (server) | Set your activity-card timezone or the server timezone |
 | `/bingecord weekly-recap` | Manage Server | Post/test a weekly recap |
 | `/bingecord status` | Manage Server | View configuration and sync health; optionally check `user: @username` |
 | `/bingecord checknow` | Manage Server | Check selected providers immediately |
@@ -270,7 +270,7 @@ The main settings live in `.env`. Use `.env.example` as the complete template; l
 | `DISCORD_DEV_GUILD_ID` | No | — | Optional immediate development-server command sync |
 | `IMDB_RATINGS_DB_PATH` | No | `data/imdb_ratings.db` | Generated episode-rating database path |
 
-Server admins can override the timezone with `/bingecord timezone`.
+Server admins can override the timezone with `/bingecord timezone`. For timestamps printed on your activity cards, use `/bingecord timezone personal:True timezone:Asia/Singapore` (or any valid IANA timezone). This personal preference follows you across servers; without it, cards use the server timezone. Use `personal:True timezone:reset` to follow the server again. New activity cards and debug previews use this setting. An image displays the watcher’s selected timezone for everyone viewing it; Discord’s native timestamps still adapt to each viewer.
 
 ## First-import performance and progress
 

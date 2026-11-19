@@ -474,6 +474,7 @@ async def send_embed(ch,e,what):
             p=await prefs(part['guild'],part['user'])
             if p.get('style')=='card':
                 try:
+                    part['display_timezone']=(await storage.get_activity_timezone(part['guild'],part['user']))['name']
                     kwargs.update(await activity_card_kwargs(e,part))
                     post['presentation']='card'
                 except Exception:log.warning('Activity card unavailable; using native embed.',exc_info=True)
@@ -2512,10 +2513,20 @@ async def simkl_features(i, preset: app_commands.Choice[str] | None = None,
         "\n\nActivity tracking stays available. Challenges and community goals also require progression. "
         "Disabled commands may still appear in Discord's menu. Existing history and global XP are retained and watch XP continues syncing so shared accounts stay consistent.",ephemeral=True)
 
-@bingecord_commands.command(name="timezone",description="(Admin) Set or view the server timezone.")
-@app_commands.describe(timezone="IANA timezone such as Asia/Singapore, or 'reset' to use the environment default")
-async def simkl_timezone(i, timezone: str | None = None):
+@bingecord_commands.command(name="timezone",description="Set or view the server timezone, or your personal activity-card timezone.")
+@app_commands.describe(timezone="IANA timezone such as Asia/Singapore, or reset to follow the default",personal="Set your own activity-card timezone instead of the server timezone")
+async def simkl_timezone(i, timezone: str | None = None,personal:bool=False):
     g=guild_id(i)
+    if g and personal:
+        uid=str(i.user.id)
+        if timezone and timezone.strip():
+            value=timezone.strip();value=None if value.lower()=='reset' else value
+            try:await storage.set_activity_timezone(uid,value)
+            except (ValueError,ZoneInfoNotFoundError) as exc:
+                await i.response.send_message('Use a valid IANA timezone, such as Asia/Singapore. '+str(exc),ephemeral=True);return
+        info=await storage.get_activity_timezone(g,uid)
+        await i.response.send_message(f"Your activity cards use **{info['name']}** ({info['source']}). This affects new cards; other members and server resets are unchanged.",ephemeral=True)
+        return
     if not g or not is_admin(i):
         await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True)
         return
@@ -2845,6 +2856,7 @@ async def simkl_debug(
             embed.set_author(name=i.user.display_name+"'s Activity",icon_url=getattr(getattr(i.user,'display_avatar',None),'url',None))
             embed.set_footer(text=('Movie' if movie else 'TV')+' · '+source.upper());sample=True
         try:
+            part={**part,'display_timezone':(await storage.get_activity_timezone(g,uid))['name']}
             kwargs=await activity_card_kwargs(embed,part,preview=True,sample=sample)
             await i.followup.send(**kwargs,ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
         except Exception:
