@@ -353,7 +353,12 @@ Use Rich or Minimal to return to native embeds for subsequent watches.
 
 Watched Together also supports visual cards, showing up to five participants with
 avatars and separate personal ratings using each member’s tracker icon. Group
-presentation and timestamp follow the first participant’s style and timezone. Status changes remain native embeds.
+presentation and timestamp follow the first participant’s style and timezone.
+Visual card also covers Planned, Watching, Paused, Dropped and completion status
+updates. These use TMDB landscape artwork, never posters: a known episode still
+when supplied by the provider, otherwise a series backdrop; movies use backdrops.
+Rich and Minimal status styles retain their existing poster presentation.
+Preview the status layout with `/bingecord debug feature:Status activity card`.
 Use `/bingecord debug feature:Watched Together card` for a private preview.
 Style inheritance and forced server defaults still apply. Later rating/completion
 updates regenerate and replace a saved card attachment without changing its base

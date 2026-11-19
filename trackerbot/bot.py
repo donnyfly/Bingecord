@@ -445,9 +445,10 @@ def build_embed(t,desc,ts,name,member,image,profile,title=None,title_url=None,po
     color,label=MEDIA_STYLES[t]; p={"style":"rich","artwork":"auto","activity_text":"short","show_imdb":True,"show_mal":True}; p.update(preferences or {})
     e=discord.Embed(title=title,url=title_url,description=desc,color=color,timestamp=ts)
     e.set_author(name=f"{name}'s Activity",url=profile,icon_url=member.display_avatar.url if member else None)
-    # Status activities always use the title poster. /bingecord style and
-    # /bingecord style-server only control watch activities.
-    if status_activity:
+    # Visual cards always use landscape art; native status styles retain posters.
+    if p['style']=='card':
+        selected=image
+    elif status_activity:
         selected=poster
     elif p["artwork"]=="poster":
         selected=poster
@@ -460,7 +461,7 @@ def build_embed(t,desc,ts,name,member,image,profile,title=None,title_url=None,po
             e.set_thumbnail(url=selected)
         else:
             e.set_image(url=selected)
-            if p["artwork"] in ("auto", "backdrop") and logo:
+            if (p["style"]=="card" or p["artwork"] in ("auto", "backdrop")) and logo:
                 e.set_thumbnail(url=logo)
     e.set_footer(text=f"{label} · {provider}"); return e
 async def send_embed(ch,e,what):
@@ -912,7 +913,7 @@ async def process_status(ch,g,uid,name,member,t,items,profile):
             if t=="anime" and p.get("show_mal", True) and ratings.get("mal") is not None:
                 desc += f"\n🌸 MAL {ratings['mal']:.2f}/10"
         logo=None
-        if artwork_tmdb_id is not None and p["artwork"] in ("auto", "backdrop"):
+        if artwork_tmdb_id is not None and (p["style"]=="card" or p["artwork"] in ("auto", "backdrop")):
             try:
                 logo=await (tmdb.get_movie_logo(artwork_tmdb_id) if t=="movies" else tmdb.get_tv_logo(artwork_tmdb_id))
             except Exception:
@@ -1698,12 +1699,12 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
             anime_item = await is_wetrakr_anime_movie(details, tmdb_id)
         except Exception:
             log.warning("WeTrakr movie classification failed for TMDB=%s.", tmdb_id, exc_info=True)
-    if tmdb_id and status is None:
+    if tmdb_id and (status is None or p.get("style")=="card"):
         try:
             if t == "movies":
                 image = await tmdb.get_movie_backdrop(tmdb_id)
                 logo = await tmdb.get_movie_logo(tmdb_id)
-            elif season is not None and number is not None:
+            elif season is not None and number is not None and (not status or t!="anime" or mapped_anime):
                 if t == "anime" and mapped_anime:
                     resolved_episode = await tmdb.find_anime_episode(tmdb_id, tvdb_id, [season], number,
                                                                      episode_title=episode_title)
@@ -1713,7 +1714,11 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
                                                              resolved_episode["season_number"], resolved_episode["episode_number"])
                 else:
                     image = await tmdb.get_episode_still(tmdb_id, season, number)
+                if not image and status:image=await tmdb.get_tv_backdrop(tmdb_id)
                 logo = await tmdb.get_tv_logo(tmdb_id)
+            elif status:
+                image=await tmdb.get_tv_backdrop(tmdb_id)
+                logo=await tmdb.get_tv_logo(tmdb_id)
         except Exception:
             log.warning("TMDB WeTrakr artwork lookup failed for %s.", title, exc_info=True)
     ratings = {}
@@ -2803,6 +2808,7 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         app_commands.Choice(name="Episode activity card", value="activity_episode"),
         app_commands.Choice(name="Film activity card", value="activity_movie"),
         app_commands.Choice(name="Watched Together card", value="activity_together"),
+        app_commands.Choice(name="Status activity card", value="activity_status"),
         app_commands.Choice(name="Profile card", value="profile"),
         app_commands.Choice(name="Leaderboard card", value="leaderboard"),
         app_commands.Choice(name="Server stats card", value="server_stats"),
@@ -2846,15 +2852,15 @@ async def simkl_debug(
     if community_event is not None:
         await i.response.send_message('The community_event option is only for Community event card previews.',ephemeral=True)
         return
-    if feature.value in {'activity_episode','activity_movie','activity_together'}:
+    if feature.value in {'activity_episode','activity_movie','activity_together','activity_status'}:
         await i.response.defer(ephemeral=True)
         from trackerbot.presentation.activity_cards import activity_card_kwargs
-        together=feature.value=='activity_together';movie=feature.value!='activity_episode';group_parts=None;g=str(i.guild.id);uid=str(i.user.id)
+        together=feature.value=='activity_together';status_preview=feature.value=='activity_status';movie=feature.value not in {'activity_episode','activity_status'};group_parts=None;g=str(i.guild.id);uid=str(i.user.id)
         source=await storage.get_activity_provider(g,uid) or 'simkl'
         records=await storage.get_activity_messages(g)
         selected=next(((record,part) for record in reversed(records) for part in record['parts']
-                       if part['user']==uid and part['source']==source and not part['meta'].get('status')
-                       and (together or bool(part['meta'].get('movie'))==movie) and (len(record['parts'])>1 if together else len(record['parts'])==1)),None)
+                       if part['user']==uid and part['source']==source and (bool(part['meta'].get('status')) if status_preview else not part['meta'].get('status'))
+                       and (together or status_preview or bool(part['meta'].get('movie'))==movie) and (len(record['parts'])>1 if together else len(record['parts'])==1)),None)
         if selected:
             record,part=selected;embed=discord.Embed.from_dict(record['rendered']);sample=False
             if together:group_parts=[dict(p) for p in record['parts']];part=group_parts[0]
@@ -2866,6 +2872,21 @@ async def simkl_debug(
                 color=0xEFBE69 if movie else 0x9A8CE8,timestamp=datetime.now(timezone.utc))
             embed.set_author(name=i.user.display_name+"'s Activity",icon_url=getattr(getattr(i.user,'display_avatar',None),'url',None))
             embed.set_footer(text=('Movie' if movie else 'TV')+' · '+source.upper());sample=True
+        if status_preview:
+            if sample:
+                part['meta']['status']='planning'
+                embed.description='Planned to watch **Example Series**\n⭐ IMDb 8.0/10'
+            # Cached native status posts may still contain a poster. Never reuse it.
+            embed.set_image(url=None);embed.set_thumbnail(url=None)
+            tmdb_id=part['meta'].get('ids',{}).get('tmdb')
+            if tmdb_id:
+                try:
+                    movie=bool(part['meta'].get('movie'))
+                    image=await (tmdb.get_movie_backdrop(tmdb_id) if movie else tmdb.get_tv_backdrop(tmdb_id))
+                    embed.set_image(url=image)
+                    logo=await (tmdb.get_movie_logo(tmdb_id) if movie else tmdb.get_tv_logo(tmdb_id))
+                    embed.set_thumbnail(url=logo)
+                except Exception:log.warning('Status preview landscape artwork unavailable.')
         if together and not group_parts:
             part.update(card_name=i.user.display_name,card_avatar=str(i.user.display_avatar.url) if getattr(i.user,'display_avatar',None) else None)
             group_parts=[part,{**part,'user':'0','card_name':'Another viewer','card_avatar':None}]
@@ -4509,7 +4530,11 @@ async def deliver_mdblist_status(ch,gid,uid,name,member,provider,account,status,
         if anime and p.get('show_mal',True) and ratings.get('mal') is not None:description+=f" · 🌸 MAL {ratings['mal']:.2f}/10"
     tmdb_id=item['ids'].get('tmdb')
     logo=await (tmdb.get_movie_logo(tmdb_id) if movie else tmdb.get_tv_logo(tmdb_id)) if tmdb_id else None
-    embed=build_embed(media,description,datetime.now(timezone.utc),name,member,None,provider.profile_url(account),
+    image=None
+    if tmdb_id and p.get('style')=='card':
+        try:image=await (tmdb.get_movie_backdrop(tmdb_id) if movie else tmdb.get_tv_backdrop(tmdb_id))
+        except Exception:log.warning('MDBList status backdrop unavailable for %s.',item['title'])
+    embed=build_embed(media,description,datetime.now(timezone.utc),name,member,image,provider.profile_url(account),
         title=item['title'],title_url=item.get('url'),poster=item.get('poster'),logo=logo,preferences=p,status_activity=True,provider='MDBList')
     return await activity_details.single(send_embed,ch,embed,gid,uid,'mdblist',{'ids':item['ids'],'movie':movie,'status':status})
 

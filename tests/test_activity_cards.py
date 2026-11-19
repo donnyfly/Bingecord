@@ -27,7 +27,7 @@ def test_model_preserves_episode_ratings_completion_and_started_last():
     assert model['notes']==['Finished Season 1.','NEW · Started watching this series.']
     assert embed.to_dict()==before
     assert eligible([part]) and eligible([part,{**part,'user':'2'}])
-    assert not eligible([{**part,'meta':{**part['meta'],'status':'completed'}}])
+    assert eligible([{**part,'meta':{**part['meta'],'status':'completed'}}])
     film,part=example(True);model=card_model(film,part)
     assert model['action']=='Watched' and any('MAL' in r for r in model['ratings'])
     film.description='Rewatched **Example Film**\n⭐ IMDb 8.0/10'
@@ -143,7 +143,7 @@ def test_debug_activity_previews_are_private_without_sync_or_preferences_changes
         monkeypatch.setattr(cards,'activity_card_kwargs',render)
         writer=AsyncMock();monkeypatch.setattr(bot.storage,'set_embed_preferences',writer)
         poll=AsyncMock();monkeypatch.setattr(bot,'poll_providers',poll)
-        for feature in ('activity_episode','activity_movie'):
+        for feature in ('activity_episode','activity_movie','activity_status'):
             await bot.simkl_debug.callback(i,app_commands.Choice(name=feature,value=feature))
             assert i.followup.send.await_args.kwargs['ephemeral']
             assert render.await_args.kwargs=={'preview':True,'sample':True}
@@ -343,3 +343,27 @@ def test_together_debug_preview_is_private_and_does_not_poll(monkeypatch):
         assert render.await_args.args[1]['preview_owner']=='42'
         poll.assert_not_awaited()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('status,verb',[('planning','Planned to watch'),('dropped','Dropped'),('paused','Paused'),('watching','Started watching'),('completed','Completed')])
+def test_status_models_are_cards_with_correct_action_and_anime_ratings(status,verb):
+    embed,part=example();part['meta'].update(status=status,episodes=[])
+    embed.description=f'{verb} **Example Series**\n⭐ IMDb 8.0/10 · 🌸 MAL 9.0/10\n💬 Your series rating: **7/10**'
+    model=card_model(embed,part)
+    assert eligible([part]) and model['action']==verb
+    assert model['ratings']==['IMDb 8.0/10','MAL 9.0/10','Your series rating: 7/10']
+    assert not model['episode_title']
+
+
+def test_visual_status_artwork_never_falls_back_to_poster():
+    from test_notification_preview import bot
+    args=('shows','Planned to watch',datetime.now(timezone.utc),'Viewer',None)
+    for style in ('rich','minimal','card'):
+        embed=bot.build_embed(*args,'https://image.tmdb.org/backdrop.jpg',None,poster='https://image.tmdb.org/poster.jpg',
+                              logo='https://image.tmdb.org/logo.png',preferences={'style':style,'artwork':'poster'},status_activity=True)
+        if style=='card':
+            assert embed.image.url.endswith('backdrop.jpg') and embed.thumbnail.url.endswith('logo.png')
+            empty=bot.build_embed(*args,None,None,poster='https://image.tmdb.org/poster.jpg',preferences={'style':'card'},status_activity=True)
+            assert not empty.image
+        elif style=='minimal':assert embed.thumbnail.url.endswith('poster.jpg')
+        else:assert embed.image.url.endswith('poster.jpg')

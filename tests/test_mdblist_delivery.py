@@ -79,3 +79,19 @@ def test_status_verbs_use_poster_and_anime_title_ratings(monkeypatch):
             assert embed.description.startswith(verb) and 'MAL 8.10' in embed.description
             assert embed.image.url.endswith('poster.jpg') and embed.author.url.endswith('@viewer')
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('movie',[False,True])
+def test_visual_status_uses_tmdb_landscape_without_poster(monkeypatch,movie):
+    async def run():
+        monkeypatch.setattr(bot,'prefs',AsyncMock(return_value={'style':'card','artwork':'poster','show_imdb':False,'show_mal':False}))
+        for name in ('get_movie_logo','get_tv_logo'):monkeypatch.setattr(bot.tmdb,name,AsyncMock(return_value='https://image.tmdb.org/logo.png'))
+        for name in ('get_movie_backdrop','get_tv_backdrop'):monkeypatch.setattr(bot.tmdb,name,AsyncMock(return_value='https://image.tmdb.org/backdrop.jpg'))
+        sender=AsyncMock(return_value=True);monkeypatch.setattr(bot,'send_embed',sender)
+        provider=SimpleNamespace(ratings=AsyncMock(return_value={}),profile_url=lambda _:'https://mdblist.com/@viewer')
+        item={'media_type':'movies' if movie else 'shows','title':'Title','ids':{'tmdb':100},'poster':'https://example.com/poster.jpg'}
+        assert await bot.deliver_mdblist_status(object(),'1','42','Viewer',None,provider,object(),'planning',item)
+        embed=sender.await_args.args[1]
+        assert embed.image.url.endswith('backdrop.jpg') and embed.thumbnail.url.endswith('logo.png')
+        (bot.tmdb.get_movie_backdrop if movie else bot.tmdb.get_tv_backdrop).assert_awaited_once_with(100)
+    asyncio.run(run())

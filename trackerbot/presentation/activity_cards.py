@@ -47,7 +47,9 @@ def card_model(embed,part,*,preview=False,sample=False):
     for line in lines[1:]:
         if re.search(r'\b(IMDb|MAL)\b',line):
             # Episode embeds must never acquire MAL or show-level fallback ratings.
-            if 'MAL' not in line or part.get('meta',{}).get('movie'):ratings.append(clean(re.sub(r'^[^\w]+','',line)))
+            if 'MAL' not in line or part.get('meta',{}).get('movie') or part.get('meta',{}).get('status'):
+                segments=line.split(' · ') if 'IMDb' in line and 'MAL' in line else [line]
+                ratings.extend(clean(re.sub(r'^[^\w]+','',segment)) for segment in segments)
         elif 'Your ' in line and 'rating' in line:
             ratings.append(clean(re.sub(r'^[^\w]+','',line)))
         elif line.startswith(('🆕','🔁')) or any(word in line for word in ('Finished Season','Finished **Season','Finished the series','Completed the series','Completed this series','Caught up')):
@@ -55,7 +57,7 @@ def card_model(embed,part,*,preview=False,sample=False):
         else:episode_title.append(clean(line))
     title=clean(embed.title) or 'Watch activity';action=clean(first)
     action=re.sub(r'\s+of\s+'+re.escape(title)+r'\s*$','',action,flags=re.I)
-    if part.get('meta',{}).get('movie'):
+    if part.get('meta',{}).get('movie') or part.get('meta',{}).get('status'):
         action=re.sub(re.escape(title)+r'\s*$','',action,flags=re.I).strip() or 'Watched'
     footer=embed.footer.text or part.get('source','Tracker')
     return {'title':title,'author':clean(embed.author.name) or 'Watch activity','action':action,
@@ -373,4 +375,5 @@ async def activity_card_kwargs(embed,part,*,preview=False,sample=False,parts=Non
 
 
 def eligible(parts):
+    if len(parts)==1 and parts[0].get('meta',{}).get('status'):return True
     return bool(parts) and all(not p.get('meta',{}).get('status') and bool(p.get('meta',{}).get('movie') or p.get('meta',{}).get('episodes')) for p in parts)
