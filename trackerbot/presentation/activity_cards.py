@@ -220,14 +220,14 @@ def activity_layout(model):
     """Keep individual status/title and ratings in a stable two-column metadata area."""
     draw=ImageDraw.Draw(Image.new('RGB',(1,1)));ratings=[];notes=[]
     side_ratings=not model.get('members');text_width=516 if side_ratings else 984
-    rating_label_size=12 if side_ratings else 15;rating_size=26 if side_ratings else 34
-    rating_gap=76 if side_ratings else 98;rating_height=64 if side_ratings else 86
+    rating_label_size=15;rating_size=34
+    rating_gap=98;rating_height=86
     for rating in model.get('ratings',[])[:3]:
         match=re.search(r'(\d+(?:\.\d+)?/\d+(?:\.\d+)?)',rating)
         name=rating[:match.start()].strip(' :') if match else rating
         name=name.replace('Your episode rating','Your episode').replace('Your series rating','Your series').replace('Your season-entry rating','Your season entry').replace('Your season rating','Your season')
         value=match.group() if match else '—'
-        width=min(984,max(132,int(max(draw.textlength(name.upper(),font=font(rating_label_size,weight=600),**SHAPING),draw.textlength(value,font=font(rating_size,True),**SHAPING)))+(72 if side_ratings else 94)))
+        width=min(984,max(132,int(max(draw.textlength(name.upper(),font=font(rating_label_size,weight=600),**SHAPING),draw.textlength(value,font=font(rating_size,True),**SHAPING)))+94))
         if side_ratings:width=min(444,width)
         ratings.append((name,value,width))
     for note in (model.get('notes') or [])[:3]:
@@ -245,7 +245,7 @@ def activity_layout(model):
     ratings_height=(rating_rows-1)*rating_gap+rating_height if ratings else 0
     if side_ratings:
         ratings_top=action_top
-        notes_top=action_top+max(160,caption_top-action_top+len(caption_lines)*48,ratings_height)+14
+        notes_top=action_top+max(184,caption_top-action_top+len(caption_lines)*48,ratings_height)+14
     else:
         ratings_top=caption_top+len(caption_lines)*48+20
         notes_top=ratings_top+ratings_height+14
@@ -300,14 +300,14 @@ def render_activity_png(model,artwork=None):
     for (name,value,width),(x,row) in zip(layout['ratings'],layout['rating_positions']):
         x+=48;y=layout['ratings_top']+row*layout['rating_gap']
         panel(image,(x,y,x+width,y+layout['rating_height']),16)
-        compact=layout['side_ratings'];icon_size=30 if compact else 42;text_x=x+(54 if compact else 70)
+        icon_size=42;text_x=x+70
         service=rating_service(name,model.get('tracker'))
         mark=service_logo(service) if service else None
         if mark:
             fitted=ImageOps.contain(mark,(icon_size,icon_size),method=Image.Resampling.LANCZOS)
             image.paste(fitted,(x+14+(icon_size-fitted.width)//2,y+(layout['rating_height']-fitted.height)//2),fitted)
-        label(draw,(text_x,y+(9 if compact else 11)),name,size=12 if compact else 15,fill=MUTED)
-        text(text_x,y+(27 if compact else 33),value,26 if compact else 34,accent,True,width=width-(66 if compact else 82))
+        label(draw,(text_x,y+11),name,size=15,fill=MUTED)
+        text(text_x,y+33,value,34,accent,True,width=width-82)
     for (note,width),(x,row) in zip(layout['notes'],layout['note_positions']):
         x+=48;y=layout['notes_top']+row*48
         colour=accent if note.startswith('NEW') else (82,196,166)

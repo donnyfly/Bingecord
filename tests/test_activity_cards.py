@@ -402,6 +402,7 @@ def test_single_card_ratings_share_title_area_without_changing_height():
     assert len({l['height'] for l in layouts})==1
     for layout in layouts:
         assert layout['ratings_top']==layout['action_top']
+        assert layout['rating_height']==86 and layout['rating_gap']==98
         for (x,row),(_,_,width) in zip(layout['rating_positions'],layout['ratings']):
             assert x>=layout['text_width']+24 and x+width<=984
             assert layout['ratings_top']+row*layout['rating_gap']+layout['rating_height']<layout['notes_top']
