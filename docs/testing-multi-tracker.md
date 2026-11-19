@@ -228,3 +228,35 @@ each supporting day, recorded watch count and up to ten title examples. Empty,
 invalid and future date entries are excluded from both the card and diagnostic.
 Imported dates remain tracker records rather than proof of playback. This audit
 does not change watch records, XP or achievements.
+
+## Community events v2
+
+New weeks from 2026-11-23 use a frozen four-event rotation and 3,000 XP per active
+baseline member. Existing legacy records retain their formulas. Validate all
+four private Community event card previews, with empty data, partial metadata,
+long names and all-complete objectives. Previews use cached live watches and
+never create events, settle rewards or post to the activity channel.
+
+Test exact-ID enrichment/retries and canonical title aliases across providers;
+three distinct regular episodes qualify a series, and rewatches do not multiply
+a title collection. Test genre maximum matching, one-title/one-square Bingo,
+shared film support and decade quotas. Removing supporting watches must revise
+qualification, rewards and saved settlement receipts. Native legacy WeTrakr
+play references require an exact account-matching ledger entry.
+
+Validate Monday boundaries in server timezones, a fixed baseline after new
+members join, six-hour delayed settlement, delayed provider reads and restarts.
+Verify results/reward corrections are idempotent, include only five recipients
+in text, and never ping members. Opening/progress messages edit no more than
+every 20 minutes when changed; midweek, final-day and completion notices are
+acknowledged only after successful delivery. Missing/deleted progress messages
+should be recreated. Polling must refresh communities with only native-provider
+members too. Check the previous week's final results after the new event opens.
+
+Verified season/series finishes reuse the activity completion verifier. Saved
+completion evidence is scoped to week, member, provider, account and canonical
+title, and checked against its supporting watch signatures. API errors retain
+last verified evidence; removing a supporting watch or changing account prevents
+it from qualifying a title. Test this alternate path with one finale watched
+during the event, while earlier episodes were watched before it. Test reward
+reversal across a prestige boundary as well as within one level range.

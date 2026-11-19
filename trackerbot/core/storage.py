@@ -2478,6 +2478,104 @@ class Storage:
                 })
             return rows
 
+    async def community_completion_inputs(self,guild_id):
+        async with _lock:
+            guild=self._guild(str(guild_id)) or {}
+            return copy.deepcopy(guild.get('community_completions') or {}),guild.get('timezone') or DEFAULT_TIMEZONE
+
+    async def cache_community_completions(self,guild_id,values):
+        if not values:return
+        async with _lock:
+            guild=self._guild(str(guild_id))
+            if not guild:return
+            cache=guild.setdefault('community_completions',{})
+            for key,value in values.items():
+                if value is None:cache.pop(key,None)
+                else:cache[key]=copy.deepcopy(value)
+            self._dirty=True
+        await self.flush()
+
+    def _community_completion_flags(self,guild,watches,providers,start,end):
+        metadata=guild.get('community_metadata') or {};valid=set();signatures={}
+        for proof in (guild.get('community_completions') or {}).values():
+            uid=proof['uid'];provider=proof['provider'];at=datetime.fromisoformat(proof['at'])
+            if providers.get(uid)!=provider or not start<=at<end:continue
+            user=self._data['users'].get(uid) or {}
+            account=(user.get(provider) or {}).get('account_id') if provider!='simkl' else user.get('simkl_account_id')
+            if account is not None and str(account)!=proof['account']:continue
+            if uid not in signatures:
+                member=(guild.get('users') or {}).get(uid) or {}
+                rows=_statistics_for_provider(member,provider,guild.get('timezone')).get('watch_events') or {}
+                signatures[uid]={str(row.get('item_key') or '')+'|'+str(row.get('watched_at') or '') for row in rows.values()}
+            if proof.get('support') and set(proof['support'])<=signatures[uid]:valid.add((uid,proof['canonical']))
+        for watch in watches:
+            canonical=(metadata.get(watch['meta_key']) or {}).get('canonical')
+            if (watch['uid'],canonical) in valid:watch['completion_verified']=True
+
+    async def community_metadata_candidates(self,guild_id,now):
+        from .community_events import credited_watches
+        async with _lock:
+            guild=self._guild(str(guild_id))
+            if not guild:return []
+            members=guild.get('users') or {};providers={u:m.get('activity_provider','simkl') for u,m in members.items()}
+            rows=credited_watches(self._data['users'],members,now-timedelta(days=21),now,providers)
+            cache=guild.get('community_metadata') or {};entries={}
+            for row in rows:
+                key=row['meta_key']
+                if not key:continue
+                cached=cache.get(key) or {}
+                try:checked=datetime.fromisoformat(cached.get('checked_at',''))
+                except (ValueError,TypeError):checked=None
+                if checked and checked.tzinfo and now-checked<(timedelta(days=7) if cached.get('canonical') else timedelta(minutes=5)):continue
+                entries.setdefault(key,row)
+            return [copy.deepcopy(entries[key]) for key in sorted(entries,key=lambda k:((cache.get(k) or {}).get('checked_at',''),k))[:24]]
+
+    async def cache_community_metadata(self,guild_id,values):
+        if not values:return
+        async with _lock:
+            guild=self._guild(str(guild_id))
+            if not guild:return
+            cache=guild.setdefault('community_metadata',{})
+            for key,value in values.items():
+                old=cache.get(key) or {}
+                if old.get('canonical'):
+                    value={**old,**{field:data for field,data in value.items() if data is not None and data!=[] and data!={}}}
+                cache[key]=copy.deepcopy(value)
+            self._dirty=True
+        await self.flush()
+
+    async def preview_community_event(self,guild_id,week,start,end,now,kind=None):
+        from .community_events import event_goal,credited_watches,event_state,ROTATION
+        async with _lock:
+            guild=self._guild(str(guild_id))
+            if not guild:return None
+            members=guild.get('users') or {};providers={u:m.get('activity_provider','simkl') for u,m in members.items()}
+            recent=credited_watches(self._data['users'],members,start-timedelta(days=14),start,providers)
+            size=len({r['uid'] for r in recent}) or max(1,min(2,len(members)))
+            if kind:
+                from .community_events import ROLLOUT
+                fake=(datetime.fromisoformat(ROLLOUT)+timedelta(weeks=ROTATION.index(kind))).date().isoformat()
+                record=event_goal(fake,size)
+            else:record=copy.deepcopy((guild.get('community_challenges') or {}).get(week) or event_goal(week,size))
+            if record.get('version')!=2:
+                from .community_events import ROLLOUT
+                record=event_goal(max(week,ROLLOUT),size)
+            record.update(start=start.isoformat(),end=end.isoformat(),key=week,preview=True,timezone=guild.get('timezone') or DEFAULT_TIMEZONE)
+            watches=credited_watches(self._data['users'],members,start,min(now,end),providers)
+            self._community_completion_flags(guild,watches,providers,start,end)
+            return event_state(record,watches,guild.get('community_metadata') or {},now)
+
+    async def ack_community_delivery(self,guild_id,week,notice,*,message_id=None,channel_id=None,fingerprint=None):
+        async with _lock:
+            guild=self._guild(str(guild_id));record=((guild or {}).get('community_challenges') or {}).get(week)
+            if not record:return
+            delivery=record.setdefault('delivery',{})
+            delivery[notice]=True
+            if message_id:delivery.update(message_id=str(message_id),channel_id=str(channel_id))
+            if fingerprint:delivery.update(fingerprint=fingerprint,updated_at=datetime.now(timezone.utc).isoformat())
+            self._dirty=True
+        await self.flush()
+
     async def get_community_state(self, guild_id: str | int, week_key: str, start: datetime, end: datetime, now: datetime) -> dict:
         """Create a fixed weekly goal and reconcile ended-week rewards atomically."""
         gid=str(guild_id)
@@ -2490,7 +2588,14 @@ class Storage:
             records=guild.setdefault("community_challenges", {})
             if week_key not in records:
                 member_rows=guild.get('users') or {}
-                if week_key >= '2026-10-12' and now >= datetime(2026,10,13,tzinfo=timezone.utc):
+                from .community_events import ROLLOUT,event_goal,credited_watches
+                if week_key>=ROLLOUT:
+                    providers={uid:member.get('activity_provider','simkl') for uid,member in member_rows.items()}
+                    recent=credited_watches(self._data['users'],member_rows,start-timedelta(days=14),start,providers)
+                    size=len({r['uid'] for r in recent}) or max(1,min(2,len(member_rows)))
+                    challenge=event_goal(week_key,size)
+                    challenge['timezone']=guild.get('timezone') or DEFAULT_TIMEZONE
+                elif week_key >= '2026-10-12' and now >= datetime(2026,10,13,tzinfo=timezone.utc):
                     providers={uid:member.get('activity_provider','simkl') for uid,member in member_rows.items()}
                     recent=minute_contributions(self._data['users'],member_rows,
                                                start-timedelta(days=14),start,providers)
@@ -2510,7 +2615,21 @@ class Storage:
                 current["members"]=sorted(members)
                 self._dirty=True
 
+            from .community_events import event_state,credited_watches
+            event_cache={}
+            def scored(record):
+                cache_key=id(record)
+                if cache_key not in event_cache:
+                    providers=record.get('providers') or {}
+                    source_map={uid:providers.get(uid,member.get('activity_provider','simkl')) for uid,member in guild.get('users',{}).items()}
+                    begin=datetime.fromisoformat(record['start']);finish=datetime.fromisoformat(record['end'])
+                    watches=credited_watches(self._data['users'],record.get('members') or [],begin,min(now,finish),source_map)
+                    self._community_completion_flags(guild,watches,source_map,begin,finish)
+                    event_cache[cache_key]=event_state(record,watches,guild.get('community_metadata') or {},now)
+                return event_cache[cache_key]
+
             def counts_for(record):
+                if record.get('version')==2:return scored(record)['contributions']
                 period_start=datetime.fromisoformat(record["start"])
                 period_end=datetime.fromisoformat(record["end"])
                 providers=record.get("providers") or {}
@@ -2529,7 +2648,7 @@ class Storage:
                                            selected_events=selected)
 
             # Replace only unfinished current goals. Reached/paid legacy goals retain their rules.
-            if (current.get('kind')!='minutes' and week_key>='2026-10-12'
+            if (current.get('version')!=2 and current.get('kind')!='minutes' and week_key>='2026-10-12'
                     and now>=datetime(2026,10,13,tzinfo=timezone.utc) and now<end
                     and not current.get('awards') and not current.get('notified_awards')
                     and sum(counts_for(current).values())<current['target']):
@@ -2546,14 +2665,23 @@ class Storage:
                     record["providers"]={uid:member.get("activity_provider","simkl")
                                          for uid,member in guild.get("users",{}).items()}
                     self._dirty=True
+                if now < period_end+timedelta(hours=record.get('settlement_hours',0)):
+                    continue
                 if not isinstance(record.get("notified_awards"),dict):
                     # Existing paid weeks predate these notifications.
                     record["notified_awards"]=copy.deepcopy(record.get("awards") or {})
                     self._dirty=True
                 contributions=counts_for(record)
-                desired=(watchathon_rewards(contributions,record) if record.get('kind')=='minutes' else
+                desired=(scored(record)['estimated_awards'] if record.get('version')==2 else
+                         watchathon_rewards(contributions,record) if record.get('kind')=='minutes' else
                          split_pool(contributions,int(record['pool'])) if sum(contributions.values())>=int(record['target']) else {})
                 previous=record.get("awards") or {}
+                if record.get('version')==2 and (desired!=previous or not record.get('settlement_receipt')):
+                    view=scored(record)
+                    record['settlement_receipt']={field:copy.deepcopy(view[field]) for field in
+                        ('contributions','qualified','objectives','weights','support','pending_metadata','estimated_awards')}
+                    record['settlement_receipt'].update(computed_at=now.isoformat(),version=2)
+                    self._dirty=True
                 if desired==previous:
                     continue
                 for uid in sorted(set(previous)|set(desired)):
@@ -2562,9 +2690,16 @@ class Storage:
                         continue
                     before=int(user["progression"].get("xp",0))
                     delta=int(desired.get(uid,0))-int(previous.get(uid,0))
-                    user["progression"]["xp"]=max(0,before+delta)
+                    if record.get('version')==2:
+                        threshold=xp_for_level(100)
+                        balance=max(0,before+int(user['progression'].get('prestige',0))*threshold+delta)
+                        tier,remainder=divmod(balance,threshold)
+                        user['progression'].update(xp=remainder,prestige=tier)
+                        user['progression']['prestige_notified']=min(int(user['progression'].get('prestige_notified',0)),tier)
+                    else:
+                        user["progression"]["xp"]=max(0,before+delta)
+                        roll_prestige(user["progression"])
                     user["progression"]["lifetime_xp"]=max(0,int(user["progression"].get("lifetime_xp",0))+delta)
-                    roll_prestige(user["progression"])
                     reward_key=f"{gid}:{key}"
                     if desired.get(uid):
                         user["progression"].setdefault("community_rewards",{})[reward_key]=int(desired[uid])
@@ -2585,33 +2720,45 @@ class Storage:
                 initial=not bool(notified) and bool(awards)
                 members=sorted((counts_for(record) if initial else changes_to_report),
                                key=lambda uid:(-int(awards.get(uid,0)),uid))
-                pending.append({"key":key,"target":int(record["target"]),
+                pending.append({**(scored(record) if record.get('version')==2 else {}),"key":key,"target":int(record["target"]),
                                 "kind":record.get("kind","episodes"),
                                 "pool":int(record["pool"]),"awards":copy.deepcopy(awards),
                                 "contributions":counts_for(record),"deltas":changes_to_report,
+                                "required_contributors":record.get('required_contributors',1),
+                                "qualifying_minutes":record.get('qualifying_minutes',1),
                                 "members":members,"initial":initial})
+            if current.get('version')==2:
+                state={**scored(current),'key':week_key,'awards':copy.deepcopy(current.get('awards') or {}),
+                       'changes':changes,'pending_notifications':pending,'pending_milestone':0}
+                # Results include missed events, which do not generate a payout delta.
+                state['pending_results']=[{**scored(record),'key':key,'awards':copy.deepcopy(record.get('awards') or {})}
+                    for key,record in sorted(records.items()) if record.get('version')==2
+                    and scored(record)['settled'] and not (record.get('delivery') or {}).get('results')]
+            else:
+                state=None
             contributions=counts_for(current)
             total=sum(contributions.values())
-            qualified=sum(value>=current.get('qualifying_minutes',1) for value in contributions.values())
-            reached=total>=int(current['target']) and qualified>=current.get('required_contributors',1)
-            progress_pct=min(100,total*100/current['target'])
-            milestones=[mark for mark in (25,50,75,100) if progress_pct>=mark and
-                        mark not in current.get('milestones_notified',[])] if current.get('kind')=='minutes' else []
-            state={
-                'qualified_contributors':qualified,'contributor_count':len(contributions),
-                'required_contributors':current.get('required_contributors',1),
-                'qualifying_minutes':current.get('qualifying_minutes',1),
-                'active_members':current.get('active_members'),
-                'remaining':max(0,current['target']-total),'pending_milestone':max(milestones,default=0),
-                "key":week_key,"start":current["start"],"end":current["end"],
-                "target":int(current["target"]),"pool":int(current["pool"]),
-                "kind":current.get("kind","episodes"),
-                "contributions":contributions,"total":total,
-                "awards":copy.deepcopy(current.get("awards") or {}),
-                "status":("completed" if current.get("awards") else "missed") if now >= end else ("goal_reached" if reached else "active"),
-                "changes":changes,
-                "pending_notifications":pending,
-            }
+            if state is None:
+                qualified=sum(value>=current.get('qualifying_minutes',1) for value in contributions.values())
+                reached=total>=int(current['target']) and qualified>=current.get('required_contributors',1)
+                progress_pct=min(100,total*100/current['target'])
+                milestones=[mark for mark in (25,50,75,100) if progress_pct>=mark and
+                            mark not in current.get('milestones_notified',[])] if current.get('kind')=='minutes' else []
+                state={
+                    'qualified_contributors':qualified,'contributor_count':len(contributions),
+                    'required_contributors':current.get('required_contributors',1),
+                    'qualifying_minutes':current.get('qualifying_minutes',1),
+                    'active_members':current.get('active_members'),
+                    'remaining':max(0,current['target']-total),'pending_milestone':max(milestones,default=0),
+                    "key":week_key,"start":current["start"],"end":current["end"],
+                    "target":int(current["target"]),"pool":int(current["pool"]),
+                    "kind":current.get("kind","episodes"),
+                    "contributions":contributions,"total":total,
+                    "awards":copy.deepcopy(current.get("awards") or {}),
+                    "status":("completed" if current.get("awards") else "missed") if now >= end else ("goal_reached" if reached else "active"),
+                    "changes":changes,
+                    "pending_notifications":pending,
+                }
         await self.flush()
         return state
 
@@ -2633,6 +2780,7 @@ class Storage:
             if not record or record.get("awards") != awards:
                 return
             record["notified_awards"]=copy.deepcopy(awards)
+            if record.get('version')==2:record.setdefault('delivery',{})['results']=True
             self._dirty=True
         await self.flush()
 

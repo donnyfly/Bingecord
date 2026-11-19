@@ -1511,11 +1511,6 @@ async def poll_all(g=None, force_reconcile=False, ignore_failure_threshold=False
             max(0,sum(results)-sum(item.count for item in batch.activities))
             + sum(item.count for item in batch.activities if item.delivered))
         posted+=batch.status_count
-        for gid in sorted({str(target["guild_id"]) for target in targets}):
-            try:
-                await refresh_community_state(gid)
-            except Exception:
-                log.exception("Community challenge reconciliation failed for guild %s.",gid)
         duration=time.monotonic()-started
         log.info(
             "Polling cycle complete: %d user(s), %d target(s), %d posted, %.2fs elapsed, concurrency=%d.",
@@ -2173,68 +2168,109 @@ async def notify_challenge_rewards(guild_id_value,uid,channel):
     return True
 
 
+async def send_community_card(send,guild,state,**kwargs):
+    from trackerbot.presentation.community_delivery import community_card
+    return await community_card(send,guild,state,**kwargs)
+
+
 async def notify_community_rewards(guild_id_value,channel,notification):
-    challenge=CHALLENGES.get(notification.get("kind"),CHALLENGES["episodes"])
-    unit=challenge["unit"]
-    sharing="50% equally, 50% by minutes" if notification.get("kind")=="minutes" else "by contribution"
-    members=notification["members"] if notification["initial"] else [
-        uid for uid in notification["members"] if notification["deltas"].get(uid)
-    ]
-    if not members:
-        return True
-    for offset in range(0,min(len(members),PAGE_SIZE),PAGE_SIZE):
-        lines=[]
-        for uid in members[offset:offset+PAGE_SIZE]:
-            if notification["initial"]:
-                watches=notification["contributions"].get(uid,0)
-                lines.append(f"<@{uid}> · {watches:,} {unit}{'s' if watches!=1 else ''} · **+{int(notification['awards'].get(uid,0)):,} XP**")
-            else:
-                delta=int(notification["deltas"][uid])
-                lines.append(f"<@{uid}> · **{delta:+,} XP**")
-        if len(members)>PAGE_SIZE:
-            lines.append(f"and {len(members)-PAGE_SIZE:,} others · rewards applied to every qualifying member")
-        embed=discord.Embed(
-            title="Community Challenge Completed" if notification["initial"] else "Community Challenge Rewards Updated",
-            description=(
-                f"Week of **{notification['key']}** · {challenge['name']} · {notification['target']:,} {unit} goal\n"
-                f"**{notification['pool']:,} XP pool** shared {sharing}\n\n"
-                +"\n".join(lines)
-            ),
-            color=0xC9DCF0,
-        )
-        embed.set_footer(text="Tracker · Community challenge")
-        try:
-            await channel.send(embed=embed,allowed_mentions=discord.AllowedMentions(users=True,roles=False,everyone=False))
-        except Exception:
-            log.exception("Could not announce community reward for guild %s, week %s.",guild_id_value,notification["key"])
-            return False
-    await storage.ack_community_notification(guild_id_value,notification["key"],notification["awards"])
+    modern=notification.get('version')==2
+    challenge=CHALLENGES.get(notification.get('kind'),CHALLENGES['minutes'])
+    state={**notification,'status':'completed' if notification.get('awards') else 'missed'}
+    if not modern:state.update(name=challenge['name'],total=sum(notification['contributions'].values()),unit=challenge['unit'],
+                               qualified_contributors=sum(v>=notification.get('qualifying_minutes',1) for v in notification['contributions'].values()))
+    try:
+        await send_community_card(channel.send,bot.get_guild(int(guild_id_value)),state,
+            heading='Community results' if notification['initial'] else 'Community rewards corrected')
+    except Exception:
+        log.exception('Community results delivery failed for guild %s.',guild_id_value)
+        return False
+    await storage.ack_community_notification(guild_id_value,notification['key'],notification['awards'])
     return True
 
 
+_community_refresh_locks={}
+
 async def refresh_community_state(guild_id_value):
+    lock=_community_refresh_locks.setdefault(str(guild_id_value),asyncio.Lock())
+    async with lock:
+        return await _refresh_community_state(guild_id_value)
+
+
+async def update_community_delivery(gid,channel,state,now):
+    import hashlib,json
+    from trackerbot.core.community_events import parse_stamp
+    delivery=state.get('delivery') or {};guild=bot.get_guild(int(gid));end=parse_stamp(state['end'])
+    if now>=end or not state.get('members'):return
+    fingerprint=hashlib.sha256(json.dumps({k:state.get(k) for k in
+        ('kind','total','target','qualified','contributions','objectives','pending_metadata','status')},sort_keys=True).encode()).hexdigest()
+    previous=parse_stamp(delivery.get('updated_at'))
+    if not delivery.get('opening') or (fingerprint!=delivery.get('fingerprint') and (not previous or now-previous>=timedelta(minutes=20))):
+        try:
+            sender=channel.send
+            if delivery.get('message_id') and str(channel.id)==delivery.get('channel_id'):
+                message=channel.get_partial_message(int(delivery['message_id']))
+                async def edit(**kwargs):
+                    file=kwargs.pop('file',None)
+                    return await message.edit(**kwargs,attachments=[file] if file else [])
+                sender=edit
+            try:message=await send_community_card(sender,guild,state,heading='This week’s community event')
+            except discord.NotFound:message=await send_community_card(channel.send,guild,state,heading='This week’s community event')
+            await storage.ack_community_delivery(gid,state['key'],'opening',message_id=message.id,
+                                               channel_id=channel.id,fingerprint=fingerprint)
+        except Exception:log.exception('Community progress card update failed for guild %s.',gid)
+    notice=None
+    if state.get('goal_reached') and not delivery.get('completion'):notice='completion'
+    elif not state.get('goal_reached') and end-timedelta(hours=24)<=now and not delivery.get('reminder'):notice='reminder'
+    elif not state.get('goal_reached') and parse_stamp(state['start'])+timedelta(days=3,hours=12)<=now<end-timedelta(hours=24) and not delivery.get('midweek'):notice='midweek'
+    if notice:
+        try:
+            title={'completion':'All community requirements met','reminder':'One day left · Here’s what remains','midweek':'Community check-in · Here’s what remains'}[notice]
+            await send_community_card(channel.send,guild,state,heading=title)
+            await storage.ack_community_delivery(gid,state['key'],notice)
+        except Exception:log.exception('Community check-in delivery failed for guild %s.',gid)
+
+
+async def _refresh_community_state(guild_id_value):
     if not await feature_enabled(guild_id_value,"community"):
         return None
     zone=(await storage.get_timezone(guild_id_value))["name"]
     now=datetime.now(timezone.utc)
     key,start,end=community_week(now,zone)
+    try:
+        from trackerbot.metadata.community_metadata import enrich_community_metadata
+        candidates=await storage.community_metadata_candidates(guild_id_value,now)
+        if candidates:await storage.cache_community_metadata(guild_id_value,await enrich_community_metadata(tmdb,candidates))
+    except Exception:log.warning('Community metadata enrichment deferred for guild %s.',guild_id_value,exc_info=True)
+    try:
+        from trackerbot.metadata.community_completion import refresh_community_completions
+        await refresh_community_completions(sys.modules[__name__],guild_id_value,now)
+    except Exception:log.warning('Community completion verification deferred for guild %s.',guild_id_value,exc_info=True)
     state=await storage.get_community_state(guild_id_value,key,start,end,now)
     channel_id=await storage.get_channel(guild_id_value)
     channel=bot.get_channel(int(channel_id)) if channel_id else None
+    if channel_id and channel is None:
+        try:
+            async with asyncio.timeout(5):channel=await bot.fetch_channel(int(channel_id))
+        except Exception:log.warning('Community posting channel unavailable for guild %s.',guild_id_value)
     if channel:
         milestone=state.get('pending_milestone',0)
         if milestone and now < datetime.fromisoformat(state['end']):
-            embed=discord.Embed(title=f"Community Watchathon · {milestone}% milestone",
-                description=f"**{state['total']:,.1f} / {state['target']:,} minutes** watched together.\n"
-                            f"Qualifying contributors: **{state['qualified_contributors']} / {state['required_contributors']}**\n"
-                            f"Remaining: **{state['remaining']:,.1f} minutes**. Rewards settle after the week ends.",color=0x8957FF)
             try:
-                await channel.send(embed=embed,allowed_mentions=discord.AllowedMentions.none())
+                await send_community_card(channel.send,bot.get_guild(int(guild_id_value)),state,heading=f'Community Watchathon · {milestone}% milestone')
                 await storage.ack_community_milestone(guild_id_value,key,milestone)
             except Exception:
                 log.exception('Community milestone delivery failed for guild %s.',guild_id_value)
         for notification in state.get("pending_notifications",[]):
             await notify_community_rewards(guild_id_value,channel,notification)
+        if state.get('version')==2:
+            await update_community_delivery(guild_id_value,channel,state,now)
+            for result in state.get('pending_results',[]):
+                if result['key'] in {n['key'] for n in state.get('pending_notifications',[])}:continue
+                try:
+                    await send_community_card(channel.send,bot.get_guild(int(guild_id_value)),result,heading='Community event results')
+                    await storage.ack_community_delivery(guild_id_value,result['key'],'results')
+                except Exception:log.exception('Community event results delivery failed for guild %s.',guild_id_value)
     for change in state.get("changes",[]):
         if change["delta"] <= 0:
             continue
@@ -2563,7 +2599,7 @@ async def simkl_challenges(i):
     await i.response.send_message(embed=e)
 
 
-@bingecord_commands.command(name="community", description="View this server's rotating weekly watch challenge.")
+@bingecord_commands.command(name="community", description="View this server's weekly community event and contribution card.")
 async def simkl_community(i):
     g=guild_id(i)
     if not g:
@@ -2572,40 +2608,10 @@ async def simkl_community(i):
     await i.response.defer()
     state=await refresh_community_state(g)
     if not state:
-        await i.followup.send("No community challenge is available yet.",ephemeral=True)
+        await i.followup.send('No community event is available. Community challenges may be disabled.',ephemeral=True)
         return
-    total=state["total"]
-    target=state["target"]
-    challenge=CHALLENGES.get(state.get("kind"),CHALLENGES["episodes"])
-    unit=challenge["unit"]
-    filled=min(20,round(20*total/target))
-    bar="█"*filled+"░"*(20-filled)
-    ends=datetime.fromisoformat(state["end"])
-    contributors=sorted(state["contributions"].items(),key=lambda item:(-item[1],item[0]))
-    rows=[f"<@{uid}> · **{count:,}** {unit}{'s' if count!=1 else ''}" for uid,count in contributors[:PAGE_SIZE]]
-    if len(contributors)>PAGE_SIZE:
-        rows.append(f"and {len(contributors)-PAGE_SIZE:,} others")
-    description=(f"**{challenge['name']}: {target:,} {unit}s together this week**\n{bar}\n"
-                 f"**{total:,} / {target:,}** {unit}s · **{state['pool']:,} XP pool**\n"
-                 f"Ends {discord.utils.format_dt(ends,style='R')} · {discord.utils.format_dt(ends,style='F')}\n\n"
-                 f"Your contribution: **{state['contributions'].get(str(i.user.id),0):,}** {unit}s")
-    if state["status"]=="goal_reached":
-        description+="\n**Goal reached!** The pool is distributed by contribution after the week ends."
-    elif state["status"]=="active":
-        description+=f"\nContribute at least one {unit} before the deadline to qualify if the goal is reached."
-    if state['kind']=='minutes':
-        description+=(f"\nQualifying contributors: **{state['qualified_contributors']} / {state['required_contributors']}**"
-                      f" · **{state['remaining']:,.1f} minutes** remaining.\n"
-                      f"Watch at least **{state['qualifying_minutes']} minutes** to qualify. "
-                      "Half the reward pool is shared equally; half is proportional to qualifying members' minutes.")
-        description=description.replace('The pool is distributed by contribution after the week ends.',
-                                        'The pool is distributed after the week ends.').replace(
-                                        'Contribute at least one minute before the deadline to qualify if the goal is reached.',
-                                        'The time target and contributor requirement must both be met.')
-    e=discord.Embed(title=f"{i.guild.name} · Community Challenge",description=description,color=0xC9DCF0)
-    e.add_field(name="Contributors",value="\n".join(rows) if rows else f"No {unit}s contributed yet.",inline=False)
-    e.set_footer(text="Server-local weekly goal · bonus XP is added to normal watch XP")
-    await i.followup.send(embed=e,allowed_mentions=discord.AllowedMentions.none())
+    await send_community_card(i.followup.send,i.guild,state,viewer=str(i.user.id))
+
 
 @bingecord_commands.command(name="user-reset",description="Reset your tracker history for this server.")
 @app_commands.describe(confirm="Confirm that you want to reset your server-local tracking state")
@@ -2721,16 +2727,20 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         app_commands.Choice(name="Prestige unlocked", value="prestige"),
         app_commands.Choice(name="Completion", value="completion"),
         app_commands.Choice(name="Streak history", value="streak"),
+        app_commands.Choice(name="Community event card", value="community"),
         app_commands.Choice(name="Profile card", value="profile"),
         app_commands.Choice(name="Leaderboard card", value="leaderboard"),
         app_commands.Choice(name="Server stats card", value="server_stats"),
         app_commands.Choice(name="Weekly recap card", value="weekly_recap"),
     ],
     rank=[app_commands.Choice(name=name,value=minimum) for minimum,name in RANKS],
+    community_event=[app_commands.Choice(name=name,value=value) for value,name in
+                     [('watchathon','Watchathon'),('genres','Genre Expedition'),('bingo','Community Bingo'),('decades','Decade Discovery')]],
 )
 @app_commands.autocomplete(achievement=achievement_autocomplete)
 @app_commands.describe(
     feature="Card to preview or completion/streak history to inspect",
+    community_event="Optional event rules to preview with cached activity; changes no live event",
     achievement="Required for an achievement preview",
     level="Optional target level (2-100) for a level/rank preview",
     rank="Optional rank to preview; a chosen level must belong to it",
@@ -2743,9 +2753,23 @@ async def simkl_debug(
     level: app_commands.Range[int, 2, 100] | None = None,
     rank: app_commands.Choice[int] | None = None,
     prestige: app_commands.Range[int, 0, 1000] | None = None,
+    community_event: app_commands.Choice[str] | None = None,
 ):
     if not guild_id(i) or not is_admin(i):
         await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True)
+        return
+    if feature.value == 'community':
+        await i.response.defer(ephemeral=True)
+        zone=(await storage.get_timezone(str(i.guild.id)))['name'];now=datetime.now(timezone.utc)
+        week,start,end=community_week(now,zone)
+        state=await storage.preview_community_event(str(i.guild.id),week,start,end,now,community_event.value if community_event else None)
+        if not state:
+            await i.followup.send('No linked community data to preview.',ephemeral=True)
+            return
+        await send_community_card(i.followup.send,i.guild,state,viewer=str(i.user.id),preview=True)
+        return
+    if community_event is not None:
+        await i.response.send_message('The community_event option is only for Community event card previews.',ephemeral=True)
         return
     if feature.value == "streak":
         await i.response.defer(ephemeral=True)
@@ -4750,6 +4774,9 @@ async def poll_providers(guild_id=None, *, manual=False):
         try:
             results=await cycle.execute(calls)
             await activity_details.finish(guild_id)
+            for gid in ([str(guild_id)] if guild_id is not None else [str(guild.id) for guild in bot.guilds]):
+                try:await refresh_community_state(gid)
+                except Exception:log.exception('Community event refresh failed for guild %s.',gid)
             return {manifest.name:count for manifest,count in zip(manifests,results)}
         finally:current_details.reset(token)
 

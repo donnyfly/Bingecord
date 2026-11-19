@@ -90,9 +90,9 @@ def test_community_announcement_names_every_contributor_and_acknowledges(tmp_pat
         channel.send=AsyncMock()
         assert await bot.notify_community_rewards("123",channel,notification)
         embed=channel.send.await_args.kwargs["embed"]
-        assert "<@41>" in embed.description and "+7,500 XP" in embed.description
-        assert "<@42>" in embed.description and "+4,500 XP" in embed.description
-        assert channel.send.await_args.kwargs["allowed_mentions"].users
+        assert "<@41>" in embed.fields[0].value and "+7,500 XP" in embed.fields[0].value
+        assert "<@42>" in embed.fields[0].value and "+4,500 XP" in embed.fields[0].value
+        assert not channel.send.await_args.kwargs["allowed_mentions"].users
         assert (await reloaded.get_community_state("123","2026-09-21",start,end,end))["pending_notifications"]==[]
     asyncio.run(scenario())
 
