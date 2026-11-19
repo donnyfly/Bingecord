@@ -11,7 +11,7 @@ import json
 import re
 import time
 from urllib.parse import urlparse,parse_qs
-from PIL import Image,ImageDraw,ImageOps,ImageFilter,ImageEnhance,ImageChops
+from PIL import Image,ImageDraw,ImageOps,ImageFilter,ImageEnhance
 import aiohttp
 import discord
 from .card_theme import background,panel,cover,fit,short,png
@@ -114,7 +114,7 @@ def cinematic_art(art,size):
     # Feather only the narrow seam against the blurred fill; never crop the frame.
     x,y=(size[0]-frame.width)//2,(size[1]-frame.height)//2
     mask=Image.new('L',frame.size,255)
-    edge=max(1,min(18,min(frame.size)//2))
+    edge=max(1,min(40,min(frame.size)//2))
     pen=ImageDraw.Draw(mask)
     for n in range(edge):
         alpha=round(255*(n+1)/edge)
@@ -145,14 +145,16 @@ def ambient_background(size,accent,art,hero_bottom):
 
 
 def artwork_mask(size):
-    """Round the upper frame and dissolve its lower portion into the ambient field."""
+    """Blend full-width artwork into the header and ambient caption area."""
     width,height=size
-    rounded=Image.new('L',size);ImageDraw.Draw(rounded).rounded_rectangle((0,0,width-1,height-1),22,fill=255)
     fade=Image.new('L',(1,height),255);pixels=fade.load();start=round(height*.58)
     for y in range(start,height):
         t=(y-start)/max(1,height-1-start)
         pixels[0,y]=round(255*(1-t*t*(3-2*t)))
-    return ImageChops.multiply(rounded,fade.resize(size))
+    for y in range(min(48,height)):
+        t=y/max(1,min(48,height)-1)
+        pixels[0,y]=min(pixels[0,y],round(255*t*t*(3-2*t)))
+    return fade.resize(size)
 
 
 def _flows(items,width,gap=12):
@@ -203,7 +205,7 @@ def activity_layout(model):
         notes.append((note,width))
     rating_positions,rating_rows=_flows([r[2] for r in ratings],984)
     note_positions,note_rows=_flows([n[1] for n in notes],984)
-    hero_top=126;hero_height=460 if model['movie'] else 520;hero_bottom=hero_top+hero_height
+    hero_top=126;hero_height=608;hero_bottom=hero_top+hero_height
     action_lines=_wrap(draw,model['action'],34,984,2,True)
     caption_lines=_wrap(draw,model.get('episode_title') or model['title'],40,984,2,True)
     action_top=hero_bottom+22;caption_top=action_top+len(action_lines)*42+8
@@ -232,13 +234,13 @@ def render_activity_png(model,artwork=None):
         paint(draw,(70,84),model['author'][:1].upper(),font=font(20,True),fill=accent,anchor='mm')
     text(106,68,model['author'],28,WHITE,True,width=650)
     top=layout['hero_top'];h=layout['hero_height']
-    if hero:tile=cinematic_art(hero,(984,h))
+    if hero:tile=cinematic_art(hero,(1080,h))
     else:
-        tile=background((984,h),accent)
+        tile=background((1080,h),accent)
         td=ImageDraw.Draw(tile);td.rounded_rectangle((425,h//2-48,559,h//2+48),18,outline=accent,width=3)
         td.polygon(((480,h//2-25),(480,h//2+25),(516,h//2)),fill=accent)
     mask=artwork_mask(tile.size) if hero else Image.new('L',tile.size,255)
-    image.paste(tile,(48,top),mask)
+    image.paste(tile,(0,top),mask)
     logo=artwork.get('logo')
     if logo:
         fitted=ImageOps.contain(logo.convert('RGBA'),(242,76),method=Image.Resampling.LANCZOS)

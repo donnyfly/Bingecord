@@ -159,8 +159,8 @@ def test_cinematic_fill_preserves_full_four_three_frame_and_colours_sidebars():
     from PIL import ImageDraw
     draw=ImageDraw.Draw(frame);draw.rectangle((0,0,20,299),fill='red');draw.rectangle((379,0,399,299),fill='lime')
     art=cinematic_art(frame,(984,520)).convert('RGB')
-    assert art.getpixel((165,260))[0]>200
-    assert art.getpixel((819,260))[1]>200
+    assert art.getpixel((179,260))[0]>200
+    assert art.getpixel((805,260))[1]>200
     assert sum(art.getpixel((20,260)))>20
     embed,part=example();model=card_model(embed,part)
     full=activity_layout(model)
@@ -239,6 +239,8 @@ def test_ambient_artwork_dissolves_into_sampled_background():
     from trackerbot.presentation.activity_cards import ambient_background,artwork_mask,activity_layout
     mask=artwork_mask((984,520))
     assert mask.getpixel((492,200))==255
+    assert mask.getpixel((0,200))==255 and mask.getpixel((983,200))==255
+    assert mask.getpixel((492,0))==0
     assert 0<mask.getpixel((492,430))<255
     assert mask.getpixel((492,519))==0
     embed,part=example(True);model=card_model(embed,part);layout=activity_layout(model)

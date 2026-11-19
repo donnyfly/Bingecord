@@ -332,7 +332,8 @@ The experimental **Visual card** style currently covers individual episode/range
 and film watches for SIMKL, WeTrakr and MDBList. It uses Inter typography, the
 already-resolved still/backdrop and logo, compact rating chips, personal rating and
 verified completion/NEW badges. The card is sent directly as an image attachment, without an outer embed box.
-The backdrop fades into an ambient background sampled from its own colours.
+The backdrop spans the full card width without an inset frame, blending into the
+header and an ambient background sampled from its own colours.
 Larger watched/episode text and rating chips sit below the artwork;
 4:3 and other aspect ratios retain the full frame over a blurred, darkened fill.
 The title logo replaces duplicate heading text when available, and card height adapts
