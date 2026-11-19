@@ -228,4 +228,4 @@ def event_state(record,watches,metadata,now):
     return {**record,**score,'status':status,'awards':dict(record.get('awards') or {}),
             'remaining':max(0,record['target']-score['total']),
             'art_entries':community_art_entries(watches,metadata),
-            'next_event':NAMES[ROTATION[(ROTATION.index(record['kind'])+1)%4]],'settled':settled}
+            'next_event':record.get('next_event_override') or NAMES[ROTATION[(ROTATION.index(record['kind'])+1)%4]],'settled':settled}

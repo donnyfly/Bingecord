@@ -268,3 +268,11 @@ must keep the card usable without raw mention syntax or extra pings; no privileg
 member intent is required. Check `1 square`, `2 titles`, `203 watches` and large
 counts for a close, shared-baseline unit label. Check 0%, 66% and 100% are centered
 in the Watchathon ring. Live cards and private debug previews share this layout.
+
+Validate `/bingecord community start_new:True` with Manage Server. An earned legacy
+Watchathon should close at the invocation timestamp, settle its original pool once,
+and open a v2 Watchathon ending at the normal Monday reset. Watches before the split
+belong only to the legacy event; a watch exactly at the split belongs only to v2.
+Test missing permissions, unmet old requirements, repeat invocations, restart after
+transition, payout notification retries and subsequent normal weekly rotation.
+No other server is changed. Private previews must respect the shortened new window.

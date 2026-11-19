@@ -109,3 +109,13 @@ def test_card_delivery_resolves_uncached_names_and_supplies_server_icon(monkeypa
         assert render.call_args.kwargs['server_icon']=='server-image'
         assert artwork.await_args.args[0]=={'123':'avatar-asset','server_icon':'server-asset'}
     asyncio.run(run())
+
+
+def test_early_start_requires_manage_server(monkeypatch):
+    async def run():
+        i=_interaction();i.user.guild_permissions=SimpleNamespace(manage_guild=False)
+        start=AsyncMock();monkeypatch.setattr(bot.storage,'start_new_community_event',start)
+        await bot.simkl_community.callback(i,start_new=True)
+        start.assert_not_awaited();i.response.defer.assert_not_awaited()
+        assert 'Manage Server' in i.response.send_message.await_args.args[0]
+    asyncio.run(run())

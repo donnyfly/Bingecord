@@ -2556,7 +2556,11 @@ class Storage:
                 from .community_events import ROLLOUT
                 fake=(datetime.fromisoformat(ROLLOUT)+timedelta(weeks=ROTATION.index(kind))).date().isoformat()
                 record=event_goal(fake,size)
-            else:record=copy.deepcopy((guild.get('community_challenges') or {}).get(week) or event_goal(week,size))
+            else:
+                records=guild.get('community_challenges') or {}
+                active=records.get(week) or {}
+                record=copy.deepcopy(records.get(active.get('replacement_key')) or active or event_goal(week,size))
+                if record.get('early_started_by'):start=datetime.fromisoformat(record['start'])
             if record.get('version')!=2:
                 from .community_events import ROLLOUT
                 record=event_goal(max(week,ROLLOUT),size)
@@ -2576,6 +2580,39 @@ class Storage:
             self._dirty=True
         await self.flush()
 
+    async def start_new_community_event(self,guild_id,week_key,start,end,now,requester):
+        """One-time early migration: close the earned legacy event, start v2 now."""
+        from .community_events import event_goal,credited_watches,ROLLOUT
+        async with _lock:
+            guild=self._guild(str(guild_id))
+            records=(guild or {}).get('community_challenges') or {}
+            old=records.get(week_key)
+            if not old:raise ValueError('Open /bingecord community first to create the current event.')
+            if old.get('replacement_key') or old.get('version')==2:
+                raise ValueError('The new community events are already active. Nothing was restarted or paid twice.')
+            if old.get('kind')!='minutes' or now>=datetime.fromisoformat(old['end']):
+                raise ValueError('Only an active legacy Watchathon can be upgraded early.')
+            providers={uid:m.get('activity_provider','simkl') for uid,m in guild.get('users',{}).items()}
+            begin=datetime.fromisoformat(old['start'])
+            counts=minute_contributions(self._data['users'],old.get('members') or [],begin,now,providers)
+            if sum(counts.values())<old['target'] or sum(n>=old.get('qualifying_minutes',1) for n in counts.values())<old.get('required_contributors',1):
+                raise ValueError('The current event has not met its requirements yet. Finish it before paying its pool.')
+            key=week_key+'-early'
+            recent=credited_watches(self._data['users'],guild.get('users',{}),now-timedelta(days=14),now,providers)
+            size=len({r['uid'] for r in recent}) or max(1,min(2,len(guild.get('users',{}))))
+            new=event_goal(ROLLOUT,size)
+            new.update(key=key,start=now.isoformat(),end=end.isoformat(),
+                       timezone=guild.get('timezone') or DEFAULT_TIMEZONE,
+                       members=sorted(guild.get('users',{})),awards={},notified_awards={},
+                       early_started_by=str(requester),next_event_override=event_goal((datetime.fromisoformat(week_key)+timedelta(days=7)).date().isoformat(),size)['name'])
+            # Keep the original key, reward receipts and formulas for reconciliation.
+            old.update(end=now.isoformat(),providers=providers,replacement_key=key,
+                       closed_early_at=now.isoformat(),closed_early_by=str(requester))
+            records[key]=new
+            self._dirty=True
+        await self.flush()
+        return key
+
     async def get_community_state(self, guild_id: str | int, week_key: str, start: datetime, end: datetime, now: datetime) -> dict:
         """Create a fixed weekly goal and reconcile ended-week rewards atomically."""
         gid=str(guild_id)
@@ -2586,6 +2623,11 @@ class Storage:
             if not guild:
                 return {}
             records=guild.setdefault("community_challenges", {})
+            replacement=(records.get(week_key) or {}).get('replacement_key')
+            if replacement:
+                week_key=replacement
+                start=datetime.fromisoformat(records[week_key]['start'])
+                end=datetime.fromisoformat(records[week_key]['end'])
             if week_key not in records:
                 member_rows=guild.get('users') or {}
                 from .community_events import ROLLOUT,event_goal,credited_watches

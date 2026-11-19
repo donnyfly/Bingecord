@@ -391,6 +391,14 @@ Community events rotate **Watchathon → Genre Expedition → Community Bingo �
 starting with new server-local weeks from **23 November 2026**. Existing weeks retain their original rules and payouts.
 Use `/bingecord community` for the visual progress card, qualification and reward estimates.
 
+To migrate an already-qualified legacy Watchathon early, a member with **Manage Server**
+can run `/bingecord community start_new:True`. This closes it at the current time,
+settles its original pool among qualifying contributors, and opens the new Watchathon
+until Monday's normal reset. Only watches dated from the new start count in the new
+event. Its normal full target and pool apply despite the shorter first run. This is
+a one-time legacy upgrade per server; repeating it cannot restart v2 or pay twice.
+Results and opening cards use the configured activity channel.
+
 | Event | Team goal | Personal qualification |
 |---|---|---|
 | Watchathon | 600 minutes per active baseline member | 120 credited minutes |

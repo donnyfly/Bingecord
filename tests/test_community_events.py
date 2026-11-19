@@ -199,3 +199,49 @@ def test_community_artwork_is_recent_distinct_and_bounded():
     watches.append(dict(watches[-1],uid='b'))
     assert [r['canonical'] for r in community_art_entries(watches,meta)]==['6','5','4','3','2']
     assert community_art_entries(watches,{})==[]
+
+
+def test_early_upgrade_pays_old_pool_once_and_excludes_earlier_watches(tmp_path,monkeypatch):
+    import trackerbot.core.storage as module
+    import pytest
+    async def run():
+        monkeypatch.setattr(module,'DATA_PATH',str(tmp_path/'early.json'));store=module.Storage()
+        await store.link_user('1','1','token',None,'One','2026-11-01T00:00:00Z')
+        start=datetime(2026,11,16,tzinfo=timezone.utc);end=start+timedelta(days=7);now=start+timedelta(days=3)
+        user=store._data['users']['1'];p=user.setdefault('progression',{'xp':0,'lifetime_xp':0,'prestige':0});before=p['lifetime_xp']
+        p['xp_events']=[{'event_key':'award','media_type':'movie','runtime_minutes':120,'at':(now-timedelta(hours=1)).isoformat()}]
+        identity={'watched_at':(now-timedelta(hours=1)).isoformat(),'title':'Film','ids':{'tmdb':'1'},'season':None,'episode':None}
+        p['occurrence_ledger']={'x':{'award_keys':['award'],'observations':{'simkl:1':{'provider':'simkl','identity':identity}}}}
+        guild=store._data['guilds']['1']
+        guild['community_challenges']={'2026-11-16':{'start':start.isoformat(),'end':end.isoformat(),
+            'kind':'minutes','target':60,'pool':1440,'members':['1'],'awards':{},'notified_awards':{},
+            'required_contributors':1,'qualifying_minutes':30}}
+        guild['community_challenges']['2026-11-16']['target']=9999
+        with pytest.raises(ValueError,match='not met'):
+            await store.start_new_community_event('1','2026-11-16',start,end,now,'admin')
+        assert '2026-11-16-early' not in guild['community_challenges']
+        guild['community_challenges']['2026-11-16']['target']=60
+        key=await store.start_new_community_event('1','2026-11-16',start,end,now,'admin')
+        state=await store.get_community_state('1','2026-11-16',start,end,now)
+        assert state['key']==key and state['version']==2 and state['kind']=='watchathon'
+        assert state['total']==0 and state['start']==now.isoformat() and state['end']==end.isoformat()
+        assert state['next_event']=='Community Watchathon'
+        preview=await store.preview_community_event('1','2026-11-16',start,end,now)
+        assert preview['total']==0 and preview['start']==now.isoformat()
+        assert p['lifetime_xp']==before+1440
+        assert p['community_rewards']=={'1:2026-11-16':1440}
+        assert guild['community_challenges']['2026-11-16']['closed_early_by']=='admin'
+        assert len(state['pending_notifications'])==1
+        await store.ack_community_notification('1','2026-11-16',{'1':1440})
+        with pytest.raises(ValueError,match='already active'):
+            await store.start_new_community_event('1','2026-11-16',start,end,now,'admin')
+        reloaded=module.Storage()
+        again=await reloaded.get_community_state('1','2026-11-16',start,end,now+timedelta(minutes=1))
+        assert not again['pending_notifications'] and again['total']==0
+        assert reloaded._data['users']['1']['progression']['lifetime_xp']==before+1440
+        # Boundary belongs exclusively to the newly opened event.
+        p['xp_events'].append({'event_key':'new','media_type':'movie','runtime_minutes':90,'at':now.isoformat()})
+        p['occurrence_ledger']['y']={'award_keys':['new'],'observations':{'simkl:2':{'provider':'simkl','identity':dict(identity,watched_at=now.isoformat())}}}
+        latest=await store.get_community_state('1','2026-11-16',start,end,now+timedelta(minutes=1))
+        assert latest['total']==90 and p['community_rewards']['1:2026-11-16']==1440
+    asyncio.run(run())

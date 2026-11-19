@@ -2600,13 +2600,35 @@ async def simkl_challenges(i):
 
 
 @bingecord_commands.command(name="community", description="View this server's weekly community event and contribution card.")
-async def simkl_community(i):
+@app_commands.describe(start_new="Manage Server: pay a completed legacy event and start the new Watchathon now")
+async def simkl_community(i,start_new:bool=False):
     g=guild_id(i)
     if not g:
         await i.response.send_message("This command must be used in a server.",ephemeral=True)
         return
-    await i.response.defer()
-    state=await refresh_community_state(g)
+    if start_new and not i.user.guild_permissions.manage_guild:
+        await i.response.send_message('Manage Server is required to end the current community event.',ephemeral=True)
+        return
+    await i.response.defer(ephemeral=start_new)
+    if start_new:
+        if not await feature_enabled(g,'community'):
+            await i.followup.send('Enable community challenges before starting an event.',ephemeral=True)
+            return
+        zone=(await storage.get_timezone(g))['name'];now=datetime.now(timezone.utc)
+        key,start,end=community_week(now,zone)
+        lock=_community_refresh_locks.setdefault(str(g),asyncio.Lock())
+        try:
+            async with lock:
+                await storage.get_community_state(g,key,start,end,now)
+                await storage.start_new_community_event(g,key,start,end,now,str(i.user.id))
+                state=await _refresh_community_state(g)
+        except ValueError as exc:
+            await i.followup.send(str(exc),ephemeral=True)
+            return
+        await i.followup.send('Previous event closed and earned rewards settled. The new Watchathon counts watches from now until '+discord.utils.format_dt(end,style='F')+'. Results and opening cards are posted to the activity channel; failed deliveries retry during polling.',ephemeral=True)
+        return
+    else:
+        state=await refresh_community_state(g)
     if not state:
         await i.followup.send('No community event is available. Community challenges may be disabled.',ephemeral=True)
         return
