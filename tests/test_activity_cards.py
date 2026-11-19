@@ -47,7 +47,8 @@ def test_episode_and_film_render_shapes_missing_art_and_long_names():
         embed,part=example(movie);model=card_model(embed,part,preview=True)
         model['title']='A long title that needs more than a single line in the activity header'
         art={'image':Image.new('RGB',(736,414),'navy'),'logo':Image.new('RGBA',(300,90),(240,220,150,255))}
-        assert Image.open(render_activity_png(model,art)).size==(1080,878 if not movie else 770)
+        from trackerbot.presentation.activity_cards import activity_layout
+        assert Image.open(render_activity_png(model,art)).size==(1080,activity_layout(model)['height'])
         assert Image.open(render_activity_png(model)).width==1080
 
 
@@ -146,3 +147,21 @@ def test_debug_activity_previews_are_private_without_sync_or_preferences_changes
             assert render.await_args.args[1]['source']=='wetrakr'
         writer.assert_not_awaited();poll.assert_not_awaited()
     asyncio.run(run())
+
+
+def test_cinematic_fill_preserves_full_four_three_frame_and_colours_sidebars():
+    from trackerbot.presentation.activity_cards import cinematic_art,activity_layout
+    frame=Image.new('RGB',(400,300),(40,100,170))
+    # Distinct edge marks must survive the contained foreground frame.
+    from PIL import ImageDraw
+    draw=ImageDraw.Draw(frame);draw.rectangle((0,0,20,299),fill='red');draw.rectangle((379,0,399,299),fill='lime')
+    art=cinematic_art(frame,(984,520)).convert('RGB')
+    assert art.getpixel((148,260))[0]>200
+    assert art.getpixel((836,260))[1]>200
+    assert sum(art.getpixel((20,260)))>20
+    embed,part=example();model=card_model(embed,part)
+    full=activity_layout(model)
+    simple=activity_layout(dict(model,notes=[],ratings=[]))
+    assert simple['height']<full['height']
+    assert full['ratings'][1][0]=='Your episode'
+    for (name,value,width),(x,row) in zip(full['ratings'],full['rating_positions']):assert x+width<=984

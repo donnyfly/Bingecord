@@ -8,11 +8,11 @@ import json
 import re
 import time
 from urllib.parse import urlparse,parse_qs
-from PIL import Image,ImageDraw,ImageOps
+from PIL import Image,ImageDraw,ImageOps,ImageFilter,ImageEnhance
 import aiohttp
 import discord
 from .card_theme import background,panel,cover,fit,short,png
-from .typography import font,text as paint,label
+from .typography import font,text as paint,label,SHAPING
 from .card_details import details_view
 
 WHITE=(241,243,248);MUTED=(161,166,180);LINE=(48,51,62)
@@ -101,49 +101,129 @@ def _wrap(draw,value,size,width,max_lines=2,bold=False):
     return lines or ['']
 
 
+def cinematic_art(art,size):
+    """Keep the complete frame; fill aspect-ratio gaps with its blurred colours."""
+    source=art.convert('RGB')
+    base=ImageOps.fit(source,size,method=Image.Resampling.LANCZOS)
+    base=ImageEnhance.Brightness(base.filter(ImageFilter.GaussianBlur(28))).enhance(.48).convert('RGBA')
+    frame=ImageOps.contain(source,size,method=Image.Resampling.LANCZOS)
+    base.paste(frame,((size[0]-frame.width)//2,(size[1]-frame.height)//2))
+    return base
+
+
+def _flows(items,width,gap=12):
+    x=0;row=0;positions=[]
+    for item_width in items:
+        if x and x+item_width>width:x=0;row+=1
+        positions.append((x,row));x+=item_width+gap
+    return positions,(row+1 if items else 0)
+
+
+def activity_layout(model):
+    """Size chips and rows from real text, without reserving empty sidebar space."""
+    draw=ImageDraw.Draw(Image.new('RGB',(1,1)));ratings=[];notes=[]
+    for rating in model.get('ratings',[])[:3]:
+        match=re.search(r'(\d+(?:\.\d+)?/\d+(?:\.\d+)?)',rating)
+        name=rating[:match.start()].strip(' :') if match else rating
+        name=name.replace('Your episode rating','Your episode').replace('Your series rating','Your series').replace('Your season-entry rating','Your season entry').replace('Your season rating','Your season')
+        value=match.group() if match else '—'
+        width=min(984,max(132,int(max(draw.textlength(name.upper(),font=font(12,weight=600),**SHAPING),draw.textlength(value,font=font(26,True),**SHAPING)))+36))
+        ratings.append((name,value,width))
+    for note in (model.get('notes') or [])[:3]:
+        width=min(984,int(draw.textlength(note,font=font(17,True),**SHAPING))+66)
+        notes.append((note,width))
+    rating_positions,rating_rows=_flows([r[2] for r in ratings],984)
+    note_positions,note_rows=_flows([n[1] for n in notes],984)
+    hero_top=126;hero_height=460 if model['movie'] else 520;hero_bottom=hero_top+hero_height
+    ratings_top=hero_bottom+16;ratings_height=rating_rows*76-12 if ratings else 26
+    notes_top=ratings_top+ratings_height+14
+    bottom=notes_top+(note_rows*48-10 if notes else 0)
+    return dict(ratings=ratings,notes=notes,rating_positions=rating_positions,note_positions=note_positions,
+                hero_top=hero_top,hero_height=hero_height,hero_bottom=hero_bottom,
+                ratings_top=ratings_top,notes_top=notes_top,height=bottom+54)
+
+
 def render_activity_png(model,artwork=None):
     artwork=artwork or {};accent=(239,190,105) if model['movie'] else (154,140,232)
-    notes=(model.get('notes') or [])[:3];height=(770 if model['movie'] and not notes else 850+max(0,len(notes)-1)*28)
-    image=background((1080,height),accent);draw=ImageDraw.Draw(image)
+    layout=activity_layout(model);height=layout['height'];hero=artwork.get('image')
+    image=background((1080,height),accent,art=hero);draw=ImageDraw.Draw(image)
     def text(x,y,value,size=20,colour=WHITE,bold=False,width=900,italic=False):
         face=fit(draw,str(value),size,width,bold)
         if italic:face=font(face.size,italic=True)
         paint(draw,(x,y),short(draw,str(value),face.size,width,bold),font=face,fill=colour)
-    label(draw,(48,28),'Bingecord · Watch activity'+(' · Sample preview' if model.get('sample') else ' · Preview' if model.get('preview') else ''))
+    label(draw,(48,25),'Bingecord · Watch activity'+(' · Sample preview' if model.get('sample') else ' · Preview' if model.get('preview') else ''))
     avatar=artwork.get('avatar')
-    if avatar:cover(image,avatar,(48,68,96,116),24)
+    if avatar:cover(image,avatar,(48,62,92,106),22)
     else:
-        draw.ellipse((48,68,96,116),fill=LINE)
-        paint(draw,(72,92),model['author'][:1].upper(),font=font(20,True),fill=accent,anchor='mm')
-    text(112,79,model['author'],21,MUTED,width=680)
+        draw.ellipse((48,62,92,106),fill=LINE)
+        paint(draw,(70,84),model['author'][:1].upper(),font=font(20,True),fill=accent,anchor='mm')
+    text(106,71,model['author'],20,WHITE,width=760)
+    top=layout['hero_top'];h=layout['hero_height'];bottom=layout['hero_bottom']
+    if hero:tile=cinematic_art(hero,(984,h))
+    else:
+        tile=background((984,h),accent)
+        td=ImageDraw.Draw(tile);td.rounded_rectangle((425,h//2-48,559,h//2+48),18,outline=accent,width=3)
+        td.polygon(((480,h//2-25),(480,h//2+25),(516,h//2)),fill=accent)
+    # Independently fade the brand and episode/title captions, leaving the
+    # centre of the scene unobscured and the source frame uncropped.
+    gradient=Image.new('RGBA',(1,h));pixels=gradient.load()
+    for y in range(h):
+        upper=max(0,1-y/175)*.65
+        lower=max(0,(y-(h-190))/190)*.92
+        pixels[0,y]=(5,7,12,int(255*max(upper,lower)))
+    tile=Image.alpha_composite(tile,gradient.resize(tile.size))
+    mask=Image.new('L',tile.size);ImageDraw.Draw(mask).rounded_rectangle((0,0,983,h-1),22,fill=255)
+    image.paste(tile,(48,top),mask)
     logo=artwork.get('logo')
     if logo:
-        fitted=ImageOps.contain(logo.convert('RGBA'),(194,90),method=Image.Resampling.LANCZOS)
-        image.paste(fitted,(1032-fitted.width,62+(90-fitted.height)//2),fitted)
-    for index,line in enumerate(_wrap(draw,model['title'],34,750,2,True)):text(48,132+index*39,line,34,bold=True,width=750)
-    hero=artwork.get('image')
-    if hero:cover(image,hero,(48,224,784,638),20,contain=True)
+        fitted=ImageOps.contain(logo.convert('RGBA'),(430,108),method=Image.Resampling.LANCZOS)
+        image.paste(fitted,(72,top+24),fitted)
     else:
-        panel(image,(48,224,784,638),20)
-        draw.rounded_rectangle((340,346,492,454),18,outline=accent,width=3)
-        draw.polygon(((402,372),(402,429),(442,400)),fill=accent)
-        text(74,576,'Artwork unavailable',16,MUTED,width=660)
-    panel(image,(804,224,1032,638),20);label(draw,(824,246),'Ratings')
-    cursor=286
-    if not model['ratings']:
-        for index,line in enumerate(_wrap(draw,'No ratings shown',17,182,2)):text(824,cursor+index*23,line,17,MUTED,width=182)
-    for rating in model['ratings'][:3]:
-        match=re.search(r'(\d+(?:\.\d+)?/\d+(?:\.\d+)?)',rating)
-        title=rating[:match.start()].strip(' :') if match else rating
-        for line in _wrap(draw,title,14,182,2):text(824,cursor,line,14,MUTED,width=182);cursor+=19
-        if match:text(824,cursor,match.group(),29,accent,True,width=182);cursor+=43
-        cursor+=15
-    text(48,664,model['action'],30,accent,True,width=984)
-    if model.get('episode_title'):
-        for index,line in enumerate(_wrap(draw,model['episode_title'],20,984,2)):text(48,706+index*25,line,20,MUTED,width=984,italic=True)
-    for index,note in enumerate(notes[:3]):text(48,770+index*28,note,18,WHITE,True,width=984)
-    text(48,height-29,model['source'],12,MUTED,width=650)
-    if model.get('timestamp'):text(710,height-29,model['timestamp'].replace('T',' ')[:16]+' UTC',12,MUTED,width=322)
+        for index,line in enumerate(_wrap(draw,model['title'],36,936,2,True)):
+            text(72,top+22+index*43,line,36,WHITE,True,width=936)
+    action=model['action'];code=re.search(r'\bS\d+E\d+(?:[-–](?:S\d+)?E?\d+)?\b',action,re.I)
+    verb=action[:code.start()].strip() if code else action
+    caption=model.get('episode_title')
+    badge_y=bottom-(111 if caption else 64)
+    verb_width=min(680,int(draw.textlength(verb.upper(),font=font(14,weight=600),**SHAPING))+28)
+    draw.rounded_rectangle((72,badge_y,72+verb_width,badge_y+32),10,fill=(12,15,23,255))
+    label(draw,(86,badge_y+7),short(draw,verb,14,verb_width-28,True),size=14,fill=WHITE)
+    if code:
+        value=code.group();x=84+verb_width;w=int(draw.textlength(value,font=font(17,True),**SHAPING))+28
+        draw.rounded_rectangle((x,badge_y,x+w,badge_y+32),10,fill=accent)
+        text(x+14,badge_y+4,value,17,(14,16,24),True,width=936-(x-72)-28)
+    if caption:
+        lines=_wrap(draw,caption,30,936,2,True)
+        for n,line in enumerate(lines):text(72,bottom-(78 if len(lines)>1 else 64)+n*34,line,30,WHITE,True,width=936)
+    for (name,value,width),(x,row) in zip(layout['ratings'],layout['rating_positions']):
+        x+=48;y=layout['ratings_top']+row*76
+        panel(image,(x,y,x+width,y+64),16)
+        label(draw,(x+18,y+9),name,size=12,fill=MUTED)
+        text(x+18,y+27,value,26,accent,True,width=width-36)
+    if not layout['ratings']:text(48,layout['ratings_top']+3,'No ratings shown',14,MUTED,width=984)
+    for (note,width),(x,row) in zip(layout['notes'],layout['note_positions']):
+        x+=48;y=layout['notes_top']+row*48
+        colour=accent if note.startswith('NEW') else (82,196,166)
+        panel(image,(x,y,x+width,y+38),12)
+        draw.ellipse((x+13,y+10,x+31,y+28),outline=colour,width=2)
+        if note.startswith('NEW'):
+            draw.line((x+22,y+14,x+22,y+24),fill=colour,width=2)
+            draw.line((x+17,y+19,x+27,y+19),fill=colour,width=2)
+        else:draw.line((x+17,y+19,x+21,y+23,x+27,y+15),fill=colour,width=2)
+        text(x+42,y+7,note,17,colour,True,width=width-54)
+    footer_y=height-28
+    # Draw a media glyph rather than relying on an unsupported emoji font.
+    if model['movie']:
+        draw.rounded_rectangle((48,footer_y+1,66,footer_y+15),2,outline=MUTED,width=1)
+        for x in (51,57,63):
+            draw.point((x,footer_y+3),fill=MUTED);draw.point((x,footer_y+13),fill=MUTED)
+    else:
+        draw.rounded_rectangle((48,footer_y,66,footer_y+12),2,outline=MUTED,width=1)
+        draw.line((57,footer_y+12,57,footer_y+15),fill=MUTED);draw.line((52,footer_y+15,62,footer_y+15),fill=MUTED)
+    source=re.sub(r'^[^\w]+','',model['source'])
+    text(76,footer_y,source,12,MUTED,width=620)
+    if model.get('timestamp'):
+        paint(draw,(1032,footer_y),model['timestamp'].replace('T',' ')[:16]+' UTC',font=font(12),fill=MUTED,anchor='ra')
     return png(image)
 
 

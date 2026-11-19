@@ -330,8 +330,11 @@ Server admins can set defaults with `/bingecord style-server`. Personal settings
 
 The experimental **Visual card** style currently covers individual episode/range
 and film watches for SIMKL, WeTrakr and MDBList. It uses Inter typography, the
-already-resolved still/backdrop and logo, a ratings panel, personal rating and
-verified completion/NEW annotations. Native title and profile links remain clickable,
+already-resolved still/backdrop and logo, compact rating chips, personal rating and
+verified completion/NEW badges. Artwork spans the card with readable caption fades;
+4:3 and other aspect ratios retain the full frame over a blurred, darkened fill.
+The title logo replaces duplicate heading text when available, and card height adapts
+to its rating and milestone rows. Native title and profile links remain clickable,
 and View details provides the complete text privately. Episode watches retain
 IMDb episode ratings and exclude MAL; anime film cards may include MAL.
 

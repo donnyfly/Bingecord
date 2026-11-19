@@ -352,3 +352,10 @@ render/upload failures. Initial render failures fall back to native delivery;
 failed late renders retain the prior card and native payload for a later retry.
 Watch/XP commits must still occur only after confirmed Discord delivery. Test bulk
 ranges and multiple watches of one title; the renderer adds no catalogue lookups.
+
+Activity card layout checks: compare one/no/three ratings and absent/multiple
+milestones. Chips must flow within the canvas; empty sidebar space is not reserved.
+Check title-logo and text-heading alternatives, long episode titles and ranges,
+4:3 stills, portrait artwork and full-width widescreen stills. Aspect-ratio fill
+must preserve all edges of the foreground frame. NEW remains after completion
+badges, and the footer uses a drawn media icon without unsupported emoji glyphs.
