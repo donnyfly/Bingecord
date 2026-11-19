@@ -77,7 +77,7 @@ def test_feature_command_requires_admin(monkeypatch):
 
 def test_streaks_long_history_and_gaps():
     start=datetime(2010,1,1)
-    dates={(start+timedelta(days=n)).date().isoformat():{} for n in range(2000)}
+    dates={(start+timedelta(days=n)).date().isoformat():{"total":1} for n in range(2000)}
     assert bot.calculate_streaks(dates,'UTC')==(0,2000)
     del dates[(start+timedelta(days=1000)).date().isoformat()]
     assert bot.calculate_streaks(dates,'UTC')==(0,1000)

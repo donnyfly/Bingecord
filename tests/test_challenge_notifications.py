@@ -89,10 +89,17 @@ def test_community_announcement_names_every_contributor_and_acknowledges(tmp_pat
         monkeypatch.setattr(bot,"storage",reloaded)
         channel.send=AsyncMock()
         assert await bot.notify_community_rewards("123",channel,notification)
-        embed=channel.send.await_args.kwargs["embed"]
-        assert "<@41>" in embed.description and "+7,500 XP" in embed.description
-        assert "<@42>" in embed.description and "+4,500 XP" in embed.description
-        assert channel.send.await_args.kwargs["allowed_mentions"].users
+        public=channel.send.await_args.kwargs['embed']
+        assert not public.fields
+        view=channel.send.await_args.kwargs['view']
+        if hasattr(view,'embed'):embed=view.embed
+        else:
+            import discord
+            record=await reloaded.get_card_details(view.children[0].token)
+            embed=discord.Embed.from_dict(record['embed'])
+        assert "<@41>" in embed.fields[0].value and "+7,500 XP" in embed.fields[0].value
+        assert "<@42>" in embed.fields[0].value and "+4,500 XP" in embed.fields[0].value
+        assert not channel.send.await_args.kwargs["allowed_mentions"].users
         assert (await reloaded.get_community_state("123","2026-09-21",start,end,end))["pending_notifications"]==[]
     asyncio.run(scenario())
 

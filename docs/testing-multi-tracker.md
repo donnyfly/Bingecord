@@ -221,3 +221,109 @@ seal and 36px notification seal, including later prestige colour cycles.
 Achievement GIFs have a dedicated trophy medallion with an animated unlock ring
 and a gold XP reward badge. Preview short and two-line achievement names, large
 rewards and the start/end frames; decoration stays clear of the title and reward.
+
+Streak audit: `/bingecord debug feature:Streak history` privately reports the
+selected source, timezone and longest streak's exact date range, with a CSV of
+each supporting day, recorded watch count and up to ten title examples. Empty,
+invalid and future date entries are excluded from both the card and diagnostic.
+Imported dates remain tracker records rather than proof of playback. This audit
+does not change watch records, XP or achievements.
+
+## Community events v2
+
+New weeks from 2026-11-23 use a frozen four-event rotation and 3,000 XP per active
+baseline member. Existing legacy records retain their formulas. Validate all
+four private Community event card previews, with empty data, partial metadata,
+long names and all-complete objectives. Previews use cached live watches and
+never create events, settle rewards or post to the activity channel.
+
+Test exact-ID enrichment/retries and canonical title aliases across providers;
+three distinct regular episodes qualify a series, and rewatches do not multiply
+a title collection. Test genre maximum matching, one-title/one-square Bingo,
+shared film support and decade quotas. Removing supporting watches must revise
+qualification, rewards and saved settlement receipts. Native legacy WeTrakr
+play references require an exact account-matching ledger entry.
+
+Validate Monday boundaries in server timezones, a fixed baseline after new
+members join, six-hour delayed settlement, delayed provider reads and restarts.
+Verify results/reward corrections are idempotent, include only five recipients
+in text, and never ping members. Opening/progress messages edit no more than
+every 20 minutes when changed; midweek, final-day and completion notices are
+acknowledged only after successful delivery. Missing/deleted progress messages
+should be recreated. Polling must refresh communities with only native-provider
+members too. Check the previous week's final results after the new event opens.
+
+Verified season/series finishes reuse the activity completion verifier. Saved
+completion evidence is scoped to week, member, provider, account and canonical
+title, and checked against its supporting watch signatures. API errors retain
+last verified evidence; removing a supporting watch or changing account prevents
+it from qualifying a title. Test this alternate path with one finale watched
+during the event, while earlier episodes were watched before it. Test reward
+reversal across a prestige boundary as well as within one level range.
+
+Card identity/layout checks: restart with an empty Discord member cache and
+confirm the top five contributors show server display names and avatars. The
+server icon belongs beside the server name. Member lookup and artwork failures
+must keep the card usable without raw mention syntax or extra pings; no privileged
+member intent is required. Check `1 square`, `2 titles`, `203 watches` and large
+counts for a close, shared-baseline unit label. Check 0%, 66% and 100% are centered
+in the Watchathon ring. Live cards and private debug previews share this layout.
+
+Validate `/bingecord community start_new:True` with Manage Server. An earned legacy
+Watchathon should close at the invocation timestamp, settle its original pool once,
+and open a v2 Watchathon ending at the normal Monday reset. Watches before the split
+belong only to the legacy event; a watch exactly at the split belongs only to v2.
+Test missing permissions, unmet old requirements, repeat invocations, restart after
+transition, payout notification retries and subsequent normal weekly rotation.
+No other server is changed. Private previews must respect the shortened new window.
+
+## Personal challenge cards and v2 objectives
+
+Preview `/bingecord debug feature:Personal challenges card` before rollout. It
+must use cached progression, show the new rules privately, and perform no imports,
+reward writes, notifications or community refresh. Check empty, partial, complete,
+long-name and missing-artwork cards. `/bingecord challenges` uses the same renderer
+with actual saved definitions and earned receipts; failed rendering retains readable
+objective descriptions, values, rewards and reset times.
+
+Validate daily rollout on 2026-11-20 00:00 UTC and weekly rollout on 2026-11-23
+00:00 UTC, including +08:00 timestamps at the boundary. Earlier dates retain their
+original rules. Each set has three objectives and one minute objective. Verify
+rotation and persisted definitions across restarts. Completed legacy rewards must
+not be re-evaluated merely by opening the new screen or enriching title metadata.
+
+Across SIMKL, WeTrakr and MDBList, test shared occurrence deduplication, two regular
+episodes for daily genre picks, three for weekly title collections, specials,
+repeated episode marks, anime films, new-series history checks, distinct films,
+genre diversity and decade collection. Exact-ID alias metadata should map to one
+canonical title; missing genres/years must show pending instead of awarding by
+name. Test delayed enrichment with community disabled as well as enabled.
+
+A verified season/series finish must retain its provider/account and current watch
+support. Removing that support revokes Roll Credits and dependent discovery rewards.
+Test removals and re-additions, idempotence, reward reversals crossing prestige,
+notification retries, silent imports and the next normal poll cycle. Polling should
+retry metadata-dependent objectives and deliver pending challenge notifications.
+
+## Compact embeds, podiums and recap artwork
+
+Check personal/community cards, server stats and weekly recaps show short captions
+when rendering succeeds. Full text must remain in View details, privately, with
+AllowedMentions.none(). Test rendering failure, missing artwork, failed Discord
+send (do not send a second fallback after a failed send), persisted details after
+restart, expiry and private preview owner/server restrictions. Verify results still
+show each recipient's XP correction in details, with no more than five recipients.
+
+Preview leaderboard and weekly recap via `/bingecord debug`. Verify podium artwork,
+server icon, avatars, long names, first/subsequent pages, zero rows after filtering,
+empty weeks, a full seven-day chart and uncropped 2:3 posters. Recap titles must come
+from the requested period, never all-time favourites. Test exact old watch-key joins
+for artwork when server statistics lack the IDs already in shared progression.
+
+Test leaderboard category and period dropdowns: all-time, this week and last 30 days;
+unique titles group episodes by stored show IDs/keys. Periods use server-local dates
+and ignore future days. Current streak excludes invalid/empty/future dates. Progression
+categories stay all-time and sort prestige then current prestige XP; the displayed
+XP progression value includes completed prestige tiers. Disabled progression must
+hide its category options and progression labels. Non-owners may view details but
+cannot change pages, categories or periods. Each change resets pagination safely.

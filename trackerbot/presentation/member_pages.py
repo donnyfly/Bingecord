@@ -14,14 +14,14 @@ class MemberPages(discord.ui.View):
 
     @property
     def pages(self):
-        return (len(self.rows) + PAGE_SIZE - 1) // PAGE_SIZE
+        return max(1,(len(self.rows) + PAGE_SIZE - 1) // PAGE_SIZE)
 
     def update_buttons(self):
         self.previous.disabled = self.page == 0
         self.next.disabled = self.page + 1 >= self.pages
 
     async def interaction_check(self, interaction):
-        if interaction.user.id == self.owner_id:
+        if interaction.user.id == self.owner_id or (getattr(interaction,'data',None) or {}).get('custom_id')=='bingecord:leaderboard:details':
             return True
         await interaction.response.send_message('Run /bingecord leaderboard to browse your own pages.', ephemeral=True)
         return False
@@ -37,15 +37,21 @@ class MemberPages(discord.ui.View):
         await interaction.edit_original_response(embed=embed, attachments=[file] if file else [], view=self,
                                                  allowed_mentions=discord.AllowedMentions.none())
 
-    @discord.ui.button(label='Previous', style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label='Previous', style=discord.ButtonStyle.secondary,row=2)
     async def previous(self, interaction, button):
         self.page = max(0, self.page - 1)
         await self.show(interaction)
 
-    @discord.ui.button(label='Next', style=discord.ButtonStyle.primary)
+    @discord.ui.button(label='Next', style=discord.ButtonStyle.primary,row=2)
     async def next(self, interaction, button):
         self.page = min(self.pages - 1, self.page + 1)
         await self.show(interaction)
+
+    @discord.ui.button(label='View details',style=discord.ButtonStyle.secondary,custom_id='bingecord:leaderboard:details',row=2)
+    async def details_button(self,interaction,button):
+        embed=getattr(self,'details_embed',None)
+        await interaction.response.send_message(embed=embed,content=None if embed else 'Run /bingecord leaderboard for current details.',
+                                                ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
 
     async def on_timeout(self):
         for button in self.children:

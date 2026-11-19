@@ -33,3 +33,17 @@ def test_labels_keep_inter_kerning_and_word_spaces():
     text(ImageDraw.Draw(expected), (5, 5), "BINGECORD · WATCH XP",
          font=font(14, weight=600), fill=(172, 176, 185))
     assert actual.tobytes() == expected.tobytes()
+
+
+def test_number_units_follow_measured_width_with_shared_baseline():
+    from unittest.mock import Mock
+    from trackerbot.presentation.typography import number_unit,unit_label
+    for value,unit,expected in [(1,'squares','square'),(2,'titles','titles'),(203,'watches','watches')]:
+        draw=Mock(wraps=ImageDraw.Draw(Image.new('RGB',(600,100))))
+        unit_x=number_unit(draw,(20,70),str(value),unit_label(unit,value))
+        calls=draw.text.call_args_list
+        assert calls[1].args[1]==expected
+        assert calls[0].args[0][1]==calls[1].args[0][1]==70
+        assert calls[0].kwargs['anchor']==calls[1].kwargs['anchor']=='ls'
+        measured=draw.textlength(str(value),font=font(39,weight=700),**SHAPING)
+        assert unit_x==20+measured+12

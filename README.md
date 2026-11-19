@@ -391,18 +391,105 @@ The bot uses the completed item's catalog runtime, not time spent with playback 
 
 Episode runtime comes from provider metadata or cached TMDB season details. If an exact episode runtime is unavailable, the series' typical episode runtime is used. If no valid catalog runtime can be found, the fallback is **25 minutes / 100 XP for an episode** or **90 minutes / 360 XP for a movie**. Estimated duration also counts toward minute-based challenges.
 
-## Community Watchathon
+## Visual cards and leaderboards
 
-The current community goal switches to watch time across TV, anime and movies immediately after deployment. Unfinished goals for the server-local week beginning **12 October 2026** and future weeks use Watchathon. Already reached or paid legacy goals retain their original rules and rewards.
+Challenge, community and summary embeds keep their heading, reporting period or
+reset/deadline countdown above the image. **View details** opens the full text
+privately. If a card cannot render, the full text is shown automatically. Private
+previews retain their no-XP-change label. Saved card details remain available for
+up to 30 days across bot restarts; older snapshots may expire.
 
-- The target is **180 minutes per recently active member**, based on the preceding 14 days of credited, selected-source activity. It stays fixed for the week. With no recent duration data, a new server starts with a one- or two-member baseline.
-- Members need **30 minutes** to qualify. The goal requires one to three qualifying contributors, depending on the baseline size; a two-member baseline requires both members.
-- The bonus pool is **2 XP per target minute**: half shared equally among qualifying members and half proportional to their watch minutes. Rewards settle after the week ends and are recalculated after removals.
-- Confirmed duplicate watches count once. Estimated runtime counts; legacy awards without recorded runtime do not supply guessed minutes.
-- Progress notices cover 25%, 50%, 75% and 100%, with only the highest new milestone posted per check. A 100% time milestone still needs enough qualifying contributors.
-- `/bingecord community` shows contributors, remaining minutes and the server-timezone reset countdown. New members may contribute without changing the frozen target.
+`/bingecord leaderboard` offers category and period dropdowns as well as command
+options. Watch categories include total watches, episodes, films, anime and
+**unique titles**; choose all-time, this week or the last 30 days. **Current streak**
+uses the server timezone and current activity. XP, level and prestige rank shared
+global progression and remain all-time. These categories are hidden when progression
+is disabled in the server. Pages show at most five members, and only the requester
+can change the category, period or page. Other members can open the current page's
+text details privately while its controls are active.
 
-The personal minute-based daily/weekly challenge pools **permanently replace** the old pools immediately for the current periods; this is permanent, not a temporary event.
+The top three appear on an artwork-backed podium; other positions retain compact
+rows. Artwork comes from each member's most-watched title in the selected period.
+Watch rankings use each member's selected provider. Unique-title counts use exact
+external IDs where available, otherwise stored provider title keys. Historical
+records without IDs are not matched by title-name guesses.
+
+Weekly recap cards include member avatars, daily watch activity, a title spotlight
+and a poster gallery from that recap's dated watch records. Titles are ordered by
+how many members watched them, then watch count. Metadata and artwork failures leave
+the recorded counts intact. Daily bars and reporting periods use the server timezone.
+
+## Personal daily and weekly challenges
+
+`/bingecord challenges` displays your avatar, daily and weekly objective cards,
+progress bars, contributing title posters, rewards and bonus XP earned this week.
+Progress and rewards belong to your shared Discord progression across trackers.
+
+New **daily** sets begin **20 November 2026, 00:00 UTC**; new **weekly** sets begin
+**23 November 2026, 00:00 UTC**. Existing periods keep their original objectives
+and payouts. Each new period saves its definitions, so subsequent updates do not
+change a set already in progress. Daily resets remain 00:00 UTC and weekly resets
+remain Monday 00:00 UTC (**08:00 in Singapore**).
+
+Each set contains three objectives, with only one watchtime goal:
+
+| Period | Objective pool | Bonus XP |
+|---|---|---:|
+| Daily | Settle In: watch 30 minutes | 250 |
+| Daily | A rotating genre pick: a matching film or 2 distinct regular episodes; alternatively, a pre-2000 film | 450 |
+| Daily | Double Feature: 2 different films; alternatively, Something New: S1E1 of a series absent from earlier credited history | 700 / 350 |
+| Weekly | Weekly Watchtime: watch 600 minutes | 2,000 |
+| Weekly | Genre Explorer: 4 genres across at least 4 qualifying titles; alternatively, titles from 3 decades | 2,000 |
+| Weekly | Film Festival: 4 different films; alternatively, Roll Credits: a film and a verified season/series finish | 2,500 |
+
+A weekly discovery title qualifies through a completed film, 3 distinct regular
+episodes, or a verified season/series finish in that period. Anime films count as
+films. Rewatches do not multiply distinct-title or episode collection goals.
+Exact catalogue IDs supply genres, release years and canonical title matching;
+missing information displays **Awaiting title details** and retries during polling.
+New-series checks use credited history rather than title-name guesses.
+
+The shared occurrence ledger prevents matched watches from adding progress twice.
+Removing supporting watches can revoke a completed objective and its bonus XP,
+including across prestige levels. Silent imports do not send historical completion
+notifications. Metadata refreshes do not recalculate legacy challenge rewards.
+Use `/bingecord debug feature:Personal challenges card` for a private preview of
+the new design and rules using cached progress, with no awards or data imports.
+
+## Weekly community events
+
+Community events rotate **Watchathon → Genre Expedition → Community Bingo → Decade Discovery**,
+starting with new server-local weeks from **23 November 2026**. Existing weeks retain their original rules and payouts.
+Use `/bingecord community` for the visual progress card, qualification and reward estimates.
+
+To migrate an already-qualified legacy Watchathon early, a member with **Manage Server**
+can run `/bingecord community start_new:True`. This closes it at the current time,
+settles its original pool among qualifying contributors, and opens the new Watchathon
+until Monday's normal reset. Only watches dated from the new start count in the new
+event. Its normal full target and pool apply despite the shorter first run. This is
+a one-time legacy upgrade per server; repeating it cannot restart v2 or pay twice.
+Results and opening cards use the configured activity channel.
+
+| Event | Team goal | Personal qualification |
+|---|---|---|
+| Watchathon | 600 minutes per active baseline member | 120 credited minutes |
+| Genre Expedition | 4–12 different genres, plus at least two distinct titles per baseline member | Two eligible titles with verified genres |
+| Community Bingo | Complete a shared 3×3 board | Support two different squares |
+| Decade Discovery | Collect 3–5 specified decades, with distinct-title quotas | Two eligible titles in the required decades |
+
+- The baseline uses credited activity in the preceding 14 days. With no recent activity, it starts with at most two linked members. Goals and pools are frozen when created; later arrivals can help without increasing the target.
+- Each baseline member adds **3,000 XP** to the fixed team reward pool. At least 60% of the baseline must qualify (rounded up, capped at six); a two-member baseline needs both members.
+- Watchathon rewards split **30% equally / 70% by minutes**. Discovery and Bingo rewards split **50% equally / 50% by objective support**, sharing objective credit between qualifying supporters.
+- Discovery requires a completed movie, three distinct regular series episodes, or a verified season/series completion during the event. Fully watched one- or two-episode seasons qualify when the catalogue verifies a finished short series. Rewatches count once per title/member. Shared titles count once towards distinct-title collections.
+- Genres and release years resolve through exact TMDB/TVDB/IMDb IDs. Unresolved titles are visibly pending and retried in bounded batches; no title-name guesses determine rewards. A title fills one genre slot, with automatic reassignment to maximise coverage.
+- Bingo uses verified movie/series genres, release years, first episodes and a shared-film objective. A member's title can fill only one square. No unverified finale or genre inference is required.
+- Events run Monday to Monday in the server timezone. A **six-hour sync grace period** follows the deadline; only watches dated within the event count. Payouts and later corrections reconcile from the shared occurrence ledger.
+- The bot maintains an opening/progress card, with updates at most every 20 minutes when progress changes, one midweek check-in, an incomplete-goal reminder in the last 24 hours, a completion announcement and final results. Notifications do not ping members.
+- `/bingecord debug feature:Community event card community_event:Genre Expedition` privately previews each event using cached activity, without creating goals, awarding XP or posting announcements.
+
+Stretch rewards, nominated watch clubs and country-specific events are reserved for a later release.
+
+Personal daily and weekly objectives have a separate rotation and reward budget from these cooperative events.
 
 ## Multiple providers, one progression
 
