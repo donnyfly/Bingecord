@@ -27,7 +27,7 @@ async def community_card(send,guild,state,*,viewer=None,preview=False,heading=No
                     image=await download_card_image(session,entry.get('poster_path'),'w185')
                     if image:posters[entry['canonical']]=image
                 except Exception:pass
-            tasks=[asyncio.create_task(load(entry)) for entry in entries[:4]]
+            tasks=[asyncio.create_task(load(entry)) for entry in entries[:5 if state.get('kind') in {'watchathon','minutes'} else 4]]
             try:
                 async with asyncio.timeout(4):await asyncio.gather(*tasks)
             except TimeoutError:pass

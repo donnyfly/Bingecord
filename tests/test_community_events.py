@@ -173,8 +173,14 @@ def test_existing_weeks_keep_rules_and_new_members_do_not_raise_goal(tmp_path,mo
         store._data['guilds']['1']['community_challenges']={'2026-11-23':{
             'start':start.isoformat(),'end':end.isoformat(),'kind':'minutes','target':720,'pool':1440,
             'members':['1'],'awards':{},'notified_awards':{},'required_contributors':2,'qualifying_minutes':30}}
-        legacy=await store.get_community_state('1','2026-11-23',start,end,start)
+        identity={'watched_at':'2026-11-23T01:00:00Z','title':'Film','ids':{'tmdb':'1'},'season':None,'episode':None}
+        store._data['users']['1']['progression']={'xp_events':[{'event_key':'award','media_type':'movie','runtime_minutes':120}],
+            'occurrence_ledger':{'x':{'award_keys':['award'],'observations':{'simkl:1':{'provider':'simkl','identity':identity}}}}}
+        rows=credited_watches(store._data['users'],['1'],start,end,{'1':'simkl'})
+        store._data['guilds']['1']['community_metadata']={rows[0]['meta_key']:{'canonical':'movie:tmdb:1','title':'Film','poster_path':'/film.jpg'}}
+        legacy=await store.get_community_state('1','2026-11-23',start,end,start+timedelta(hours=2))
         assert (legacy['target'],legacy['pool'])==(720,1440)
+        assert legacy['art_entries'][0]['poster_path']=='/film.jpg'
         next_start=end;next_end=end+timedelta(days=7)
         new=await store.get_community_state('1','2026-11-30',next_start,next_end,next_start)
         await store.link_user('1','2','token',None,'Two','2026-11-30T01:00:00Z')
@@ -184,3 +190,12 @@ def test_existing_weeks_keep_rules_and_new_members_do_not_raise_goal(tmp_path,mo
         reloaded=module.Storage()
         assert (await reloaded.get_community_state('1','2026-11-30',next_start,next_end,next_start+timedelta(hours=3)))['pool']==new['pool']
     asyncio.run(run())
+
+
+def test_community_artwork_is_recent_distinct_and_bounded():
+    from trackerbot.core.community_events import community_art_entries
+    watches,meta=collection([('a',str(n)) for n in range(7)])
+    for n,row in enumerate(watches):row['at']=f'2026-11-{20+n:02d}T12:00:00Z'
+    watches.append(dict(watches[-1],uid='b'))
+    assert [r['canonical'] for r in community_art_entries(watches,meta)]==['6','5','4','3','2']
+    assert community_art_entries(watches,{})==[]

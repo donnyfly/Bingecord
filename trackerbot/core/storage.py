@@ -2759,6 +2759,12 @@ class Storage:
                     "changes":changes,
                     "pending_notifications":pending,
                 }
+            if current.get('version')!=2 and current.get('kind')=='minutes':
+                from .community_events import community_art_entries
+                source_map={uid:(current.get('providers') or {}).get(uid,member.get('activity_provider','simkl'))
+                            for uid,member in guild.get('users',{}).items()}
+                watches=credited_watches(self._data['users'],current.get('members') or [],start,min(now,end),source_map)
+                state['art_entries']=community_art_entries(watches,guild.get('community_metadata') or {})
         await self.flush()
         return state
 

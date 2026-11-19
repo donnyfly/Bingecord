@@ -49,7 +49,7 @@ def render_community_png(guild_name,state,*,names=None,avatars=None,viewer=None,
                             (712,number(state.get('qualifying_minutes',120)) if unit=='minutes' else number(state.get('pending_metadata',0)), 'minutes to qualify' if unit=='minutes' else 'titles awaiting metadata')):
         panel(image,(x,410,x+312,490),20);text(x+18,420,value,30,accent,True,width=276);text(x+18,460,caption,14,MUTED,width=276)
     objectives=state.get('objectives') or []
-    panel(image,(56,510,1024,878));tag(80,531,'Community board' if state.get('kind')=='bingo' else 'What the team needs')
+    panel(image,(56,510,1024,878));tag(80,531,'Watched by the team' if unit=='minutes' else 'Community board' if state.get('kind')=='bingo' else 'What the team needs')
     if state.get('kind')=='bingo':
         for index,objective in enumerate(objectives[:9]):
             x=80+(index%3)*310;y=570+(index//3)*96;done=objective['done']
@@ -64,17 +64,31 @@ def render_community_png(guild_name,state,*,names=None,avatars=None,viewer=None,
             suffix=f" · {objective['count']} / {objective['target']} titles" if 'count' in objective else ''
             text(x+22,y,short(draw,objective['label']+suffix,17,420,True),17,accent if objective['done'] else WHITE,True,width=420)
             if objective.get('titles'):text(x+22,y+23,short(draw,objective['titles'][0],11,420),11,MUTED,width=420)
+    elif unit=='minutes':
+        entries=(state.get('art_entries') or [])[:5]
+        for index,entry in enumerate(entries):
+            x=80+index*116;art=posters.get(entry.get('canonical'))
+            if art:cover(image,art,(x,574,x+104,730),12,contain=True)
+            else:
+                draw.rounded_rectangle((x,574,x+104,730),12,fill=LINE)
+                text(x+9,640,entry.get('title') or 'Watched title',13,width=86)
+        if not entries:
+            for index,name in enumerate(('Movies','TV series','Anime')):
+                x=80+index*194
+                draw.rounded_rectangle((x,574,x+178,730),16,fill=LINE)
+                draw.rounded_rectangle((x+60,603,x+118,651),10,outline=accent,width=2)
+                draw.polygon(((x+84,615),(x+84,639),(x+100,627)),fill=accent)
+                paint(draw,(x+89,692),name,font=font(18,True),fill=WHITE,anchor='mm')
+        text(80,756,'Team goal reached' if total>=target and qualified>=required else 'Every watch brings the team closer',22,accent,True,width=620)
+        text(80,795,f'{number(target)} minutes together · {qualified} / {required} qualifying members',16,MUTED,width=620)
+        text(80,833,f"Each member: {state.get('qualifying_minutes',30)} minutes · Movies, TV & anime count",13,MUTED,width=620)
+        draw.arc((754,564,994,804),0,360,fill=LINE,width=13)
+        if progress:draw.arc((754,564,994,804),-90,-90+360*progress,fill=accent,width=13)
+        paint(draw,(874,668),f'{progress:.0%}',font=font(44,True),fill=accent,anchor='mm')
+        paint(draw,(874,712),'MINUTE GOAL MET' if total>=target else 'OF TEAM GOAL',font=font(12,weight=600),fill=MUTED,anchor='mm')
     else:
-        lines=([f"Reach {number(target)} combined watch minutes.",
-                f"At least {required} members must each watch {state.get('qualifying_minutes',30)} minutes.",
-                'Movies, TV and anime all contribute their recorded runtime.'] if unit=='minutes' else ['Objectives will appear as eligible titles resolve.'])
-        for index,line in enumerate(lines):text(80,580+index*48,line,20,width=660 if unit=='minutes' else 916)
-        if unit=='minutes':
-            draw.arc((788,590,976,778),0,360,fill=LINE,width=10)
-            if progress:draw.arc((788,590,976,778),-90,-90+360*progress,fill=accent,width=10)
-            paint(draw,(882,674),f'{progress:.0%}',font=font(34,True),fill=accent,anchor='mm')
-            paint(draw,(882,708),'of target',font=font(13),fill=MUTED,anchor='mm')
-    if modern:
+        text(80,580,'Objectives will appear as eligible titles resolve.',20,width=916)
+    if modern and unit!='minutes':
         requirement=(f"Each member: {state.get('qualifying_minutes',120)} minutes" if unit=='minutes' else 'Each member: 2 eligible titles' if unit!='squares' else 'Each member: support 2 squares')
         if state.get('kind')=='genres':requirement+=f" · Team titles: {state.get('eligible_titles',0)} / {state['minimum_titles']} · {max(0,target-total):g} new genres needed"
         text(80,846,requirement,13,MUTED,width=916)
@@ -104,7 +118,7 @@ def render_community_png(guild_name,state,*,names=None,avatars=None,viewer=None,
     else:
         text(80,1330,state.get('next_event','Keep watching together'),25,accent,True,width=440)
         text(80,1390,'Rewards are additional to normal watch XP.',13,MUTED,width=440)
-    for index,entry in enumerate((state.get('art_entries') or [])[:4]):
+    for index,entry in enumerate([] if unit=='minutes' else (state.get('art_entries') or [])[:4]):
         art=posters.get(entry.get('canonical'))
         if art:cover(image,art,(548+index*112,1287,644+index*112,1431),12,contain=True)
     text(56,1461,f"Week of {state.get('key','')} · Next: {state.get('next_event','Community Watchathon')} · No automatic pings",12,MUTED)

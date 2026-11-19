@@ -212,11 +212,20 @@ def score_event(record,watches,metadata,*,now=None):
             'support':[{'uid':w['uid'],'occurrence':w.get('occurrence'),'at':w.get('at'),'meta_key':w.get('meta_key')} for w in watches]}
 
 
+def community_art_entries(watches,metadata):
+    """Recent distinct team titles, using the same exact-ID cache as scoring."""
+    entries={}
+    for watch in sorted(watches,key=lambda w:str(w.get('at') or ''),reverse=True):
+        entry=metadata.get(watch.get('meta_key')) or {};key=entry.get('canonical')
+        if key:entries.setdefault(key,entry)
+    return list(entries.values())[:5]
+
+
 def event_state(record,watches,metadata,now):
     end=parse_stamp(record['end']);score=score_event(record,watches,metadata)
     settled=now>=end+timedelta(hours=record.get('settlement_hours',6))
     status=('completed' if score['goal_reached'] else 'missed') if settled else 'settling' if now>=end else 'goal_reached' if score['goal_reached'] else 'active'
     return {**record,**score,'status':status,'awards':dict(record.get('awards') or {}),
             'remaining':max(0,record['target']-score['total']),
-            'art_entries':list({(metadata.get(w['meta_key']) or {}).get('canonical'):metadata[w['meta_key']] for w in watches if (metadata.get(w['meta_key']) or {}).get('canonical')}.values())[:5],
+            'art_entries':community_art_entries(watches,metadata),
             'next_event':NAMES[ROTATION[(ROTATION.index(record['kind'])+1)%4]],'settled':settled}
