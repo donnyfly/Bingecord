@@ -221,3 +221,10 @@ seal and 36px notification seal, including later prestige colour cycles.
 Achievement GIFs have a dedicated trophy medallion with an animated unlock ring
 and a gold XP reward badge. Preview short and two-line achievement names, large
 rewards and the start/end frames; decoration stays clear of the title and reward.
+
+Streak audit: `/bingecord debug feature:Streak history` privately reports the
+selected source, timezone and longest streak's exact date range, with a CSV of
+each supporting day, recorded watch count and up to ten title examples. Empty,
+invalid and future date entries are excluded from both the card and diagnostic.
+Imported dates remain tracker records rather than proof of playback. This audit
+does not change watch records, XP or achievements.

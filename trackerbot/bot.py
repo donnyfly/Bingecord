@@ -1946,34 +1946,9 @@ async def evaluate_achievements(g, uid, notify_channel=None):
     return newly_unlocked
 
 def calculate_streaks(watch_dates, timezone_name=DEFAULT_TIMEZONE_NAME):
-    dates=set()
-    for value in (watch_dates or {}).keys():
-        try:
-            dates.add(datetime.strptime(value,"%Y-%m-%d").date())
-        except (TypeError,ValueError):
-            continue
-    if not dates:
-        return 0,0
-    try:
-        local_timezone=ZoneInfo(timezone_name)
-    except (TypeError, ValueError, ZoneInfoNotFoundError):
-        local_timezone=ZoneInfo(DEFAULT_TIMEZONE_NAME)
-    today=datetime.now(local_timezone).date()
-    # Keep today's streak alive until the end of the local calendar day.
-    # If the user has not watched anything today yet, yesterday's streak
-    # remains active instead of resetting immediately at midnight.
-    current=0
-    cursor=today if today in dates else today-timedelta(days=1)
-    while cursor in dates:
-        current+=1
-        cursor-=timedelta(days=1)
-    longest=length=0
-    previous=None
-    for date in sorted(dates):
-        length=length+1 if previous is not None and date-previous==timedelta(days=1) else 1
-        longest=max(longest,length)
-        previous=date
-    return current,longest
+    from trackerbot.core.streaks import analyze_streaks
+    report=analyze_streaks(watch_dates,timezone_name)
+    return report['current'],report['longest']
 
 
 def achievement_notification_embed(mention, achievement_id):
@@ -2745,6 +2720,7 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         app_commands.Choice(name="Achievement unlocked", value="achievement"),
         app_commands.Choice(name="Prestige unlocked", value="prestige"),
         app_commands.Choice(name="Completion", value="completion"),
+        app_commands.Choice(name="Streak history", value="streak"),
         app_commands.Choice(name="Profile card", value="profile"),
         app_commands.Choice(name="Leaderboard card", value="leaderboard"),
         app_commands.Choice(name="Server stats card", value="server_stats"),
@@ -2754,7 +2730,7 @@ async def simkl_achievements(i,user: discord.Member | None = None):
 )
 @app_commands.autocomplete(achievement=achievement_autocomplete)
 @app_commands.describe(
-    feature="Notification to preview or completion to inspect",
+    feature="Card to preview or completion/streak history to inspect",
     achievement="Required for an achievement preview",
     level="Optional target level (2-100) for a level/rank preview",
     rank="Optional rank to preview; a chosen level must belong to it",
@@ -2770,6 +2746,31 @@ async def simkl_debug(
 ):
     if not guild_id(i) or not is_admin(i):
         await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True)
+        return
+    if feature.value == "streak":
+        await i.response.defer(ephemeral=True)
+        from trackerbot.core.streaks import analyze_streaks,streak_csv
+        from io import BytesIO
+        g=str(i.guild.id);uid=str(i.user.id)
+        stats=await storage.get_statistics(g,uid)
+        source=await storage.get_activity_provider(g,uid) or 'simkl'
+        zone=(await storage.get_timezone(g))['name']
+        report=analyze_streaks(stats.get('watch_dates'),zone)
+        span=(f"{report['start'].isoformat()} → {report['end'].isoformat()}" if report['start'] else 'none')
+        excluded=report['excluded']
+        attachment={}
+        if report['start']:
+            attachment['file']=discord.File(BytesIO(streak_csv(stats,report)),filename='streak-history.csv')
+        await i.followup.send(
+            f"**Your streak history · {provider_registry.get(source).manifest.display_name}**\n"
+            f"Timezone: **{report['timezone']}**\n"
+            f"Current: **{report['current']:,} days** · Best: **{report['longest']:,} days**\n"
+            f"Best streak dates: **{span}**\n"
+            f"Excluded date entries: {excluded['empty']} empty, {excluded['invalid']} invalid, {excluded['future']} future.\n\n"
+            "The CSV lists each day in the best streak, its recorded watch count and available title examples. "
+            "These are cached tracker watch dates, including imported history; they do not prove when playback actually happened. "
+            "No watch records or XP were changed.",
+            ephemeral=True,allowed_mentions=discord.AllowedMentions.none(),**attachment)
         return
     if feature.value == "leaderboard":
         await show_leaderboard(i,None,preview=True)

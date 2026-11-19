@@ -502,3 +502,21 @@ def test_gif_cards_keep_flat_fills_without_dither_noise():
             assert len(rgb.crop((248,72,620,94)).getcolors())==1
             backgrounds.append(rgb.getpixel((10,10)))
         assert len(set(backgrounds))==1
+
+
+def test_debug_streak_is_private_and_does_not_change_progression(monkeypatch):
+    async def scenario():
+        stats={'watch_dates':{'2026-01-01':{'total':1},'2026-01-02':{'total':2}},'watch_events':{}}
+        monkeypatch.setattr(bot.storage,'get_statistics',AsyncMock(return_value=stats))
+        monkeypatch.setattr(bot.storage,'get_activity_provider',AsyncMock(return_value='mdblist'))
+        monkeypatch.setattr(bot.storage,'get_timezone',AsyncMock(return_value={'name':'Asia/Singapore'}))
+        evaluator=AsyncMock();monkeypatch.setattr(bot,'evaluate_achievements',evaluator)
+        interaction=_interaction()
+        await bot.simkl_debug.callback(interaction,app_commands.Choice(name='Streak history',value='streak'))
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+        args=interaction.followup.send.await_args
+        assert args.kwargs['ephemeral'] is True
+        assert args.kwargs['file'].filename=='streak-history.csv'
+        assert '2026-01-01 → 2026-01-02' in args.args[0] and 'MDBList' in args.args[0]
+        evaluator.assert_not_awaited()
+    asyncio.run(scenario())
