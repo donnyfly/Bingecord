@@ -47,7 +47,7 @@ _lock = asyncio.Lock()
 _write_lock = asyncio.Lock()
 
 DEFAULT_EMBED_PREFERENCES = {
-    "style": "rich",
+    "style": "card",
     "artwork": "backdrop",
     "activity_text": "detailed",
     "show_imdb": True,
@@ -577,7 +577,7 @@ def _normalise_user(user: dict) -> None:
     if prefs.get("style") == "poster":
         prefs["style"] = "rich"
         prefs["artwork"] = "poster"
-    prefs.setdefault("style", "rich")
+    prefs.setdefault("style", "card")
     prefs.setdefault("artwork", "backdrop")
     prefs.setdefault("activity_text", "detailed")
     prefs.setdefault("show_imdb", True)
@@ -681,7 +681,7 @@ def _normalise_guild(guild: dict) -> None:
     if guild["embed_preferences"].get("style") == "poster":
         guild["embed_preferences"]["style"] = "rich"
         guild["embed_preferences"]["artwork"] = "poster"
-    guild["embed_preferences"].setdefault("style", "rich")
+    guild["embed_preferences"].setdefault("style", "card")
     guild["embed_preferences"].setdefault("artwork", "backdrop")
     guild["embed_preferences"].setdefault("activity_text", "detailed")
     guild["embed_preferences"].setdefault("show_imdb", True)
@@ -1398,6 +1398,23 @@ class Storage:
             except (TypeError, ValueError, ZoneInfoNotFoundError):
                 default_name = "UTC"
             return {"name": default_name, "source": "environment" if os.getenv("SIMKL_DEFAULT_TIMEZONE") else "built-in"}
+
+    async def get_activity_timezone(self,guild_id,user_id):
+        async with _lock:
+            user=self._user(str(user_id)) or {}
+            value=user.get('activity_timezone')
+            if value:
+                try:ZoneInfo(value);return {'name':value,'source':'personal'}
+                except (ValueError,ZoneInfoNotFoundError):pass
+        return await self.get_timezone(guild_id)
+
+    async def set_activity_timezone(self,user_id,value):
+        if value:ZoneInfo(value)
+        async with _lock:
+            user=self._user(str(user_id))
+            if not user:raise ValueError('Link a tracker account first.')
+            user['activity_timezone']=value;self._dirty=True
+        await self.flush()
 
     async def set_timezone(self, guild_id: int | str, timezone_name: str | None) -> None:
         async with _lock:

@@ -112,7 +112,7 @@ def test_debug_previews_are_private_and_do_not_write(monkeypatch):
         achievement.response.defer.assert_awaited_once_with(ephemeral=True)
         sent=achievement.followup.send.await_args.kwargs
         assert sent["ephemeral"] is True
-        assert sent["embed"].image.url == "attachment://achievement.gif"
+        assert sent["embed"] is None and sent["view"].embed.title=="🏆 Achievement Unlocked!"
         assert sent["file"].filename == "achievement.gif"
 
         rank=_interaction()
@@ -120,8 +120,8 @@ def test_debug_previews_are_private_and_do_not_write(monkeypatch):
         rank.response.defer.assert_awaited_once_with(ephemeral=True)
         sent=rank.followup.send.await_args.kwargs
         assert sent["ephemeral"] is True
-        assert sent["embed"].title == "Rank Up"
-        assert sent["embed"].image.url == "attachment://level-up.gif"
+        assert sent["view"].embed.title == "Rank Up"
+        assert sent["embed"] is None and sent["file"].filename=="level-up.gif"
         selected=_interaction()
         await command.callback(
             selected,app_commands.Choice(name="Level up",value="level"),
@@ -129,16 +129,16 @@ def test_debug_previews_are_private_and_do_not_write(monkeypatch):
         )
         selected.response.defer.assert_awaited_once_with(ephemeral=True)
         sent=selected.followup.send.await_args.kwargs
-        assert "Prestige **6**" in sent["embed"].description
-        assert "Level 43" in sent["embed"].description
-        assert sent["embed"].color.value == int.from_bytes(bytes(accent_for_tier(43,6)),"big")
+        assert "Prestige **6**" in sent["view"].embed.description
+        assert "Level 43" in sent["view"].embed.description
+        assert sent["view"].embed.color.value == int.from_bytes(bytes(accent_for_tier(43,6)),"big")
         prestige=_interaction()
         await command.callback(prestige, app_commands.Choice(name="Prestige unlocked",value="prestige"), prestige=3)
         prestige.response.defer.assert_awaited_once_with(ephemeral=True)
         sent=prestige.followup.send.await_args.kwargs
         assert sent["ephemeral"] is True
-        assert sent["embed"].image.url == "attachment://prestige.gif"
-        assert "Prestige 3" in sent["embed"].title
+        assert sent["embed"] is None and sent["file"].filename=="prestige.gif"
+        assert "Prestige 3" in sent["view"].embed.title
         forbidden.assert_not_awaited()
 
     asyncio.run(scenario())
@@ -406,7 +406,7 @@ def test_consolidated_xp_leaderboard_orders_prestige_then_xp(monkeypatch):
         assert captured==["3","2","1"]
         interaction.response.defer.assert_awaited_once()
         assert interaction.followup.send.await_args.kwargs["file"].filename=="leaderboard.png"
-        assert interaction.followup.send.await_args.kwargs["embed"].image.url=="attachment://leaderboard.png"
+        assert interaction.followup.send.await_args.kwargs["embed"] is None
         assert bot.bingecord_commands.get_command("xp-leaderboard") is None
         assert bot.bingecord_commands.get_command("xp") is None
         assert bot.bingecord_commands.get_command("profile") is None
@@ -437,6 +437,8 @@ def test_debug_profile_uses_live_renderer_without_awarding_achievements(monkeypa
             assert captured[0][0]=='Viewer' and captured[0][1]['provider_label']=='SIMKL'
             interaction.response.defer.assert_awaited_once_with(ephemeral=True)
             assert interaction.followup.send.await_args.kwargs['file'].filename=='profile.png'
+            assert interaction.followup.send.await_args.kwargs['embed'] is None
+            assert interaction.followup.send.await_args.kwargs['view'].embed.fields[0].name=='Watch history'
             assert await store.get_progression('42')==before
     asyncio.run(scenario())
 
@@ -460,6 +462,7 @@ def test_debug_server_cards_are_private_and_use_live_renderers(monkeypatch):
             kwargs=interaction.followup.send.await_args.kwargs
             assert kwargs['ephemeral'] is True
             assert kwargs['file'].filename=='summary-preview.png'
+            assert kwargs['embed'] is None and kwargs['view'] is not None
         assert [item[0] for item in captured]==['server statistics','weekly recap']
         assert captured[0][1][0]==('Total watches',4)
         evaluator.assert_not_awaited()

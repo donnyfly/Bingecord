@@ -17,7 +17,7 @@ It supports automatic provider syncing, episode grouping, artwork and ratings, p
 - 📺 Consecutive episode grouping for cleaner Discord posts
 - 🖼️ Title logos, episode stills and TMDB artwork with available provider fallbacks
 - ⭐ IMDb ratings and 🌸 MyAnimeList ratings where available
-- 🎨 Rich/minimal embeds, artwork choices, and short/detailed activity text
+- 🎨 Rich/minimal embeds, optional visual activity cards, artwork choices, and short/detailed activity text
 - 🔗 Per-member, per-server source selection with multiple linked accounts
 - 📊 Personal and server watch statistics
 - 🎲 Watching lists, planned-list random picks, and recommendations
@@ -58,7 +58,7 @@ The bot displays **Playing /bingecord help**. Use `/bingecord help` for a privat
 | `/bingecord setchannel` | Manage Server | Choose the activity channel |
 | `/bingecord style-server` | Manage Server | Set server-wide style defaults |
 | `/bingecord features` | Manage Server | Enable or disable optional feature groups |
-| `/bingecord timezone` | Manage Server | Set the server timezone |
+| `/bingecord timezone` | Everyone (personal); Manage Server (server) | Set your activity-card timezone or the server timezone |
 | `/bingecord weekly-recap` | Manage Server | Post/test a weekly recap |
 | `/bingecord status` | Manage Server | View configuration and sync health; optionally check `user: @username` |
 | `/bingecord checknow` | Manage Server | Check selected providers immediately |
@@ -276,7 +276,7 @@ The main settings live in `.env`. Use `.env.example` as the complete template; l
 | `DISCORD_DEV_GUILD_ID` | No | — | Optional immediate development-server command sync |
 | `IMDB_RATINGS_DB_PATH` | No | `data/imdb_ratings.db` | Generated episode-rating database path |
 
-Server admins can override the timezone with `/bingecord timezone`.
+Server admins can override the timezone with `/bingecord timezone`. For timestamps printed on your activity cards, use `/bingecord timezone personal:True timezone:Asia/Singapore` (or any valid IANA timezone). This personal preference follows you across servers; without it, cards use the server timezone. Use `personal:True timezone:reset` to follow the server again. New activity cards and debug previews use this setting. An image displays the watcher’s selected timezone for everyone viewing it; Discord’s native timestamps still adapt to each viewer.
 
 ## First-import performance and progress
 
@@ -326,13 +326,56 @@ Completed pages and enrichment batches are staged in the existing data volume an
 
 Users can run `/bingecord style` to choose:
 
-- **Rich** or **Minimal** embeds
+- **Visual card** (default), **Rich (Legacy)**, or **Minimal (Legacy)** watch presentation
 - Automatic, poster, or backdrop artwork
 - Short or detailed activity text
 - Rating visibility
 - Personal-rating visibility, independently of public IMDb/MAL scores
 
-Server admins can set defaults with `/bingecord style-server`. Personal settings override server defaults.
+Server admins can set defaults with `/bingecord style-server`. Personal settings override server defaults. Visual card is the default for new or reset preferences; existing saved style selections are retained.
+
+The default **Visual card** style currently covers individual episode/range
+and film watches for SIMKL, WeTrakr and MDBList. It uses Inter typography, the
+already-resolved still/backdrop and logo, compact rating chips, personal rating and
+verified completion/NEW badges. The card is sent directly as an image attachment, without an outer embed box.
+The backdrop spans the full card width without an inset frame, blending into the
+header and an ambient background sampled from its own colours.
+Status/title text sits below the artwork on the left, with ratings on the right.
+A consistent metadata area keeps ordinary rated and unrated cards the same size;
+4:3 and other aspect ratios retain the full frame over a blurred, darkened fill.
+The title logo replaces duplicate heading text when available, and card height adapts
+to its rating and milestone rows. A View on tracker button opens the title page,
+and View details provides the complete text and profile link privately.
+This replaces the previous embed-wrapped Visual card presentation using the same
+style preference; Rich and Minimal are unchanged. Existing posts stay as sent
+unless a later rating/completion refresh replaces their card. Episode watches retain
+IMDb episode ratings and exclude MAL; anime film cards may include MAL.
+
+Try `/bingecord debug feature:Episode activity card` and
+`/bingecord debug feature:Film activity card` first. Previews use your most recent
+cached single-user watch from the selected source, or clearly labelled illustrative
+sample data when none is available. They do not poll providers, change preferences
+or award XP. Enable live testing with `/bingecord style style:Visual card`.
+Use Rich or Minimal to return to native embeds for subsequent watches.
+
+Watched Together also supports visual cards, showing up to five participants with
+avatars and separate personal ratings using each member’s tracker icon.
+Participants appear in compact two-column tiles beneath the title and public ratings;
+a missing or hidden score is labelled “No rating shared”. Group
+presentation and timestamp follow the first participant’s style and timezone.
+Visual card also covers Planned, Watching, Paused, Dropped and completion status
+updates. These use TMDB landscape artwork, never posters: a known episode still
+when supplied by the provider, otherwise a series backdrop; movies use backdrops.
+Rich and Minimal status styles retain their existing poster presentation.
+Preview the status layout with `/bingecord debug feature:Status activity card`.
+Use `/bingecord debug feature:Watched Together card` for a private preview.
+Style inheritance and forced server defaults still apply. Later rating/completion
+updates regenerate and replace a saved card attachment without changing its base
+watch information. If initial rendering fails, the normal embed is sent; failed
+later renders keep the previous card intact and retry on a later poll. Bounded image
+and PNG caches limit rendering work during bulk activity. No extra catalogue or
+rating lookups are added by the card renderer.
+
 
 Titles and activity headers link to the provider entry and member profile when available. Status activities use posters. Episode watches can use episode stills/backdrops and show individual episode IMDb ratings. They omit MAL and do not substitute the whole show's rating for a missing episode rating. Anime movies and anime status activities can show title-level IMDb and MAL scores.
 
@@ -392,6 +435,14 @@ The bot uses the completed item's catalog runtime, not time spent with playback 
 Episode runtime comes from provider metadata or cached TMDB season details. If an exact episode runtime is unavailable, the series' typical episode runtime is used. If no valid catalog runtime can be found, the fallback is **25 minutes / 100 XP for an episode** or **90 minutes / 360 XP for a movie**. Estimated duration also counts toward minute-based challenges.
 
 ## Visual cards and leaderboards
+
+All rendered cards are sent as standalone image attachments, without an outer
+embed box. This includes profiles/stats, leaderboards, server summaries, weekly
+recaps, personal/community challenges and animated progression notifications.
+View details opens the complete text privately; leaderboards retain category,
+period and page controls below the image. Live progression notifications retain
+the recipient mention. If rendering fails, a readable text embed is sent instead.
+Native watch embed styles remain available separately.
 
 Challenge, community and summary embeds keep their heading, reporting period or
 reset/deadline countdown above the image. **View details** opens the full text

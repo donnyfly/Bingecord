@@ -442,12 +442,13 @@ async def get_show_ratings(tmdb_id):
         return None
 
 def build_embed(t,desc,ts,name,member,image,profile,title=None,title_url=None,poster=None,logo=None,preferences=None,status_activity=False,provider="SIMKL"):
-    color,label=MEDIA_STYLES[t]; p={"style":"rich","artwork":"auto","activity_text":"short","show_imdb":True,"show_mal":True}; p.update(preferences or {})
+    color,label=MEDIA_STYLES[t]; p={"style":"card","artwork":"auto","activity_text":"short","show_imdb":True,"show_mal":True}; p.update(preferences or {})
     e=discord.Embed(title=title,url=title_url,description=desc,color=color,timestamp=ts)
     e.set_author(name=f"{name}'s Activity",url=profile,icon_url=member.display_avatar.url if member else None)
-    # Status activities always use the title poster. /bingecord style and
-    # /bingecord style-server only control watch activities.
-    if status_activity:
+    # Visual cards always use landscape art; native status styles retain posters.
+    if p['style']=='card':
+        selected=image
+    elif status_activity:
         selected=poster
     elif p["artwork"]=="poster":
         selected=poster
@@ -460,12 +461,42 @@ def build_embed(t,desc,ts,name,member,image,profile,title=None,title_url=None,po
             e.set_thumbnail(url=selected)
         else:
             e.set_image(url=selected)
-            if p["artwork"] in ("auto", "backdrop") and logo:
+            if (p["style"]=="card" or p["artwork"] in ("auto", "backdrop")) and logo:
                 e.set_thumbnail(url=logo)
     e.set_footer(text=f"{label} · {provider}"); return e
+
+
+async def resolve_activity_card_members(parts):
+    async def resolve_card_member(member_part):
+        guild=bot.get_guild(int(member_part['guild']))
+        member=(guild.get_member(int(member_part['user'])) if guild else None) or bot.get_user(int(member_part['user']))
+        if member is None:
+            try:member=await asyncio.wait_for(bot.fetch_user(int(member_part['user'])),timeout=3)
+            except (discord.HTTPException,TimeoutError):pass
+        if member:
+            member_part['card_name']=member.display_name
+            member_part['card_avatar']=str(member.display_avatar.url)
+    await asyncio.gather(*(resolve_card_member(p) for p in parts[:5]))
+
 async def send_embed(ch,e,what):
     try:
-        message=await ch.send(embed=e, allowed_mentions=discord.AllowedMentions.none())
+        kwargs={'embed':e,'allowed_mentions':discord.AllowedMentions.none()}
+        from trackerbot.core.activity_details import current_post
+        from trackerbot.presentation.activity_cards import eligible,activity_card_kwargs
+        post=current_post.get()
+        if post and eligible(post.get('parts') or []):
+            part=post['parts'][0]
+            p=await prefs(part['guild'],part['user'])
+            if p.get('style')=='card':
+                try:
+                    part['display_timezone']=(await storage.get_activity_timezone(part['guild'],part['user']))['name']
+                    if len(post['parts'])>1:
+                        await resolve_activity_card_members(post['parts'])
+                        kwargs.update(await activity_card_kwargs(e,part,parts=post['parts']))
+                    else:kwargs.update(await activity_card_kwargs(e,part))
+                    post['presentation']='card'
+                except Exception:log.warning('Activity card unavailable; using native embed.',exc_info=True)
+        message=await ch.send(**kwargs)
         try:await activity_details.remember(message)
         except Exception:log.exception('Could not retain activity message for later rating edits.')
         return True
@@ -887,7 +918,7 @@ async def process_status(ch,g,uid,name,member,t,items,profile):
             if t=="anime" and p.get("show_mal", True) and ratings.get("mal") is not None:
                 desc += f"\n🌸 MAL {ratings['mal']:.2f}/10"
         logo=None
-        if artwork_tmdb_id is not None and p["artwork"] in ("auto", "backdrop"):
+        if artwork_tmdb_id is not None and (p["style"]=="card" or p["artwork"] in ("auto", "backdrop")):
             try:
                 logo=await (tmdb.get_movie_logo(artwork_tmdb_id) if t=="movies" else tmdb.get_tv_logo(artwork_tmdb_id))
             except Exception:
@@ -1673,12 +1704,12 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
             anime_item = await is_wetrakr_anime_movie(details, tmdb_id)
         except Exception:
             log.warning("WeTrakr movie classification failed for TMDB=%s.", tmdb_id, exc_info=True)
-    if tmdb_id and status is None:
+    if tmdb_id and (status is None or p.get("style")=="card"):
         try:
             if t == "movies":
                 image = await tmdb.get_movie_backdrop(tmdb_id)
                 logo = await tmdb.get_movie_logo(tmdb_id)
-            elif season is not None and number is not None:
+            elif season is not None and number is not None and (not status or t!="anime" or mapped_anime):
                 if t == "anime" and mapped_anime:
                     resolved_episode = await tmdb.find_anime_episode(tmdb_id, tvdb_id, [season], number,
                                                                      episode_title=episode_title)
@@ -1688,7 +1719,11 @@ async def deliver_wetrakr_change(ch, gid, uid, name, member, change, row, starte
                                                              resolved_episode["season_number"], resolved_episode["episode_number"])
                 else:
                     image = await tmdb.get_episode_still(tmdb_id, season, number)
+                if not image and status:image=await tmdb.get_tv_backdrop(tmdb_id)
                 logo = await tmdb.get_tv_logo(tmdb_id)
+            elif status:
+                image=await tmdb.get_tv_backdrop(tmdb_id)
+                logo=await tmdb.get_tv_logo(tmdb_id)
         except Exception:
             log.warning("TMDB WeTrakr artwork lookup failed for %s.", title, exc_info=True)
     ratings = {}
@@ -1976,8 +2011,9 @@ async def send_achievement_notification(send, mention, achievement_id, *, previe
         options["ephemeral"]=True
     try:
         animation=await asyncio.to_thread(render_achievement_gif, achievement["name"], achievement.get("xp", 0))
-        embed.set_image(url="attachment://achievement.gif")
-        await send(embed=embed, file=discord.File(animation, filename="achievement.gif"), **options)
+        from trackerbot.presentation.card_details import standalone_card
+        card=await standalone_card(embed,animation,'achievement.gif',transient=preview)
+        await send(**card,content=mention if not preview else None,**options)
         return True
     except Exception:
         log.exception("Animated achievement notification failed for %s; trying embed fallback.", achievement_id)
@@ -2004,8 +2040,9 @@ async def send_prestige_notification(send, mention, prestige, lifetime_xp, *, pr
         options["ephemeral"]=True
     try:
         animation=await asyncio.to_thread(render_prestige_gif, prestige)
-        embed.set_image(url="attachment://prestige.gif")
-        await send(embed=embed, file=discord.File(animation, filename="prestige.gif"), **options)
+        from trackerbot.presentation.card_details import standalone_card
+        card=await standalone_card(embed,animation,'prestige.gif',transient=preview)
+        await send(**card,content=mention if not preview else None,**options)
         return True
     except Exception:
         log.exception("Prestige animation failed for prestige %s; trying embed fallback.", prestige)
@@ -2088,13 +2125,9 @@ async def notify_level_up(guild_id_value, uid, before_progression, after_progres
             prestige=after_prestige,
             source_label=source_label,
         )
-        file = discord.File(animation, filename="level-up.gif")
-        embed.set_image(url="attachment://level-up.gif")
-        await send(
-            embed=embed,
-            file=file,
-            **options,
-        )
+        from trackerbot.presentation.card_details import standalone_card
+        card=await standalone_card(embed,animation,'level-up.gif',transient=preview_interaction is not None)
+        await send(**card,content=mention if preview_interaction is None else None,**options)
         log.info(
             "Sent animated level-up notification for user %s in guild %s: level %d -> %d%s.",
             uid,
@@ -2383,8 +2416,7 @@ async def send_visual_summary(send,guild_name,heading,result,filename,*,icon=Non
                                       icon=art.pop('icon',None),story=story,avatars=art,artwork=title_art)
         from trackerbot.presentation.card_details import details_view
         kwargs['view']=await details_view(embed,guild=getattr(guild,'id',None))
-        embed=discord.Embed(title=embed.title,description=subtitle+('\nPreview only · No XP changes.' if preview else ''),color=embed.color)
-        embed.set_image(url=f'attachment://{filename}');kwargs['file']=discord.File(image,filename=filename)
+        kwargs['file']=discord.File(image,filename=filename,description=str(embed.title or heading)[:1024]);embed=None
     except Exception:
         log.exception('Could not render %s summary; using text fallback.',heading)
         embed.set_image(url=None)
@@ -2425,7 +2457,7 @@ async def send_due_weekly_recaps():
         except Exception:
             log.exception("Weekly recap failed for guild %s.",guild.id)
 
-STYLE_CHOICES=[app_commands.Choice(name="Rich (large artwork)",value="rich"),app_commands.Choice(name="Minimal (small artwork)",value="minimal")]
+STYLE_CHOICES=[app_commands.Choice(name="Visual card",value="card"),app_commands.Choice(name="Rich (Legacy)",value="rich"),app_commands.Choice(name="Minimal (Legacy)",value="minimal")]
 ARTWORK_CHOICES=[app_commands.Choice(name="Automatic",value="auto"),app_commands.Choice(name="Poster only",value="poster"),app_commands.Choice(name="Backdrop",value="backdrop")]
 TEXT_CHOICES=[app_commands.Choice(name="Short",value="short"),app_commands.Choice(name="Detailed",value="detailed")]
 EPISODE_FORMAT_CHOICES=[
@@ -2500,10 +2532,20 @@ async def simkl_features(i, preset: app_commands.Choice[str] | None = None,
         "\n\nActivity tracking stays available. Challenges and community goals also require progression. "
         "Disabled commands may still appear in Discord's menu. Existing history and global XP are retained and watch XP continues syncing so shared accounts stay consistent.",ephemeral=True)
 
-@bingecord_commands.command(name="timezone",description="(Admin) Set or view the server timezone.")
-@app_commands.describe(timezone="IANA timezone such as Asia/Singapore, or 'reset' to use the environment default")
-async def simkl_timezone(i, timezone: str | None = None):
+@bingecord_commands.command(name="timezone",description="Set or view the server timezone, or your personal activity-card timezone.")
+@app_commands.describe(timezone="IANA timezone such as Asia/Singapore, or reset to follow the default",personal="Set your own activity-card timezone instead of the server timezone")
+async def simkl_timezone(i, timezone: str | None = None,personal:bool=False):
     g=guild_id(i)
+    if g and personal:
+        uid=str(i.user.id)
+        if timezone and timezone.strip():
+            value=timezone.strip();value=None if value.lower()=='reset' else value
+            try:await storage.set_activity_timezone(uid,value)
+            except (ValueError,ZoneInfoNotFoundError) as exc:
+                await i.response.send_message('Use a valid IANA timezone, such as Asia/Singapore. '+str(exc),ephemeral=True);return
+        info=await storage.get_activity_timezone(g,uid)
+        await i.response.send_message(f"Your activity cards use **{info['name']}** ({info['source']}). This affects new cards; other members and server resets are unchanged.",ephemeral=True)
+        return
     if not g or not is_admin(i):
         await i.response.send_message(NOT_ADMIN_MESSAGE,ephemeral=True)
         return
@@ -2768,6 +2810,10 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         app_commands.Choice(name="Streak history", value="streak"),
         app_commands.Choice(name="Community event card", value="community"),
         app_commands.Choice(name="Personal challenges card", value="challenges"),
+        app_commands.Choice(name="Episode activity card", value="activity_episode"),
+        app_commands.Choice(name="Film activity card", value="activity_movie"),
+        app_commands.Choice(name="Watched Together card", value="activity_together"),
+        app_commands.Choice(name="Status activity card", value="activity_status"),
         app_commands.Choice(name="Profile card", value="profile"),
         app_commands.Choice(name="Leaderboard card", value="leaderboard"),
         app_commands.Choice(name="Server stats card", value="server_stats"),
@@ -2810,6 +2856,55 @@ async def simkl_debug(
         return
     if community_event is not None:
         await i.response.send_message('The community_event option is only for Community event card previews.',ephemeral=True)
+        return
+    if feature.value in {'activity_episode','activity_movie','activity_together','activity_status'}:
+        await i.response.defer(ephemeral=True)
+        from trackerbot.presentation.activity_cards import activity_card_kwargs
+        together=feature.value=='activity_together';status_preview=feature.value=='activity_status';movie=feature.value not in {'activity_episode','activity_status'};group_parts=None;g=str(i.guild.id);uid=str(i.user.id)
+        source=await storage.get_activity_provider(g,uid) or 'simkl'
+        records=await storage.get_activity_messages(g)
+        selected=next(((record,part) for record in reversed(records) for part in record['parts']
+                       if part['user']==uid and part['source']==source and (bool(part['meta'].get('status')) if status_preview else not part['meta'].get('status'))
+                       and (together or status_preview or bool(part['meta'].get('movie'))==movie) and (len(record['parts'])>1 if together else len(record['parts'])==1)),None)
+        if selected:
+            record,part=selected;embed=discord.Embed.from_dict(record['rendered']);sample=False
+            if together:group_parts=[dict(p) for p in record['parts']];part=group_parts[0]
+        else:
+            part={'guild':g,'user':uid,'source':source,'meta':{'movie':movie,'episodes':[] if movie else [1]}}
+            embed=discord.Embed(title='Example Film' if movie else 'Example Series',
+                description='Watched **Example Film**\n⭐ IMDb 8.0/10\n💬 Your rating: **8/10**' if movie else
+                            'Watched **S1E01** of **Example Series**\n*An illustrative episode title*\n⭐ IMDb 8.0/10\n\n🆕 Started watching this series.',
+                color=0xEFBE69 if movie else 0x9A8CE8,timestamp=datetime.now(timezone.utc))
+            embed.set_author(name=i.user.display_name+"'s Activity",icon_url=getattr(getattr(i.user,'display_avatar',None),'url',None))
+            embed.set_footer(text=('Movie' if movie else 'TV')+' · '+source.upper());sample=True
+        if status_preview:
+            if sample:
+                part['meta']['status']='planning'
+                embed.description='Planned to watch **Example Series**\n⭐ IMDb 8.0/10'
+            # Cached native status posts may still contain a poster. Never reuse it.
+            embed.set_image(url=None);embed.set_thumbnail(url=None)
+            tmdb_id=part['meta'].get('ids',{}).get('tmdb')
+            if tmdb_id:
+                try:
+                    movie=bool(part['meta'].get('movie'))
+                    image=await (tmdb.get_movie_backdrop(tmdb_id) if movie else tmdb.get_tv_backdrop(tmdb_id))
+                    embed.set_image(url=image)
+                    logo=await (tmdb.get_movie_logo(tmdb_id) if movie else tmdb.get_tv_logo(tmdb_id))
+                    embed.set_thumbnail(url=logo)
+                except Exception:log.warning('Status preview landscape artwork unavailable.')
+        if together and not group_parts:
+            part.update(card_name=i.user.display_name,card_avatar=str(i.user.display_avatar.url) if getattr(i.user,'display_avatar',None) else None)
+            group_parts=[part,{**part,'user':'0','card_name':'Another viewer','card_avatar':None}]
+            embed.description=f'<@{uid}> and <@0> watched **Example Film** together\n⭐ IMDb 8.0/10\n\n💬 <@{uid}> · Your rating: **8/10**'
+            embed.set_author(name='Watched Together')
+        try:
+            if group_parts and not sample:await resolve_activity_card_members(group_parts)
+            part={**part,'display_timezone':(await storage.get_activity_timezone(g,uid))['name'],'preview_owner':uid}
+            if group_parts:group_parts[0]=part
+            kwargs=await activity_card_kwargs(embed,part,preview=True,sample=sample,**({'parts':group_parts} if group_parts else {}))
+            await i.followup.send(**kwargs,ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+        except Exception:
+            await i.followup.send('Card artwork is temporarily unavailable. Try again shortly; no preferences or XP were changed.',ephemeral=True)
         return
     if feature.value == 'challenges':
         await i.response.defer(ephemeral=True)
@@ -2986,8 +3081,11 @@ async def show_profile(i,user,*,preview=False):
         await enrich_profile_genres(tmdb,data)
         artwork=await load_profile_artwork(tmdb,data)
         image=await asyncio.to_thread(render_profile_png,target.display_name,data,artwork)
-        embed.set_image(url="attachment://profile.png")
-        await i.followup.send(embed=embed,file=discord.File(image,filename="profile.png"))
+        from trackerbot.presentation.card_details import standalone_card
+        detail=embed.copy()
+        detail.add_field(name='Watch history',value=f"{data['episodes']:,} episodes · {data['movies']:,} movies · {data['anime_episodes']:,} anime episodes · {data['anime_movies']:,} anime movies",inline=False)
+        detail.add_field(name='Streak',value=f"{current} current · {longest} longest",inline=False)
+        await i.followup.send(**await standalone_card(detail,image,'profile.png',owner=i.user.id if preview else None,guild=g,transient=preview),allowed_mentions=discord.AllowedMentions.none())
     except Exception:
         log.exception("Could not send profile image for %s; sending embed fallback.",target.id)
         embed.set_image(url=None)
@@ -3361,8 +3459,6 @@ async def show_leaderboard(i,category=None,*,period=None,preview=False):
         full.add_field(name='Rankings',value='\n'.join(f"**{n}.** <@{r['discord_user_id']}> · **{r['progression_xp'] if category=='xp' else r.get(category,0):,}**" for n,r in enumerate(display,start+1)) or 'No activity yet.',inline=False)
         full.set_footer(text=f'Page {page}/{max(1,pages)} · Selected tracker history · Shared global progression')
         view.details_embed=full
-        compact=discord.Embed(title=full.title,description=periods[period]+(' · Preview only · No XP changes.' if preview else ''),color=full.color)
-        compact.set_footer(text=f'Page {page}/{max(1,pages)} · {len(view.rows)} members')
         try:
             assets={uid:m.display_avatar for uid,m in members.items()};assets['icon']=getattr(i.guild,'icon',None)
             avatars=await load_discord_artwork(assets,limit=6);icon=avatars.pop('icon',None)
@@ -3372,7 +3468,7 @@ async def show_leaderboard(i,category=None,*,period=None,preview=False):
             image=await asyncio.to_thread(render_leaderboard_png,i.guild.name,labels[category],display,
                 rank_offset=start,avatars=avatars,show_progression=progression_enabled,icon=icon,artwork=artwork,
                 period_label=periods[period],max_value=max((r['progression_xp'] if category=='xp' else r.get(category,0) for r in view.rows),default=1))
-            compact.set_image(url='attachment://leaderboard.png');return compact,discord.File(image,filename='leaderboard.png')
+            return None,discord.File(image,filename='leaderboard.png',description=full.title[:1024])
         except Exception:
             log.exception('Leaderboard artwork unavailable for guild %s; using text.',g)
             return full,None
@@ -4409,7 +4505,7 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
     embed=build_embed(media,description,parse_iso(play['watched_at']),name,member,image,provider.profile_url(account),
         title=title,title_url=provider.title_url('movies' if movie else 'shows',ids),poster=poster,logo=logo,preferences=p,provider='MDBList')
     # A missing still must not suppress an independently available title logo.
-    if logo and p.get('style','rich')!='minimal' and p.get('artwork','auto') in {'auto','backdrop'}:
+    if logo and p.get('style','card')!='minimal' and p.get('artwork','auto') in {'auto','backdrop'}:
         embed.set_thumbnail(url=logo)
     end=last_play or play
     detail_meta={'ids':ids,'movie':movie,'season':None if movie else play['season'],
@@ -4440,7 +4536,11 @@ async def deliver_mdblist_status(ch,gid,uid,name,member,provider,account,status,
         if anime and p.get('show_mal',True) and ratings.get('mal') is not None:description+=f" · 🌸 MAL {ratings['mal']:.2f}/10"
     tmdb_id=item['ids'].get('tmdb')
     logo=await (tmdb.get_movie_logo(tmdb_id) if movie else tmdb.get_tv_logo(tmdb_id)) if tmdb_id else None
-    embed=build_embed(media,description,datetime.now(timezone.utc),name,member,None,provider.profile_url(account),
+    image=None
+    if tmdb_id and p.get('style')=='card':
+        try:image=await (tmdb.get_movie_backdrop(tmdb_id) if movie else tmdb.get_tv_backdrop(tmdb_id))
+        except Exception:log.warning('MDBList status backdrop unavailable for %s.',item['title'])
+    embed=build_embed(media,description,datetime.now(timezone.utc),name,member,image,provider.profile_url(account),
         title=item['title'],title_url=item.get('url'),poster=item.get('poster'),logo=logo,preferences=p,status_activity=True,provider='MDBList')
     return await activity_details.single(send_embed,ch,embed,gid,uid,'mdblist',{'ids':item['ids'],'movie':movie,'status':status})
 

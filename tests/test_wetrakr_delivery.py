@@ -335,3 +335,19 @@ def test_wetrakr_anime_movie_uses_anime_card_and_mal(monkeypatch):
         assert "⭐ IMDb 8.1/10" in embed.description
         assert "Anime · WeTrakr" in embed.footer.text
     asyncio.run(run())
+
+
+def test_visual_planned_status_uses_series_backdrop(monkeypatch):
+    async def run():
+        monkeypatch.setattr(bot,'wetrakr',SimpleNamespace(title=AsyncMock(return_value={'title':'Series','ids':{'tmdb':99},'poster_path':'/poster.jpg'})))
+        monkeypatch.setattr(bot,'prefs',AsyncMock(return_value={'style':'card','artwork':'poster','activity_text':'detailed','show_imdb':False,'show_mal':False}))
+        monkeypatch.setattr(bot,'is_wetrakr_anime',AsyncMock(return_value=False))
+        backdrop=AsyncMock(return_value='https://image.tmdb.org/backdrop.jpg')
+        monkeypatch.setattr(bot.tmdb,'get_tv_backdrop',backdrop)
+        monkeypatch.setattr(bot.tmdb,'get_tv_logo',AsyncMock(return_value='https://image.tmdb.org/logo.png'))
+        sender=AsyncMock(return_value=True);monkeypatch.setattr(bot,'send_embed',sender)
+        change={'action':'added','status':'planning','media_type':'show','title':'Series','wetrakr_id':10,'ids':{},'action_at':'2026-11-20T00:00:00Z'}
+        assert await bot.deliver_wetrakr_change(SimpleNamespace(),'123','42','Viewer',None,change,{},set())
+        backdrop.assert_awaited_once_with(99)
+        assert sender.await_args.args[1].image.url.endswith('backdrop.jpg')
+    asyncio.run(run())
