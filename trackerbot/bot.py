@@ -475,7 +475,19 @@ async def send_embed(ch,e,what):
             if p.get('style')=='card':
                 try:
                     part['display_timezone']=(await storage.get_activity_timezone(part['guild'],part['user']))['name']
-                    kwargs.update(await activity_card_kwargs(e,part))
+                    if len(post['parts'])>1:
+                        async def resolve_card_member(member_part):
+                            guild=bot.get_guild(int(member_part['guild']))
+                            member=(guild.get_member(int(member_part['user'])) if guild else None) or bot.get_user(int(member_part['user']))
+                            if member is None:
+                                try:member=await asyncio.wait_for(bot.fetch_user(int(member_part['user'])),timeout=3)
+                                except (discord.HTTPException,TimeoutError):pass
+                            if member:
+                                member_part['card_name']=member.display_name
+                                member_part['card_avatar']=str(member.display_avatar.url)
+                        await asyncio.gather(*(resolve_card_member(p) for p in post['parts'][:5]))
+                        kwargs.update(await activity_card_kwargs(e,part,parts=post['parts']))
+                    else:kwargs.update(await activity_card_kwargs(e,part))
                     post['presentation']='card'
                 except Exception:log.warning('Activity card unavailable; using native embed.',exc_info=True)
         message=await ch.send(**kwargs)
@@ -2793,6 +2805,7 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         app_commands.Choice(name="Personal challenges card", value="challenges"),
         app_commands.Choice(name="Episode activity card", value="activity_episode"),
         app_commands.Choice(name="Film activity card", value="activity_movie"),
+        app_commands.Choice(name="Watched Together card", value="activity_together"),
         app_commands.Choice(name="Profile card", value="profile"),
         app_commands.Choice(name="Leaderboard card", value="leaderboard"),
         app_commands.Choice(name="Server stats card", value="server_stats"),
@@ -2836,17 +2849,18 @@ async def simkl_debug(
     if community_event is not None:
         await i.response.send_message('The community_event option is only for Community event card previews.',ephemeral=True)
         return
-    if feature.value in {'activity_episode','activity_movie'}:
+    if feature.value in {'activity_episode','activity_movie','activity_together'}:
         await i.response.defer(ephemeral=True)
         from trackerbot.presentation.activity_cards import activity_card_kwargs
-        movie=feature.value=='activity_movie';g=str(i.guild.id);uid=str(i.user.id)
+        together=feature.value=='activity_together';movie=feature.value!='activity_episode';group_parts=None;g=str(i.guild.id);uid=str(i.user.id)
         source=await storage.get_activity_provider(g,uid) or 'simkl'
         records=await storage.get_activity_messages(g)
         selected=next(((record,part) for record in reversed(records) for part in record['parts']
                        if part['user']==uid and part['source']==source and not part['meta'].get('status')
-                       and bool(part['meta'].get('movie'))==movie and len(record['parts'])==1),None)
+                       and (together or bool(part['meta'].get('movie'))==movie) and (len(record['parts'])>1 if together else len(record['parts'])==1)),None)
         if selected:
             record,part=selected;embed=discord.Embed.from_dict(record['rendered']);sample=False
+            if together:group_parts=[dict(p) for p in record['parts']];part=group_parts[0]
         else:
             part={'guild':g,'user':uid,'source':source,'meta':{'movie':movie,'episodes':[] if movie else [1]}}
             embed=discord.Embed(title='Example Film' if movie else 'Example Series',
@@ -2855,9 +2869,15 @@ async def simkl_debug(
                 color=0xEFBE69 if movie else 0x9A8CE8,timestamp=datetime.now(timezone.utc))
             embed.set_author(name=i.user.display_name+"'s Activity",icon_url=getattr(getattr(i.user,'display_avatar',None),'url',None))
             embed.set_footer(text=('Movie' if movie else 'TV')+' · '+source.upper());sample=True
+        if together and not group_parts:
+            part.update(card_name=i.user.display_name,card_avatar=str(i.user.display_avatar.url) if getattr(i.user,'display_avatar',None) else None)
+            group_parts=[part,{**part,'user':'0','card_name':'Another viewer','card_avatar':None}]
+            embed.description=f'<@{uid}> and <@0> watched **Example Film** together\n⭐ IMDb 8.0/10\n\n💬 <@{uid}> · Your rating: **8/10**'
+            embed.set_author(name='Watched Together')
         try:
-            part={**part,'display_timezone':(await storage.get_activity_timezone(g,uid))['name']}
-            kwargs=await activity_card_kwargs(embed,part,preview=True,sample=sample)
+            part={**part,'display_timezone':(await storage.get_activity_timezone(g,uid))['name'],'preview_owner':uid}
+            if group_parts:group_parts[0]=part
+            kwargs=await activity_card_kwargs(embed,part,preview=True,sample=sample,**({'parts':group_parts} if group_parts else {}))
             await i.followup.send(**kwargs,ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
         except Exception:
             await i.followup.send('Card artwork is temporarily unavailable. Try again shortly; no preferences or XP were changed.',ephemeral=True)

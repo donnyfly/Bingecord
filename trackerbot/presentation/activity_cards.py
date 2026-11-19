@@ -66,6 +66,29 @@ def card_model(embed,part,*,preview=False,sample=False):
             'movie':bool(part.get('meta',{}).get('movie')),'preview':preview,'sample':sample}
 
 
+def together_model(embed,parts,*,preview=False,sample=False):
+    """Keep each member's rating and tracker separate from the public score."""
+    names={str(p['user']):p.get('card_name') or 'Viewer '+str(n+1) for n,p in enumerate(parts)}
+    description=embed.description or ''
+    public=embed.copy()
+    public.description='\n'.join(line for line in description.splitlines() if not ('Your ' in line and 'rating' in line))
+    public.description=re.sub(r'<@!?(\d+)>',lambda m:names.get(m[1],'Viewer'),public.description)
+    model=card_model(public,parts[0],preview=preview,sample=sample)
+    first=description.splitlines()[0] if description else ''
+    code=re.search(r'\bS\d+E\d+(?:[-–](?:S\d+)?E?\d+)?\b',clean(first),re.I)
+    model['action']=('Rewatched' if 'rewatched' in first.lower() else 'Watched')+' together'+(' · '+code[0] if code else '')
+    model['author']='Watched Together';model['avatar']=None;model['members']=[]
+    for part in parts[:5]:
+        uid=str(part['user']);score=None
+        for line in description.splitlines():
+            if re.search(r'<@!?'+re.escape(uid)+r'>',line) and 'Your ' in line and 'rating' in line:
+                match=re.search(r'(\d+(?:\.\d+)?/\d+(?:\.\d+)?)',line)
+                if match:score=match[1]
+        model['members'].append({'name':names[uid],'avatar':part.get('card_avatar'),'score':score,'tracker':part['source']})
+    model['extra_members']=max(0,len(parts)-5)
+    return model
+
+
 async def _download(session,url):
     url=image_url(url)
     if not url:return None
@@ -212,11 +235,12 @@ def activity_layout(model):
     action_top=hero_bottom+22;caption_top=action_top+len(action_lines)*42+8
     ratings_top=caption_top+len(caption_lines)*48+20;ratings_height=rating_rows*98-12 if ratings else 0
     notes_top=ratings_top+ratings_height+14
-    bottom=notes_top+(note_rows*48-10 if notes else 0)
+    members_top=notes_top+(note_rows*48 if notes else 0)
+    bottom=members_top+len(model.get('members',[]))*80+(30 if model.get('extra_members') else 0)
     return dict(ratings=ratings,notes=notes,rating_positions=rating_positions,note_positions=note_positions,
                 hero_top=hero_top,hero_height=hero_height,hero_bottom=hero_bottom,
                 action_top=action_top,caption_top=caption_top,action_lines=action_lines,caption_lines=caption_lines,
-                ratings_top=ratings_top,notes_top=notes_top,height=bottom+58)
+                ratings_top=ratings_top,notes_top=notes_top,members_top=members_top,height=bottom+58)
 
 
 def render_activity_png(model,artwork=None):
@@ -232,7 +256,12 @@ def render_activity_png(model,artwork=None):
     if avatar:cover(image,avatar,(48,62,92,106),22)
     else:
         draw.ellipse((48,62,92,106),fill=LINE)
-        paint(draw,(70,84),model['author'][:1].upper(),font=font(20,True),fill=accent,anchor='mm')
+        if model.get('members'):
+            draw.ellipse((58,72,68,82),outline=accent,width=2)
+            draw.ellipse((72,72,82,82),outline=accent,width=2)
+            draw.arc((53,83,73,100),180,350,fill=accent,width=2)
+            draw.arc((67,83,87,100),190,360,fill=accent,width=2)
+        else:paint(draw,(70,84),model['author'][:1].upper(),font=font(20,True),fill=accent,anchor='mm')
     text(106,68,model['author'],28,WHITE,True,width=650)
     top=layout['hero_top'];h=layout['hero_height']
     if hero:tile=cinematic_art(hero,(1080,h))
@@ -273,6 +302,23 @@ def render_activity_png(model,artwork=None):
             draw.line((x+17,y+19,x+27,y+19),fill=colour,width=2)
         else:draw.line((x+17,y+19,x+21,y+23,x+27,y+15),fill=colour,width=2)
         text(x+42,y+7,note,17,colour,True,width=width-54)
+    for index,member in enumerate(model.get('members',[])):
+        y=layout['members_top']+index*80
+        avatar=artwork.get('member:'+str(index))
+        if avatar:cover(image,avatar,(48,y+8,100,y+60),26)
+        else:
+            draw.ellipse((48,y+8,100,y+60),fill=LINE)
+            paint(draw,(74,y+34),member['name'][:1].upper(),font=font(24,True),fill=accent,anchor='mm')
+        text(118,y+15,member['name'],26,WHITE,True,width=480)
+        if member['score']:
+            mark=service_logo(member['tracker'])
+            if mark:
+                fitted=ImageOps.contain(mark,(32,32),method=Image.Resampling.LANCZOS)
+                image.paste(fitted,(700,y+21),fitted)
+            text(746,y+3,'Personal rating',14,MUTED,width=280)
+            text(746,y+23,member['score'],30,accent,True,width=280)
+    if model.get('extra_members'):
+        text(48,layout['members_top']+len(model['members'])*80,'+'+str(model['extra_members'])+' more · View details',18,MUTED)
     footer_y=height-32
     # Draw a media glyph rather than relying on an unsupported emoji font.
     if model['movie']:
@@ -289,15 +335,17 @@ def render_activity_png(model,artwork=None):
     return png(image)
 
 
-async def activity_card_kwargs(embed,part,*,preview=False,sample=False):
-    model=card_model(embed,part,preview=preview,sample=sample)
+async def activity_card_kwargs(embed,part,*,preview=False,sample=False,parts=None):
+    model=together_model(embed,parts,preview=preview,sample=sample) if parts and len(parts)>1 else card_model(embed,part,preview=preview,sample=sample)
     key=hashlib.sha256(json.dumps(model,sort_keys=True).encode()).hexdigest()
     async with _render_gate:
         data=_cards.get(key)
         if data is None:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as session:
-                keys=('image','logo','avatar')
-                async def load(name):return name,await _download(session,model.get(name))
+                assets=dict(model);keys=('image','logo','avatar')
+                for index,member in enumerate(model.get('members',[])):
+                    name='member:'+str(index);assets[name]=member['avatar'];keys+= (name,)
+                async def load(name):return name,await _download(session,assets.get(name))
                 tasks=[asyncio.create_task(load(name)) for name in keys]
                 art={}
                 try:
@@ -314,7 +362,7 @@ async def activity_card_kwargs(embed,part,*,preview=False,sample=False):
             _cards[key]=data
             while len(_cards)>16 or sum(map(len,_cards.values()))>24_000_000:_cards.popitem(last=False)
         else:_cards.move_to_end(key)
-    view=await details_view(embed,owner=part.get('user') if preview else None,guild=part.get('guild'))
+    view=await details_view(embed,owner=part.get('preview_owner',part.get('user')) if preview else None,guild=part.get('guild'))
     target=str(embed.url or '')
     if urlparse(target).scheme=='https':
         service={'simkl':'SIMKL','wetrakr':'WeTrakr','mdblist':'MDBList'}.get(model['tracker'],'tracker')
@@ -325,4 +373,4 @@ async def activity_card_kwargs(embed,part,*,preview=False,sample=False):
 
 
 def eligible(parts):
-    return len(parts)==1 and not parts[0].get('meta',{}).get('status') and bool(parts[0].get('meta',{}).get('movie') or parts[0].get('meta',{}).get('episodes'))
+    return bool(parts) and all(not p.get('meta',{}).get('status') and bool(p.get('meta',{}).get('movie') or p.get('meta',{}).get('episodes')) for p in parts)

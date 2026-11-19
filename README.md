@@ -351,7 +351,10 @@ sample data when none is available. They do not poll providers, change preferenc
 or award XP. Enable live testing with `/bingecord style style:Visual card (experimental)`.
 Use Rich or Minimal to return to native embeds for subsequent watches.
 
-Status changes and Watched Together remain native embeds in this first test phase.
+Watched Together also supports visual cards, showing up to five participants with
+avatars and separate personal ratings using each member’s tracker icon. Group
+presentation and timestamp follow the first participant’s style and timezone. Status changes remain native embeds.
+Use `/bingecord debug feature:Watched Together card` for a private preview.
 Style inheritance and forced server defaults still apply. Later rating/completion
 updates regenerate and replace a saved card attachment without changing its base
 watch information. If initial rendering fails, the normal embed is sent; failed

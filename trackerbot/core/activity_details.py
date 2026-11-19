@@ -414,7 +414,7 @@ class ActivityDetails:
                     from trackerbot.presentation.activity_cards import activity_card_kwargs
                     # Rebuild from the complete native payload. Failed artwork
                     # leaves the previous card intact and retries next cycle.
-                    kwargs=dict(await activity_card_kwargs(rendered,record['parts'][0]))
+                    kwargs=dict(await activity_card_kwargs(rendered,record['parts'][0],**({'parts':record['parts']} if len(record['parts'])>1 else {})))
                     file=kwargs.pop('file')
                     await message.edit(**kwargs,attachments=[file],allowed_mentions=discord.AllowedMentions.none())
                 else:

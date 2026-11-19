@@ -26,7 +26,7 @@ def test_model_preserves_episode_ratings_completion_and_started_last():
     assert model['ratings']==['IMDb 8.0/10','Your episode rating: 9/10']
     assert model['notes']==['Finished Season 1.','NEW · Started watching this series.']
     assert embed.to_dict()==before
-    assert eligible([part]) and not eligible([part,part])
+    assert eligible([part]) and eligible([part,{**part,'user':'2'}])
     assert not eligible([{**part,'meta':{**part['meta'],'status':'completed'}}])
     film,part=example(True);model=card_model(film,part)
     assert model['action']=='Watched' and any('MAL' in r for r in model['ratings'])
@@ -253,3 +253,93 @@ def test_ambient_artwork_dissolves_into_sampled_background():
     # Backdrop colour continues below the artwork rather than falling to flat black.
     red,green,blue=result.getpixel((1020,layout['height']-60))
     assert blue>green>red
+
+
+def test_together_model_keeps_member_ratings_scopes_and_trackers():
+    from trackerbot.presentation.activity_cards import together_model,activity_layout
+    embed,part=example(True)
+    embed.description='<@1> and <@2> watched **Example Film** together\n⭐ IMDb 8.0/10\n💬 <@1> · Your rating: **7/10**\n💬 <@2> · Your rating: **9/10**'
+    parts=[dict(part,card_name='Donny'),dict(part,user='2',source='mdblist',card_name='Adele')]
+    model=together_model(embed,parts)
+    assert model['author']=='Watched Together' and model['action']=='Watched together'
+    assert model['ratings']==['IMDb 8.0/10']
+    assert [(m['name'],m['score'],m['tracker']) for m in model['members']]==[('Donny','7/10','simkl'),('Adele','9/10','mdblist')]
+    layout=activity_layout(model)
+    assert layout['members_top']+160<layout['height']
+    assert Image.open(render_activity_png(model)).height==layout['height']
+    embed.description='<@1> and <@2> watched **S4E02** of **Example Series** together\n*Episode title*\n⭐ IMDb 9.5/10\n🆕 <@2> started this series.'
+    for p in parts:p['meta']={'movie':False,'episodes':[2]}
+    model=together_model(embed,parts)
+    assert model['action']=='Watched together · S4E02'
+    assert model['episode_title']=='Episode title'
+    assert 'Adele' in model['notes'][0] and '<@' not in str(model)
+    assert all(m['score'] is None for m in model['members'])
+
+
+def test_together_card_refresh_passes_all_participants_and_no_xp(tmp_path,monkeypatch):
+    from test_activity_details import setup
+    import trackerbot.presentation.activity_cards as cards
+    from trackerbot.integrations.personal_ratings import normalize
+    async def run():
+        store,app,engine,ch,message,sent,sender=await setup(tmp_path,monkeypatch,users=('1','2'))
+        embed,part=example(True)
+        embed.description='<@1> and <@2> watched **Example Film** together\n⭐ IMDb 8.0/10'
+        parts=[engine.participant('10',uid,'simkl',part['meta']) for uid in ('1','2')]
+        for p,name in zip(parts,('Donny','Adele')):p['card_name']=name
+        assert await engine.send(sender,ch,embed,parts)
+        record=(await store.get_activity_messages('10'))[0];record['presentation']='card';await store.save_activity_message(record)
+        before=[await store.get_progression(uid) for uid in ('1','2')]
+        render=AsyncMock(return_value={'embed':None,'file':'group.png','view':'details'})
+        monkeypatch.setattr(cards,'activity_card_kwargs',render)
+        engine.contexts[('10','2')]['state']['ratings']=[normalize({'tmdb':1,'rating':9},'movie','simkl')]
+        await engine.finish()
+        assert message.edit.await_args.kwargs['embed'] is None
+        assert message.edit.await_args.kwargs['attachments']==['group.png']
+        assert [p['card_name'] for p in render.await_args.kwargs['parts']]==['Donny','Adele']
+        assert '<@2>' in render.await_args.args[0].description and '**9/10**' in render.await_args.args[0].description
+        assert [await store.get_progression(uid) for uid in ('1','2')]==before
+    asyncio.run(run())
+
+
+def test_live_together_send_resolves_and_retains_member_profiles(monkeypatch):
+    from test_notification_preview import bot
+    from trackerbot.core.activity_details import current_post
+    import trackerbot.presentation.activity_cards as cards
+    async def run():
+        embed,part=example(True)
+        parts=[part,{**part,'user':'2'}];post={'base':embed.to_dict(),'rendered':embed.to_dict(),'parts':parts}
+        monkeypatch.setattr(bot,'prefs',AsyncMock(return_value={'style':'card'}))
+        member=lambda uid:SimpleNamespace(display_name='Viewer '+str(uid),display_avatar=SimpleNamespace(url='https://cdn.discordapp.com/avatars/'+str(uid)+'.png'))
+        monkeypatch.setattr(bot.bot,'get_guild',lambda _:SimpleNamespace(get_member=member))
+        render=AsyncMock(return_value={'embed':None,'file':'group.png','view':'details'})
+        monkeypatch.setattr(cards,'activity_card_kwargs',render)
+        monkeypatch.setattr(bot.activity_details,'remember',AsyncMock())
+        channel=SimpleNamespace(send=AsyncMock(return_value=SimpleNamespace(id=7)))
+        token=current_post.set(post)
+        try:
+            assert await bot.send_embed(channel,embed,'watch')
+            assert render.await_args.kwargs['parts'][1]['card_name']=='Viewer 2'
+            assert parts[1]['card_avatar'].endswith('/2.png')
+            assert post['presentation']=='card' and channel.send.await_args.kwargs['embed'] is None
+        finally:current_post.reset(token)
+    asyncio.run(run())
+
+
+def test_together_debug_preview_is_private_and_does_not_poll(monkeypatch):
+    from test_notification_preview import bot,_interaction
+    from discord import app_commands
+    import trackerbot.presentation.activity_cards as cards
+    async def run():
+        i=_interaction();i.user.display_name='Donny'
+        monkeypatch.setattr(bot.storage,'get_activity_provider',AsyncMock(return_value='simkl'))
+        monkeypatch.setattr(bot.storage,'get_activity_messages',AsyncMock(return_value=[]))
+        render=AsyncMock(return_value={'embed':None,'file':'group.png'})
+        monkeypatch.setattr(cards,'activity_card_kwargs',render)
+        poll=AsyncMock();monkeypatch.setattr(bot,'poll_providers',poll)
+        await bot.simkl_debug.callback(i,app_commands.Choice(name='Watched Together card',value='activity_together'))
+        assert i.followup.send.await_args.kwargs['ephemeral']
+        assert render.await_args.kwargs['preview'] and render.await_args.kwargs['sample']
+        assert len(render.await_args.kwargs['parts'])==2
+        assert render.await_args.args[1]['preview_owner']=='42'
+        poll.assert_not_awaited()
+    asyncio.run(run())
