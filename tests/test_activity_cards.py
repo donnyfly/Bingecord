@@ -367,3 +367,29 @@ def test_visual_status_artwork_never_falls_back_to_poster():
             assert not empty.image
         elif style=='minimal':assert embed.thumbnail.url.endswith('poster.jpg')
         else:assert embed.image.url.endswith('poster.jpg')
+
+
+def test_together_debug_resolves_members_from_older_native_records(monkeypatch):
+    from test_notification_preview import bot,_interaction
+    from discord import app_commands
+    import trackerbot.presentation.activity_cards as cards
+    async def run():
+        i=_interaction();i.user.display_name='Donny'
+        embed,part=example(True)
+        parts=[dict(part,guild='123',user='7'),dict(part,guild='123',user='42')]
+        record={'rendered':embed.to_dict(),'parts':parts}
+        monkeypatch.setattr(bot.storage,'get_activity_provider',AsyncMock(return_value='simkl'))
+        monkeypatch.setattr(bot.storage,'get_activity_messages',AsyncMock(return_value=[record]))
+        member=lambda uid:SimpleNamespace(display_name={7:'adele',42:'donny'}[uid],display_avatar=SimpleNamespace(url=f'https://cdn.discordapp.com/avatars/{uid}.png'))
+        monkeypatch.setattr(bot.bot,'get_guild',lambda _:SimpleNamespace(get_member=member))
+        render=AsyncMock(return_value={'embed':None,'file':'group.png'})
+        monkeypatch.setattr(cards,'activity_card_kwargs',render)
+        await bot.simkl_debug.callback(i,app_commands.Choice(name='Watched Together card',value='activity_together'))
+        result=render.await_args.kwargs
+        assert result['sample'] is False and result['preview'] is True
+        assert [p['card_name'] for p in result['parts']]==['adele','donny']
+        assert all(p['card_avatar'].startswith('https://cdn.discordapp.com/') for p in result['parts'])
+        assert render.await_args.args[1]['preview_owner']=='42'
+        assert all('card_name' not in p for p in parts)
+        assert i.followup.send.await_args.kwargs['ephemeral']
+    asyncio.run(run())

@@ -464,6 +464,20 @@ def build_embed(t,desc,ts,name,member,image,profile,title=None,title_url=None,po
             if (p["style"]=="card" or p["artwork"] in ("auto", "backdrop")) and logo:
                 e.set_thumbnail(url=logo)
     e.set_footer(text=f"{label} · {provider}"); return e
+
+
+async def resolve_activity_card_members(parts):
+    async def resolve_card_member(member_part):
+        guild=bot.get_guild(int(member_part['guild']))
+        member=(guild.get_member(int(member_part['user'])) if guild else None) or bot.get_user(int(member_part['user']))
+        if member is None:
+            try:member=await asyncio.wait_for(bot.fetch_user(int(member_part['user'])),timeout=3)
+            except (discord.HTTPException,TimeoutError):pass
+        if member:
+            member_part['card_name']=member.display_name
+            member_part['card_avatar']=str(member.display_avatar.url)
+    await asyncio.gather(*(resolve_card_member(p) for p in parts[:5]))
+
 async def send_embed(ch,e,what):
     try:
         kwargs={'embed':e,'allowed_mentions':discord.AllowedMentions.none()}
@@ -477,16 +491,7 @@ async def send_embed(ch,e,what):
                 try:
                     part['display_timezone']=(await storage.get_activity_timezone(part['guild'],part['user']))['name']
                     if len(post['parts'])>1:
-                        async def resolve_card_member(member_part):
-                            guild=bot.get_guild(int(member_part['guild']))
-                            member=(guild.get_member(int(member_part['user'])) if guild else None) or bot.get_user(int(member_part['user']))
-                            if member is None:
-                                try:member=await asyncio.wait_for(bot.fetch_user(int(member_part['user'])),timeout=3)
-                                except (discord.HTTPException,TimeoutError):pass
-                            if member:
-                                member_part['card_name']=member.display_name
-                                member_part['card_avatar']=str(member.display_avatar.url)
-                        await asyncio.gather(*(resolve_card_member(p) for p in post['parts'][:5]))
+                        await resolve_activity_card_members(post['parts'])
                         kwargs.update(await activity_card_kwargs(e,part,parts=post['parts']))
                     else:kwargs.update(await activity_card_kwargs(e,part))
                     post['presentation']='card'
@@ -2893,6 +2898,7 @@ async def simkl_debug(
             embed.description=f'<@{uid}> and <@0> watched **Example Film** together\n⭐ IMDb 8.0/10\n\n💬 <@{uid}> · Your rating: **8/10**'
             embed.set_author(name='Watched Together')
         try:
+            if group_parts and not sample:await resolve_activity_card_members(group_parts)
             part={**part,'display_timezone':(await storage.get_activity_timezone(g,uid))['name'],'preview_owner':uid}
             if group_parts:group_parts[0]=part
             kwargs=await activity_card_kwargs(embed,part,preview=True,sample=sample,**({'parts':group_parts} if group_parts else {}))
