@@ -123,6 +123,11 @@ def challenges_for(day: date) -> tuple[list[dict], list[dict]]:
     # Keep the weekly set stable from Monday through Sunday.
     monday_ordinal = ordinal - day.weekday()
     weekly = challenge_pool("weekly", monday_ordinal, minutes_based=monday_ordinal >= date(2026, 10, 12).toordinal())
+    from .personal_challenges import definitions,DAILY_START,WEEKLY_START
+    if day>=DAILY_START:daily=definitions('daily',day)
+    from datetime import timedelta
+    monday=day-timedelta(days=day.weekday())
+    if monday>=WEEKLY_START:weekly=definitions('weekly',monday)
     return daily, weekly
 
 def challenge_progress(events: list[dict], challenge: dict, start_iso: str, end_iso: str) -> int | float:

@@ -2565,38 +2565,36 @@ async def achievement_autocomplete(i, current: str):
 
 
 
-@bingecord_commands.command(name="challenges", description="View your current daily and weekly watch challenges.")
+async def refresh_personal_challenges(g):
+    if not await feature_enabled(g,'challenges'):return
+    from trackerbot.metadata.community_metadata import enrich_community_metadata
+    now=datetime.now(timezone.utc)
+    candidates=await storage.community_metadata_candidates(g,now)
+    if candidates:await storage.cache_community_metadata(g,await enrich_community_metadata(tmdb,candidates))
+    if not await feature_enabled(g,'community'):
+        from trackerbot.metadata.community_completion import refresh_community_completions
+        await refresh_community_completions(sys.modules[__name__],g,now)
+    users=await storage.refresh_personal_challenge_facts(g,now)
+    channel_id=await storage.get_channel(g);channel=bot.get_channel(int(channel_id)) if channel_id else None
+    if channel_id and channel is None:
+        try:
+            async with asyncio.timeout(5):channel=await bot.fetch_channel(int(channel_id))
+        except Exception:pass
+    if channel:
+        for uid in users or []:await notify_challenge_rewards(g,uid,channel)
+
+
+@bingecord_commands.command(name="challenges", description="View your personal daily and weekly challenge card.")
 async def simkl_challenges(i):
-    uid = str(i.user.id)
-    today = datetime.now(timezone.utc).date()
-    daily, weekly = challenges_for(today)
-    state = await storage.get_challenge_state(uid)
-    events = state.get("xp_events", [])
-    completed = state.get("challenge_completions", {})
-    daily_key = f"daily:{today.isoformat()}"
-    monday = today - timedelta(days=today.weekday())
-    weekly_key = f"weekly:{monday.isoformat()}"
-    ds = f"{today.isoformat()}T00:00:00+00:00"
-    de = f"{today.isoformat()}T23:59:59+00:00"
-    ws = f"{monday.isoformat()}T00:00:00+00:00"
-    we = f"{(monday + timedelta(days=6)).isoformat()}T23:59:59+00:00"
-
-    def lines(challenges, key, start, end):
-        out = []
-        for ch in challenges:
-            done = ch["id"] in completed.get(key, {})
-            progress = ch["target"] if done else challenge_progress(events, ch, start, end)
-            mark = "✓" if done else "□"
-            out.append(f'{mark} **{ch["name"]}** — {progress:g}/{ch["target"]} · +{ch["xp"]:,} XP')
-        return "\n".join(out)
-
-    e = discord.Embed(title="Tracker Challenges", color=0x5865F2)
-    daily_reset=datetime(today.year,today.month,today.day,tzinfo=timezone.utc)+timedelta(days=1)
-    weekly_reset=datetime(monday.year,monday.month,monday.day,tzinfo=timezone.utc)+timedelta(days=7)
-    e.add_field(name="Daily", value=f"Resets {discord.utils.format_dt(daily_reset,style='R')} · {discord.utils.format_dt(daily_reset,style='F')}\n"+lines(daily,daily_key,ds,de), inline=False)
-    e.add_field(name="Weekly", value=f"Resets {discord.utils.format_dt(weekly_reset,style='R')} · {discord.utils.format_dt(weekly_reset,style='F')}\n"+lines(weekly,weekly_key,ws,we), inline=False)
-    e.set_footer(text="Daily and weekly challenges reset at 00:00 UTC.")
-    await i.response.send_message(embed=e)
+    await i.response.defer()
+    g=guild_id(i)
+    if g:
+        try:await refresh_personal_challenges(g)
+        except Exception:log.warning('Personal challenge enrichment deferred for guild %s.',g,exc_info=True)
+    from trackerbot.core.personal_challenges import snapshot
+    from trackerbot.presentation.challenge_delivery import challenge_card
+    now=datetime.now(timezone.utc);state=await storage.get_challenge_state(str(i.user.id))
+    await challenge_card(i.followup.send,i.user,snapshot(state,now),now=now)
 
 
 @bingecord_commands.command(name="community", description="View this server's weekly community event and contribution card.")
@@ -2750,6 +2748,7 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         app_commands.Choice(name="Completion", value="completion"),
         app_commands.Choice(name="Streak history", value="streak"),
         app_commands.Choice(name="Community event card", value="community"),
+        app_commands.Choice(name="Personal challenges card", value="challenges"),
         app_commands.Choice(name="Profile card", value="profile"),
         app_commands.Choice(name="Leaderboard card", value="leaderboard"),
         app_commands.Choice(name="Server stats card", value="server_stats"),
@@ -2792,6 +2791,13 @@ async def simkl_debug(
         return
     if community_event is not None:
         await i.response.send_message('The community_event option is only for Community event card previews.',ephemeral=True)
+        return
+    if feature.value == 'challenges':
+        await i.response.defer(ephemeral=True)
+        from trackerbot.core.personal_challenges import snapshot
+        from trackerbot.presentation.challenge_delivery import challenge_card
+        now=datetime.now(timezone.utc);state=await storage.get_challenge_state(str(i.user.id))
+        await challenge_card(i.followup.send,i.user,snapshot(state,now,preview=True),now=now,ephemeral=True)
         return
     if feature.value == "streak":
         await i.response.defer(ephemeral=True)
@@ -4799,6 +4805,8 @@ async def poll_providers(guild_id=None, *, manual=False):
             for gid in ([str(guild_id)] if guild_id is not None else [str(guild.id) for guild in bot.guilds]):
                 try:await refresh_community_state(gid)
                 except Exception:log.exception('Community event refresh failed for guild %s.',gid)
+                try:await refresh_personal_challenges(gid)
+                except Exception:log.exception('Personal challenge refresh failed for guild %s.',gid)
             return {manifest.name:count for manifest,count in zip(manifests,results)}
         finally:current_details.reset(token)
 

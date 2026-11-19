@@ -334,7 +334,7 @@ def _add_watch_xp_events(progression: dict, events: list[dict], *, historical=Fa
         known[key]=stamp
         added.append({"at":stamp,"amount":xp,"media_type":event["media_type"],
                       "title":event.get("title") or "Untitled","event_key":key,
-                      "ids":copy.deepcopy(event.get("ids") or {}),
+                      "ids":copy.deepcopy(event.get("ids") or {}),"historical":bool(historical),
                       **({"runtime_minutes":event["runtime_minutes"], "xp_rule":WATCH_XP_RULE}
                          if event.get("runtime_minutes") is not None else {})})
         amount+=xp
@@ -346,16 +346,29 @@ def _add_watch_xp_events(progression: dict, events: list[dict], *, historical=Fa
     return amount,added
 
 
+def _personal_challenge_value(progression,challenge,day,scope,legacy_counts,cache):
+    if challenge.get('version')!=2:return legacy_counts.get(challenge['kind'],0)
+    from .personal_challenges import progress,watches
+    if 'rows' not in cache:cache['rows']=watches(progression)
+    start=datetime.fromisoformat(day).replace(tzinfo=timezone.utc)
+    return progress(progression,challenge,start,start+timedelta(days=1 if scope=='daily' else 7),watch_rows=cache['rows'])['value']
+
+
 def _complete_watch_challenges(progression: dict, added: list[dict], *, notify: bool = False) -> None:
     """Count each touched day/week once instead of scanning history per watch."""
     watch_types={"episode","anime_episode","movie","anime_movie"}
     touched=set()
     for event in added:
         if event["media_type"] in watch_types and event["at"] >= "2025-01-01T00:00:00Z":
-            touched.add(event["at"][:10])
+            from .personal_challenges import DAILY_START
+            from .community_events import parse_stamp
+            stamp=parse_stamp(event['at'])
+            day=stamp.astimezone(timezone.utc).date() if stamp else None
+            touched.add(day.isoformat() if day and day>=DAILY_START else event['at'][:10])
     if not touched:
         return
     from datetime import date, timedelta
+    from .personal_challenges import period_definitions
     daily=defaultdict(lambda: {"episodes":0,"movies":0,"watches":0,"minutes":0.0})
     weekly=defaultdict(lambda: {"episodes":0,"movies":0,"watches":0,"minutes":0.0})
     touched_weeks=set()
@@ -383,14 +396,26 @@ def _complete_watch_challenges(progression: dict, added: list[dict], *, notify: 
             weekly[week][kind]+=1
             weekly[week]["watches"]+=1
             weekly[week]["minutes"]+=event_watch_minutes(event)
+    def can_notify(challenge,period,scope):
+        if not notify:return False
+        from .community_events import parse_stamp
+        for event in added:
+            if event.get('historical'):continue
+            stamp=parse_stamp(event.get('at'))
+            if not stamp:continue
+            day=(stamp.astimezone(timezone.utc).date() if challenge.get('version')==2
+                 else date.fromisoformat(str(event['at'])[:10]))
+            if scope=='weekly':day-=timedelta(days=day.weekday())
+            if day.isoformat()==period:return True
+        return False
     now=datetime.now(timezone.utc).isoformat()
-    completions=progression["challenge_completions"]
+    completions=progression["challenge_completions"];score_cache={}
     for day in touched:
-        for challenge in challenges_for(date.fromisoformat(day))[0]:
+        for challenge in period_definitions(progression,'daily',date.fromisoformat(day),save=True):
             key=f"daily:{day}"
-            if daily[day][challenge["kind"]]>=challenge["target"] and challenge["id"] not in completions.get(key,{}):
+            if _personal_challenge_value(progression,challenge,day,'daily',daily[day],score_cache)>=challenge['target'] and challenge['id'] not in completions.get(key,{}):
                 completions.setdefault(key,{})[challenge["id"]]={"completed_at":now,"xp":challenge["xp"],"definition":copy.deepcopy(challenge)}
-                if notify:
+                if can_notify(challenge,day,'daily'):
                     progression.setdefault("pending_challenge_notifications",[]).append({
                         "key":f"{key}:{challenge['id']}","name":challenge["name"],
                         "period":"Daily","xp":challenge["xp"],
@@ -399,11 +424,11 @@ def _complete_watch_challenges(progression: dict, added: list[dict], *, notify: 
                 progression["lifetime_xp"]+=challenge["xp"]
                 roll_prestige(progression)
     for week in touched_weeks:
-        for challenge in challenges_for(date.fromisoformat(week))[1]:
+        for challenge in period_definitions(progression,'weekly',date.fromisoformat(week),save=True):
             key=f"weekly:{week}"
-            if weekly[week][challenge["kind"]]>=challenge["target"] and challenge["id"] not in completions.get(key,{}):
+            if _personal_challenge_value(progression,challenge,week,'weekly',weekly[week],score_cache)>=challenge['target'] and challenge['id'] not in completions.get(key,{}):
                 completions.setdefault(key,{})[challenge["id"]]={"completed_at":now,"xp":challenge["xp"],"definition":copy.deepcopy(challenge)}
-                if notify:
+                if can_notify(challenge,week,'weekly'):
                     progression.setdefault("pending_challenge_notifications",[]).append({
                         "key":f"{key}:{challenge['id']}","name":challenge["name"],
                         "period":"Weekly","xp":challenge["xp"],
@@ -413,7 +438,7 @@ def _complete_watch_challenges(progression: dict, added: list[dict], *, notify: 
                 roll_prestige(progression)
 
 
-def _revoke_unmet_watch_challenges(progression: dict) -> int:
+def _revoke_unmet_watch_challenges(progression: dict,*,modern_only=False) -> int:
     """Remove rewards whose watch requirements no longer hold after a deletion."""
     from datetime import date, timedelta
     daily = defaultdict(lambda: {"episodes": 0, "movies": 0, "watches": 0, "minutes": 0.0})
@@ -432,7 +457,7 @@ def _revoke_unmet_watch_challenges(progression: dict) -> int:
             counts[key][category] += 1
             counts[key]["watches"] += 1
             counts[key]["minutes"] += event_watch_minutes(event)
-    revoked = 0
+    revoked = 0;score_cache={}
     for period, completions in list(progression["challenge_completions"].items()):
         scope, _, day = period.partition(":")
         if scope not in {"daily", "weekly"}:
@@ -446,7 +471,8 @@ def _revoke_unmet_watch_challenges(progression: dict) -> int:
         counts = daily[day] if scope == "daily" else weekly[day]
         for challenge_id, reward in list(completions.items()):
             definition = reward.get("definition") or requirements.get(challenge_id)
-            if definition and counts[definition["kind"]] < definition["target"]:
+            if modern_only and (definition or {}).get('version')!=2:continue
+            if definition and _personal_challenge_value(progression,definition,day,scope,counts,score_cache) < definition['target']:
                 revoked += max(0, int(reward.get("xp", 0)))
                 del completions[challenge_id]
                 notification_key = f"{period}:{challenge_id}"
@@ -456,7 +482,9 @@ def _revoke_unmet_watch_challenges(progression: dict) -> int:
         if not completions:
             del progression["challenge_completions"][period]
     if revoked:
-        progression["xp"] = max(0, progression["xp"] - revoked)
+        threshold=xp_for_level(100)
+        balance=max(0,progression['xp']+progression.get('prestige',0)*threshold-revoked)
+        progression['prestige'],progression['xp']=divmod(balance,threshold)
         progression["lifetime_xp"] = max(0, progression["lifetime_xp"] - revoked)
     return revoked
 
@@ -1974,12 +2002,54 @@ class Storage:
             "progression": result,
         }
 
+    async def refresh_personal_challenge_facts(self,guild_id,now):
+        """Reuse exact catalogue and supported completion facts across this user's servers."""
+        from .personal_challenges import period_definitions
+        from .community_events import parse_stamp
+        async with _lock:
+            guild=self._guild(str(guild_id))
+            if not guild:return
+            for uid in guild.get('users',{}):
+                user=self._user(uid)
+                if not user:continue
+                p=user['progression'];metadata={};finishes=[]
+                for other in self._data['guilds'].values():
+                    if uid not in other.get('users',{}):continue
+                    metadata.update(copy.deepcopy(other.get('community_metadata') or {}))
+                    signatures_by_provider={}
+                    for proof in (other.get('community_completions') or {}).values():
+                        if proof.get('uid')!=uid or not proof.get('support'):continue
+                        provider=proof['provider']
+                        account=(user.get(provider) or {}).get('account_id') if provider!='simkl' else user.get('simkl_account_id')
+                        if account is not None and str(account)!=proof.get('account'):continue
+                        member=other['users'][uid]
+                        if provider not in signatures_by_provider:
+                            rows=_statistics_for_provider(member,provider,other.get('timezone')).get('watch_events') or {}
+                            signatures_by_provider[provider]={str(r.get('item_key') or '')+'|'+str(r.get('watched_at') or '') for r in rows.values()}
+                        signatures=signatures_by_provider[provider]
+                        if set(proof['support'])<=signatures:
+                            finishes.append({'canonical':proof['canonical'],'at':proof['at']})
+                # Failed catalogue requests do not erase previously verified metadata.
+                p.setdefault('challenge_metadata',{}).update({k:v for k,v in metadata.items() if v.get('canonical')})
+                p['challenge_finishes']=finishes
+                day=now.astimezone(timezone.utc).date();monday=day-timedelta(days=day.weekday())
+                period_definitions(p,'daily',day,save=True);period_definitions(p,'weekly',monday,save=True)
+                _revoke_unmet_watch_challenges(p,modern_only=True)
+                # Only current periods can gain delayed metadata awards. Old history
+                # imports still use their date-versioned rules in the watch pipeline.
+                added=[e for e in p['xp_events'] if e.get('media_type') in {'movie','anime_movie','episode','anime_episode'}
+                       and parse_stamp(e.get('at')) and monday<=parse_stamp(e['at']).astimezone(timezone.utc).date()<=day]
+                _complete_watch_challenges(p,added,notify=True)
+                self._dirty=True
+        await self.flush()
+        return list(guild.get('users',{}))
+
     async def get_challenge_state(self, discord_user_id: str) -> dict:
         async with _lock:
             user = self._user(discord_user_id)
             if not user:
                 return {}
-            return {"xp_events": copy.deepcopy(user["progression"].get("xp_events", [])), "challenge_completions": copy.deepcopy(user["progression"].get("challenge_completions", {}))}
+            return {key:copy.deepcopy(user['progression'].get(key,[] if key in {'xp_events','challenge_finishes'} else {})) for key in ('xp_events','challenge_completions','challenge_sets','challenge_metadata','challenge_finishes','occurrence_ledger')}
 
     async def get_pending_challenge_notifications(self, discord_user_id: str) -> list[dict]:
         async with _lock:

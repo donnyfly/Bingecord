@@ -170,9 +170,12 @@ def test_mdblist_shared_challenges_and_mapping_commands(tmp_path,monkeypatch):
         await setup_store(tmp_path,monkeypatch,'mdblist')
         i=interaction()
         await bot.simkl_challenges.callback(i)
-        embed=i.response.send_message.await_args.kwargs['embed']
-        assert embed.title=='Tracker Challenges'
-        assert [field.name for field in embed.fields]==['Daily','Weekly']
+        embed=i.followup.send.await_args.kwargs['embed']
+        i.response.defer.assert_awaited_once()
+        assert embed.title=='Personal Challenges'
+        assert embed.fields[0].name.startswith('Daily · Resets')
+        assert embed.fields[1].name.startswith('Weekly · Resets')
+        assert i.followup.send.await_args.kwargs['file'].filename=='challenges.png'
         i=interaction()
         await bot.tracker_mapping.callback(i)
         message=i.response.send_message.await_args.args[0]

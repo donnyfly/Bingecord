@@ -276,3 +276,31 @@ belong only to the legacy event; a watch exactly at the split belongs only to v2
 Test missing permissions, unmet old requirements, repeat invocations, restart after
 transition, payout notification retries and subsequent normal weekly rotation.
 No other server is changed. Private previews must respect the shortened new window.
+
+## Personal challenge cards and v2 objectives
+
+Preview `/bingecord debug feature:Personal challenges card` before rollout. It
+must use cached progression, show the new rules privately, and perform no imports,
+reward writes, notifications or community refresh. Check empty, partial, complete,
+long-name and missing-artwork cards. `/bingecord challenges` uses the same renderer
+with actual saved definitions and earned receipts; failed rendering retains readable
+objective descriptions, values, rewards and reset times.
+
+Validate daily rollout on 2026-11-20 00:00 UTC and weekly rollout on 2026-11-23
+00:00 UTC, including +08:00 timestamps at the boundary. Earlier dates retain their
+original rules. Each set has three objectives and one minute objective. Verify
+rotation and persisted definitions across restarts. Completed legacy rewards must
+not be re-evaluated merely by opening the new screen or enriching title metadata.
+
+Across SIMKL, WeTrakr and MDBList, test shared occurrence deduplication, two regular
+episodes for daily genre picks, three for weekly title collections, specials,
+repeated episode marks, anime films, new-series history checks, distinct films,
+genre diversity and decade collection. Exact-ID alias metadata should map to one
+canonical title; missing genres/years must show pending instead of awarding by
+name. Test delayed enrichment with community disabled as well as enabled.
+
+A verified season/series finish must retain its provider/account and current watch
+support. Removing that support revokes Roll Credits and dependent discovery rewards.
+Test removals and re-additions, idempotence, reward reversals crossing prestige,
+notification retries, silent imports and the next normal poll cycle. Polling should
+retry metadata-dependent objectives and deliver pending challenge notifications.
