@@ -233,3 +233,20 @@ def test_personal_timezone_command_available_to_non_admin(monkeypatch):
         server.assert_not_awaited()
         assert i.response.send_message.await_args.args[0]==bot.NOT_ADMIN_MESSAGE
     asyncio.run(run())
+
+
+def test_ambient_artwork_dissolves_into_sampled_background():
+    from trackerbot.presentation.activity_cards import ambient_background,artwork_mask,activity_layout
+    mask=artwork_mask((984,520))
+    assert mask.getpixel((492,200))==255
+    assert 0<mask.getpixel((492,430))<255
+    assert mask.getpixel((492,519))==0
+    embed,part=example(True);model=card_model(embed,part);layout=activity_layout(model)
+    size=(1080,layout['height']);art=Image.new('RGB',(800,450),(30,90,190))
+    ambient=ambient_background(size,(239,190,105),art,layout['hero_bottom'])
+    result=Image.open(render_activity_png(model,{'image':art})).convert('RGB')
+    seam=(540,layout['hero_bottom']-1)
+    assert result.getpixel(seam)==ambient.convert('RGB').getpixel(seam)
+    # Backdrop colour continues below the artwork rather than falling to flat black.
+    red,green,blue=result.getpixel((1020,layout['height']-60))
+    assert blue>green>red

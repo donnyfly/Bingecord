@@ -11,7 +11,7 @@ import json
 import re
 import time
 from urllib.parse import urlparse,parse_qs
-from PIL import Image,ImageDraw,ImageOps,ImageFilter,ImageEnhance
+from PIL import Image,ImageDraw,ImageOps,ImageFilter,ImageEnhance,ImageChops
 import aiohttp
 import discord
 from .card_theme import background,panel,cover,fit,short,png
@@ -128,6 +128,33 @@ def cinematic_art(art,size):
     return base
 
 
+def ambient_background(size,accent,art,hero_bottom):
+    """Carry subdued backdrop colours through the caption area and footer."""
+    if art is None:return background(size,accent)
+    palette=art.convert('RGB').resize((8,4),Image.Resampling.BOX)
+    field=Image.new('RGB',(48,60));pixels=field.load()
+    for y in range(60):
+        relative=y*size[1]/59
+        distance=abs(relative-hero_bottom)/max(1,size[1])
+        strength=.12+.25*max(0,1-distance*1.8)
+        for x in range(48):
+            column=min(7,x*8//48)
+            tint=tuple(sum(palette.getpixel((column,row))[c] for row in (1,2,3))/3 for c in range(3))
+            pixels[x,y]=tuple(round(8+tint[c]*strength) for c in range(3))
+    return field.filter(ImageFilter.GaussianBlur(5)).resize(size,Image.Resampling.BICUBIC).convert('RGBA')
+
+
+def artwork_mask(size):
+    """Round the upper frame and dissolve its lower portion into the ambient field."""
+    width,height=size
+    rounded=Image.new('L',size);ImageDraw.Draw(rounded).rounded_rectangle((0,0,width-1,height-1),22,fill=255)
+    fade=Image.new('L',(1,height),255);pixels=fade.load();start=round(height*.58)
+    for y in range(start,height):
+        t=(y-start)/max(1,height-1-start)
+        pixels[0,y]=round(255*(1-t*t*(3-2*t)))
+    return ImageChops.multiply(rounded,fade.resize(size))
+
+
 def _flows(items,width,gap=12):
     x=0;row=0;positions=[]
     for item_width in items:
@@ -192,7 +219,7 @@ def activity_layout(model):
 def render_activity_png(model,artwork=None):
     artwork=artwork or {};accent=(239,190,105) if model['movie'] else (154,140,232)
     layout=activity_layout(model);height=layout['height'];hero=artwork.get('image')
-    image=background((1080,height),accent,art=hero);draw=ImageDraw.Draw(image)
+    image=ambient_background((1080,height),accent,hero,layout['hero_bottom']);draw=ImageDraw.Draw(image)
     def text(x,y,value,size=20,colour=WHITE,bold=False,width=900,italic=False):
         face=fit(draw,str(value),size,width,bold)
         if italic:face=font(face.size,italic=True)
@@ -210,7 +237,7 @@ def render_activity_png(model,artwork=None):
         tile=background((984,h),accent)
         td=ImageDraw.Draw(tile);td.rounded_rectangle((425,h//2-48,559,h//2+48),18,outline=accent,width=3)
         td.polygon(((480,h//2-25),(480,h//2+25),(516,h//2)),fill=accent)
-    mask=Image.new('L',tile.size);ImageDraw.Draw(mask).rounded_rectangle((0,0,983,h-1),22,fill=255)
+    mask=artwork_mask(tile.size) if hero else Image.new('L',tile.size,255)
     image.paste(tile,(48,top),mask)
     logo=artwork.get('logo')
     if logo:
