@@ -327,3 +327,28 @@ categories stay all-time and sort prestige then current prestige XP; the display
 XP progression value includes completed prestige tiers. Disabled progression must
 hide its category options and progression labels. Non-owners may view details but
 cannot change pages, categories or periods. Each change resets pagination safely.
+
+## Experimental watch activity cards
+
+Preview Episode activity card and Film activity card via `/bingecord debug`.
+Validate cached selected-source/user activities and clearly labelled sample data
+when no recent single-user watch exists. Previews must be ephemeral, perform no
+provider poll and leave style settings, watch records and progression unchanged.
+
+Enable `/bingecord style style:Visual card (experimental)` for a test member on
+each provider. Mark a genuinely new episode and film, then poll. Verify title/profile
+links, source label, avatar, logo, selected artwork, title/episode numbers and ranges,
+rewatch wording, IMDb episode ratings, film ratings, personal rating, verified season
+finish and final NEW line. Episode cards must exclude MAL. Hidden ratings stay hidden.
+Test long titles, missing logo/avatar, missing artwork, disabled rating preferences,
+server style inheritance and forced defaults. Rich remains the default; status and
+Watched Together posts remain native in this first phase.
+
+Rate after the card has posted and let the normal cycle run: the PNG and private
+text details must update together. Remove/change the rating and supporting finale
+watch; verify appropriate details change without dropping the original still/title
+or replaying the activity. Test restart, unchanged-message edit suppression and
+render/upload failures. Initial render failures fall back to native delivery;
+failed late renders retain the prior card and native payload for a later retry.
+Watch/XP commits must still occur only after confirmed Discord delivery. Test bulk
+ranges and multiple watches of one title; the renderer adds no catalogue lookups.

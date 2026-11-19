@@ -410,7 +410,15 @@ class ActivityDetails:
                 channel=self.app.bot.get_channel(int(record['channel']))
                 if channel is None:channel=await self.app.bot.fetch_channel(int(record['channel']))
                 message=channel.get_partial_message(int(record['message']))
-                await message.edit(embed=rendered,allowed_mentions=discord.AllowedMentions.none())
+                if record.get('presentation')=='card':
+                    from trackerbot.presentation.activity_cards import activity_card_kwargs
+                    # Rebuild from the complete native payload. Failed artwork
+                    # leaves the previous card intact and retries next cycle.
+                    kwargs=dict(await activity_card_kwargs(rendered,record['parts'][0]))
+                    file=kwargs.pop('file')
+                    await message.edit(**kwargs,attachments=[file],allowed_mentions=discord.AllowedMentions.none())
+                else:
+                    await message.edit(embed=rendered,allowed_mentions=discord.AllowedMentions.none())
                 # Retain true source IDs; only the computed lines/milestone changed.
                 for original,updated in zip(record['parts'],parts):
                     original['lines']=updated.get('lines',[]);original['milestone']=updated.get('milestone')

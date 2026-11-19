@@ -465,7 +465,19 @@ def build_embed(t,desc,ts,name,member,image,profile,title=None,title_url=None,po
     e.set_footer(text=f"{label} · {provider}"); return e
 async def send_embed(ch,e,what):
     try:
-        message=await ch.send(embed=e, allowed_mentions=discord.AllowedMentions.none())
+        kwargs={'embed':e,'allowed_mentions':discord.AllowedMentions.none()}
+        from trackerbot.core.activity_details import current_post
+        from trackerbot.presentation.activity_cards import eligible,activity_card_kwargs
+        post=current_post.get()
+        if post and eligible(post.get('parts') or []):
+            part=post['parts'][0]
+            p=await prefs(part['guild'],part['user'])
+            if p.get('style')=='card':
+                try:
+                    kwargs.update(await activity_card_kwargs(e,part))
+                    post['presentation']='card'
+                except Exception:log.warning('Activity card unavailable; using native embed.',exc_info=True)
+        message=await ch.send(**kwargs)
         try:await activity_details.remember(message)
         except Exception:log.exception('Could not retain activity message for later rating edits.')
         return True
@@ -2425,7 +2437,7 @@ async def send_due_weekly_recaps():
         except Exception:
             log.exception("Weekly recap failed for guild %s.",guild.id)
 
-STYLE_CHOICES=[app_commands.Choice(name="Rich (large artwork)",value="rich"),app_commands.Choice(name="Minimal (small artwork)",value="minimal")]
+STYLE_CHOICES=[app_commands.Choice(name="Rich (large artwork)",value="rich"),app_commands.Choice(name="Minimal (small artwork)",value="minimal"),app_commands.Choice(name="Visual card (experimental)",value="card")]
 ARTWORK_CHOICES=[app_commands.Choice(name="Automatic",value="auto"),app_commands.Choice(name="Poster only",value="poster"),app_commands.Choice(name="Backdrop",value="backdrop")]
 TEXT_CHOICES=[app_commands.Choice(name="Short",value="short"),app_commands.Choice(name="Detailed",value="detailed")]
 EPISODE_FORMAT_CHOICES=[
@@ -2768,6 +2780,8 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         app_commands.Choice(name="Streak history", value="streak"),
         app_commands.Choice(name="Community event card", value="community"),
         app_commands.Choice(name="Personal challenges card", value="challenges"),
+        app_commands.Choice(name="Episode activity card", value="activity_episode"),
+        app_commands.Choice(name="Film activity card", value="activity_movie"),
         app_commands.Choice(name="Profile card", value="profile"),
         app_commands.Choice(name="Leaderboard card", value="leaderboard"),
         app_commands.Choice(name="Server stats card", value="server_stats"),
@@ -2810,6 +2824,31 @@ async def simkl_debug(
         return
     if community_event is not None:
         await i.response.send_message('The community_event option is only for Community event card previews.',ephemeral=True)
+        return
+    if feature.value in {'activity_episode','activity_movie'}:
+        await i.response.defer(ephemeral=True)
+        from trackerbot.presentation.activity_cards import activity_card_kwargs
+        movie=feature.value=='activity_movie';g=str(i.guild.id);uid=str(i.user.id)
+        source=await storage.get_activity_provider(g,uid) or 'simkl'
+        records=await storage.get_activity_messages(g)
+        selected=next(((record,part) for record in reversed(records) for part in record['parts']
+                       if part['user']==uid and part['source']==source and not part['meta'].get('status')
+                       and bool(part['meta'].get('movie'))==movie and len(record['parts'])==1),None)
+        if selected:
+            record,part=selected;embed=discord.Embed.from_dict(record['rendered']);sample=False
+        else:
+            part={'guild':g,'user':uid,'source':source,'meta':{'movie':movie,'episodes':[] if movie else [1]}}
+            embed=discord.Embed(title='Example Film' if movie else 'Example Series',
+                description='Watched **Example Film**\n⭐ IMDb 8.0/10\n💬 Your rating: **8/10**' if movie else
+                            'Watched **S1E01** of **Example Series**\n*An illustrative episode title*\n⭐ IMDb 8.0/10\n\n🆕 Started watching this series.',
+                color=0xEFBE69 if movie else 0x9A8CE8,timestamp=datetime.now(timezone.utc))
+            embed.set_author(name=i.user.display_name+"'s Activity",icon_url=getattr(getattr(i.user,'display_avatar',None),'url',None))
+            embed.set_footer(text=('Movie' if movie else 'TV')+' · '+source.upper());sample=True
+        try:
+            kwargs=await activity_card_kwargs(embed,part,preview=True,sample=sample)
+            await i.followup.send(**kwargs,ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+        except Exception:
+            await i.followup.send('Card artwork is temporarily unavailable. Try again shortly; no preferences or XP were changed.',ephemeral=True)
         return
     if feature.value == 'challenges':
         await i.response.defer(ephemeral=True)

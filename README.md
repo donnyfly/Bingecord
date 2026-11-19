@@ -11,7 +11,7 @@ It supports automatic provider syncing, episode grouping, artwork and ratings, p
 - 📺 Consecutive episode grouping for cleaner Discord posts
 - 🖼️ Title logos, episode stills and TMDB artwork with available provider fallbacks
 - ⭐ IMDb ratings and 🌸 MyAnimeList ratings where available
-- 🎨 Rich/minimal embeds, artwork choices, and short/detailed activity text
+- 🎨 Rich/minimal embeds, optional visual activity cards, artwork choices, and short/detailed activity text
 - 🔗 Per-member, per-server source selection with multiple linked accounts
 - 📊 Personal and server watch statistics
 - 🎲 Watching lists, planned-list random picks, and recommendations
@@ -320,13 +320,36 @@ Completed pages and enrichment batches are staged in the existing data volume an
 
 Users can run `/bingecord style` to choose:
 
-- **Rich** or **Minimal** embeds
+- **Rich**, **Minimal**, or **Visual card (experimental)** watch presentation
 - Automatic, poster, or backdrop artwork
 - Short or detailed activity text
 - Rating visibility
 - Personal-rating visibility, independently of public IMDb/MAL scores
 
 Server admins can set defaults with `/bingecord style-server`. Personal settings override server defaults.
+
+The experimental **Visual card** style currently covers individual episode/range
+and film watches for SIMKL, WeTrakr and MDBList. It uses Inter typography, the
+already-resolved still/backdrop and logo, a ratings panel, personal rating and
+verified completion/NEW annotations. Native title and profile links remain clickable,
+and View details provides the complete text privately. Episode watches retain
+IMDb episode ratings and exclude MAL; anime film cards may include MAL.
+
+Try `/bingecord debug feature:Episode activity card` and
+`/bingecord debug feature:Film activity card` first. Previews use your most recent
+cached single-user watch from the selected source, or clearly labelled illustrative
+sample data when none is available. They do not poll providers, change preferences
+or award XP. Enable live testing with `/bingecord style style:Visual card (experimental)`.
+Use Rich or Minimal to return to native embeds for subsequent watches.
+
+Status changes and Watched Together remain native embeds in this first test phase.
+Style inheritance and forced server defaults still apply. Later rating/completion
+updates regenerate and replace a saved card attachment without changing its base
+watch information. If initial rendering fails, the normal embed is sent; failed
+later renders keep the previous card intact and retry on a later poll. Bounded image
+and PNG caches limit rendering work during bulk activity. No extra catalogue or
+rating lookups are added by the card renderer.
+
 
 Titles and activity headers link to the provider entry and member profile when available. Status activities use posters. Episode watches can use episode stills/backdrops and show individual episode IMDb ratings. They omit MAL and do not substitute the whole show's rating for a missing episode rating. Anime movies and anime status activities can show title-level IMDb and MAL scores.
 
