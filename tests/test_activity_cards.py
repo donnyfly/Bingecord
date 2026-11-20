@@ -63,6 +63,7 @@ def test_render_cache_and_native_links_preserved(monkeypatch):
         two=await activity_card_kwargs(embed,part,preview=True)
         assert render.call_count==1
         assert one['embed'] is None and one['file'].filename=='activity.png'
+        assert one['file'].description is None and two['file'].description is None
         assert one['view'].children[-1].url==embed.url
         assert one['view'].children[-1].label=='View on SIMKL'
         assert embed.to_dict()==before

@@ -387,7 +387,7 @@ async def activity_card_kwargs(embed,part,*,preview=False,sample=False,parts=Non
         service={'simkl':'SIMKL','wetrakr':'WeTrakr','mdblist':'MDBList'}.get(model['tracker'],'tracker')
         view.add_item(discord.ui.Button(label='View on '+service,url=target))
     # Explicit None also removes the legacy rich embed when refreshing an old card.
-    return {'embed':None,'file':discord.File(BytesIO(data),filename='activity.png',description=(model['title']+' · '+model['action'])[:1024]), 'view':view}
+    return {'embed':None,'file':discord.File(BytesIO(data),filename='activity.png'),'view':view}
 
 
 
