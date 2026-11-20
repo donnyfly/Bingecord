@@ -412,7 +412,15 @@ def test_single_card_grows_only_when_ratings_need_an_extra_row():
             assert x>=layout['text_width']+24 and x+width<=984
             assert layout['ratings_top']+row*layout['rating_gap']+layout['rating_height']<layout['height']-32
     with_note=activity_layout(dict(model,ratings=['IMDb 8.0/10'],notes=['Finished Season 2.']))
-    assert with_note['notes_top']==888 and with_note['height']==984
+    assert with_note['notes_top']==870 and with_note['height']==966
+    with_stacked_ratings=activity_layout(dict(
+        model,ratings=['IMDb 8.0/10','MAL 8.50/10','Your rating: 9/10'],
+        notes=['Finished Season 2.','Caught up with all currently released episodes.'],
+    ))
+    assert with_stacked_ratings['notes_top']==with_note['notes_top']
+    for (x,row),(_,width) in zip(with_stacked_ratings['note_positions'],with_stacked_ratings['notes']):
+        assert x+width<=with_stacked_ratings['text_width']
+        assert with_stacked_ratings['notes_top']+row*48+38<with_stacked_ratings['height']-32
     long=activity_layout(dict(model,title='A title with many words that must wrap within its own column',notes=['Finished Season 2.']))
     assert len(long['caption_lines'])==2 and long['notes_top']>long['caption_top']+90
 

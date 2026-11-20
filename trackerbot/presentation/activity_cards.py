@@ -235,21 +235,33 @@ def activity_layout(model):
     rating_positions,rating_rows=_flows([r[2] for r in ratings],444)
     row_ends={row:max(x+width for (x,r),(_,_,width) in zip(rating_positions,ratings) if r==row) for _,row in rating_positions}
     rating_positions=[(984-row_ends[row]+x,row) for x,row in rating_positions]
-    note_positions,note_rows=_flows([n[1] for n in notes],984)
     hero_top=126;hero_height=608;hero_bottom=hero_top+hero_height
     action_lines=_wrap(draw,model['action'],34,text_width,2,True)
     caption_lines=_wrap(draw,model.get('episode_title') or model['title'],40,text_width,2,True)
     action_top=hero_bottom+22;caption_top=action_top+len(action_lines)*42+8
     ratings_height=(rating_rows-1)*rating_gap+rating_height if ratings else 0
     ratings_top=action_top
-    metadata_bottom=max(caption_top+len(caption_lines)*48,ratings_top+ratings_height)
-    if model.get('members'):
+    caption_bottom=caption_top+len(caption_lines)*48
+    ratings_bottom=ratings_top+ratings_height
+    metadata_bottom=max(caption_bottom,ratings_bottom)
+    members=model.get('members',[])
+    note_width=984
+    if members:
         notes_top=metadata_bottom+14
+    else:
+        notes_top=caption_bottom+16
+        if notes_top<=ratings_bottom:
+            if all(width<=text_width for _,width in notes):
+                note_width=text_width
+            else:
+                notes_top=ratings_bottom+16
+    note_positions,note_rows=_flows([width for _,width in notes],note_width)
+    if members:
         members_top=notes_top+note_rows*48
     else:
-        notes_top=metadata_bottom+34
-        members_top=notes_top+(note_rows-1)*48+38 if notes else metadata_bottom
-    member_positions=[(index%2*498,index//2) for index in range(len(model.get('members',[])))]
+        notes_bottom=notes_top+(note_rows-1)*48+38 if notes else caption_bottom
+        members_top=max(metadata_bottom,notes_bottom)
+    member_positions=[(index%2*498,index//2) for index in range(len(members))]
     members_height=((len(member_positions)+1)//2)*124-12 if member_positions else 0
     bottom=members_top+members_height+(30 if model.get('extra_members') else 0)
     return dict(ratings=ratings,notes=notes,rating_positions=rating_positions,note_positions=note_positions,
