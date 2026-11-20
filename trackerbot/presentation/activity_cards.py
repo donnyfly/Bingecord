@@ -219,7 +219,7 @@ def local_timestamp(model):
 def activity_layout(model):
     """Keep individual status/title and ratings in a stable two-column metadata area."""
     draw=ImageDraw.Draw(Image.new('RGB',(1,1)));ratings=[];notes=[]
-    side_ratings=True;text_width=516
+    text_width=516
     rating_label_size=15;rating_size=34
     rating_gap=98;rating_height=86
     for rating in model.get('ratings',[])[:3]:
@@ -227,29 +227,28 @@ def activity_layout(model):
         name=rating[:match.start()].strip(' :') if match else rating
         name=name.replace('Your episode rating','Your episode').replace('Your series rating','Your series').replace('Your season-entry rating','Your season entry').replace('Your season rating','Your season')
         value=match.group() if match else '—'
-        width=min(984,max(132,int(max(draw.textlength(name.upper(),font=font(rating_label_size,weight=600),**SHAPING),draw.textlength(value,font=font(rating_size,True),**SHAPING)))+94))
-        if side_ratings:width=min(444,width)
+        width=min(444,max(132,int(max(draw.textlength(name.upper(),font=font(rating_label_size,weight=600),**SHAPING),draw.textlength(value,font=font(rating_size,True),**SHAPING)))+94))
         ratings.append((name,value,width))
     for note in (model.get('notes') or [])[:3]:
         width=min(984,int(draw.textlength(note,font=font(17,True),**SHAPING))+66)
         notes.append((note,width))
-    rating_positions,rating_rows=_flows([r[2] for r in ratings],444 if side_ratings else 984)
-    if side_ratings:
-        row_ends={row:max(x+width for (x,r),(_,_,width) in zip(rating_positions,ratings) if r==row) for _,row in rating_positions}
-        rating_positions=[(984-row_ends[row]+x,row) for x,row in rating_positions]
+    rating_positions,rating_rows=_flows([r[2] for r in ratings],444)
+    row_ends={row:max(x+width for (x,r),(_,_,width) in zip(rating_positions,ratings) if r==row) for _,row in rating_positions}
+    rating_positions=[(984-row_ends[row]+x,row) for x,row in rating_positions]
     note_positions,note_rows=_flows([n[1] for n in notes],984)
     hero_top=126;hero_height=608;hero_bottom=hero_top+hero_height
     action_lines=_wrap(draw,model['action'],34,text_width,2,True)
     caption_lines=_wrap(draw,model.get('episode_title') or model['title'],40,text_width,2,True)
     action_top=hero_bottom+22;caption_top=action_top+len(action_lines)*42+8
     ratings_height=(rating_rows-1)*rating_gap+rating_height if ratings else 0
-    if side_ratings:
-        ratings_top=action_top
-        notes_top=action_top+max(98 if model.get('members') else 184,caption_top-action_top+len(caption_lines)*48,ratings_height)+14
+    ratings_top=action_top
+    metadata_bottom=max(caption_top+len(caption_lines)*48,ratings_top+ratings_height)
+    if model.get('members'):
+        notes_top=metadata_bottom+14
+        members_top=notes_top+note_rows*48
     else:
-        ratings_top=caption_top+len(caption_lines)*48+20
-        notes_top=ratings_top+ratings_height+14
-    members_top=notes_top+(note_rows*48 if notes else 0)
+        notes_top=metadata_bottom+34
+        members_top=notes_top+(note_rows-1)*48+38 if notes else metadata_bottom
     member_positions=[(index%2*498,index//2) for index in range(len(model.get('members',[])))]
     members_height=((len(member_positions)+1)//2)*124-12 if member_positions else 0
     bottom=members_top+members_height+(30 if model.get('extra_members') else 0)
@@ -257,7 +256,7 @@ def activity_layout(model):
                 hero_top=hero_top,hero_height=hero_height,hero_bottom=hero_bottom,
                 action_top=action_top,caption_top=caption_top,action_lines=action_lines,caption_lines=caption_lines,
                 ratings_top=ratings_top,notes_top=notes_top,members_top=members_top,height=bottom+58,
-                side_ratings=side_ratings,text_width=text_width,rating_gap=rating_gap,rating_height=rating_height,
+                text_width=text_width,rating_gap=rating_gap,rating_height=rating_height,
                 member_positions=member_positions,members_height=members_height)
 
 
