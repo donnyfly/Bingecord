@@ -2817,6 +2817,7 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         app_commands.Choice(name="Film activity card", value="activity_movie"),
         app_commands.Choice(name="Watched Together card", value="activity_together"),
         app_commands.Choice(name="Status activity card", value="activity_status"),
+        app_commands.Choice(name="Reading Activity card", value="activity_reading"),
         app_commands.Choice(name="Profile card", value="profile"),
         app_commands.Choice(name="Leaderboard card", value="leaderboard"),
         app_commands.Choice(name="Server stats card", value="server_stats"),
@@ -2860,18 +2861,33 @@ async def simkl_debug(
     if community_event is not None:
         await i.response.send_message('The community_event option is only for Community event card previews.',ephemeral=True)
         return
-    if feature.value in {'activity_episode','activity_movie','activity_together','activity_status'}:
+    if feature.value in {'activity_episode','activity_movie','activity_together','activity_status','activity_reading'}:
         await i.response.defer(ephemeral=True)
         from trackerbot.presentation.activity_cards import activity_card_kwargs
-        together=feature.value=='activity_together';status_preview=feature.value=='activity_status';movie=feature.value not in {'activity_episode','activity_status'};group_parts=None;g=str(i.guild.id);uid=str(i.user.id)
-        source=await storage.get_activity_provider(g,uid) or 'simkl'
+        together=feature.value=='activity_together';status_preview=feature.value=='activity_status'
+        reading=feature.value=='activity_reading';movie=feature.value in {'activity_movie','activity_together'}
+        group_parts=None;g=str(i.guild.id);uid=str(i.user.id)
+        source='anilist' if reading else (await storage.get_activity_provider(g,uid) or 'simkl')
         records=await storage.get_activity_messages(g)
+        def matches(record,part):
+            if part['user']!=uid or part['source']!=source or (len(record['parts'])>1)!=together:
+                return False
+            meta=part['meta']
+            if reading:
+                return meta.get('media_type')=='manga'
+            return (meta.get('media_type')!='manga' and bool(meta.get('status'))==status_preview
+                    and (together or status_preview or bool(meta.get('movie'))==movie))
         selected=next(((record,part) for record in reversed(records) for part in record['parts']
-                       if part['user']==uid and part['source']==source and (bool(part['meta'].get('status')) if status_preview else not part['meta'].get('status'))
-                       and (together or status_preview or bool(part['meta'].get('movie'))==movie) and (len(record['parts'])>1 if together else len(record['parts'])==1)),None)
+                       if matches(record,part)),None)
         if selected:
             record,part=selected;embed=discord.Embed.from_dict(record['rendered']);sample=False
             if together:group_parts=[dict(p) for p in record['parts']];part=group_parts[0]
+        elif reading:
+            part={'guild':g,'user':uid,'source':'anilist','meta':{'media_type':'manga'}}
+            embed=discord.Embed(title='Example Manga',description='Read Chapter 1 of **Example Manga**\n🆕 Started reading this manga.',
+                                color=MEDIA_STYLES['manga'][0],timestamp=datetime.now(timezone.utc))
+            embed.set_author(name=i.user.display_name+ "'s Activity",icon_url=getattr(getattr(i.user,'display_avatar',None),'url',None))
+            embed.set_footer(text='Manga · AniList');sample=True
         else:
             part={'guild':g,'user':uid,'source':source,'meta':{'movie':movie,'episodes':[] if movie else [1]}}
             embed=discord.Embed(title='Example Film' if movie else 'Example Series',
@@ -4587,20 +4603,26 @@ async def tracker_source(i, provider: app_commands.Choice[str] | None = None, ma
         await i.response.send_message("AniList is not configured on this bot.",ephemeral=True)
         return
     if manga is not None and provider is None:
+        await i.response.defer(ephemeral=True)
         if not await storage.set_anilist_manga(g,uid,reading_enabled):
-            await i.response.send_message("Link your AniList account in this server first.",ephemeral=True)
+            await i.edit_original_response(content="Link your AniList account in this server first.")
             return
-        await i.response.send_message(
-            "AniList manga tracking is on. The first check sets a baseline silently." if reading_enabled else "AniList manga tracking is off.",
-            ephemeral=True,
-        )
+        detail="AniList manga tracking is off."
+        if reading_enabled:
+            ready=await provider_registry.get("anilist").initialize_manga(g,uid)
+            detail=("AniList manga tracking is on. You can update your next chapter now." if ready else
+                    "Manga tracking is on, but the baseline is pending. Run `/bingecord checknow` before updating a chapter.")
+        await i.edit_original_response(content=detail)
         return
     if provider is None:
         source=await storage.get_activity_provider(g,uid)
         active=provider_registry.get(source).manifest.display_name if source else "none"
         targets=await storage.get_provider_targets("anilist",g)
         reading=any(t["discord_user_id"]==uid and t["guild_user_data"]["anilist_manga"] for t in targets)
-        await i.response.send_message(f"Watch source here: **{active}**. Manga tracking: **{'AniList' if reading else 'off'}**.",ephemeral=True)
+        manga_state="off" if not reading else ("AniList · ready" if any(
+            t["discord_user_id"]==uid and "MANGA" in t["guild_user_data"]["anilist_lists"] for t in targets
+        ) else "AniList · baseline pending")
+        await i.response.send_message(f"Watch source here: **{active}**. Manga tracking: **{manga_state}**.",ephemeral=True)
         return
     if provider.value=="simkl" and not SIMKL_CLIENT_ID:
         await i.response.send_message("SIMKL is not configured on this bot. Set SIMKL_CLIENT_ID first.",ephemeral=True)
@@ -4614,10 +4636,11 @@ async def tracker_source(i, provider: app_commands.Choice[str] | None = None, ma
     if provider.value=="anilist" and not ANILIST_CLIENT_ID:
         await i.response.send_message("AniList is not configured on this bot.",ephemeral=True)
         return
+    await i.response.defer(ephemeral=True)
     changed=await storage.set_activity_provider(g,uid,provider.value,**({"manga":reading_enabled} if manga is not None else {}))
     if not changed:
         required=f"{provider.name} and AniList" if manga is not None and provider.value!="anilist" else provider.name
-        await i.response.send_message(f"Link your {required} account(s) in this server first.",ephemeral=True)
+        await i.edit_original_response(content=f"Link your {required} account(s) in this server first.")
         return
     detail=("AniList posts anime activity. The first check sets a baseline silently."
             if provider.value=="anilist" else
@@ -4627,7 +4650,11 @@ async def tracker_source(i, provider: app_commands.Choice[str] | None = None, ma
             "SIMKL activity resumes from now; its existing XP and statistics remain in place.")
     if manga is not None:
         detail+=f" Manga tracking is {'on' if reading_enabled else 'off'}."
-    await i.response.send_message(f"Activity source set to **{provider.name}**. {detail}",ephemeral=True)
+    if reading_enabled:
+        ready=await provider_registry.get("anilist").initialize_manga(g,uid)
+        detail+=(" You can update your next chapter now." if ready else
+                 " The manga baseline is pending. Run `/bingecord checknow` before updating a chapter.")
+    await i.edit_original_response(content=f"Activity source set to **{provider.name}**. {detail}")
 
 
 @bingecord_commands.command(name="style",description="Choose your personal style for episode and movie watch activities.")

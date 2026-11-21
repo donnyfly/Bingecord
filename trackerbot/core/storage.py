@@ -1007,6 +1007,18 @@ class Storage:
         await self.flush()
         return True
 
+    async def activity_account_matches(self, guild_id, user_id, provider, account_id):
+        async with _lock:
+            guild = self._guild(str(guild_id))
+            member = guild["users"].get(str(user_id)) if guild else None
+            user = self._data["users"].get(str(user_id))
+            if not member or not user or member.get("activity_provider") != provider:
+                return False
+            if not provider_linked(member, user, provider):
+                return False
+            current = (user.get("simkl_account_id") or f"unknown:{user_id}") if provider == "simkl" else user[provider].get("account_id")
+            return str(current) == str(account_id)
+
     async def save_activity_message(self, record):
         cutoff=datetime.now(timezone.utc)-timedelta(days=7)
         async with _lock:
@@ -1119,7 +1131,7 @@ class Storage:
     async def set_anilist_manga(self, guild_id, user_id, enabled: bool) -> bool:
         return await self.set_activity_provider(guild_id,user_id,None,manga=enabled)
 
-    async def anilist_snapshot(self, guild_id, user_id, token, media_type, *, replace=None):
+    async def anilist_snapshot(self, guild_id, user_id, token, media_type, *, replace=None, seed=False):
         """Validate the active connection before reading or advancing a baseline."""
         async with _lock:
             member = self._guild_user(str(guild_id), str(user_id))
@@ -1129,7 +1141,7 @@ class Storage:
             selected = member["anilist_manga"] if media_type == "MANGA" else member["activity_provider"] == "anilist"
             if not selected or user["anilist"]["access_token"] != token:
                 return False, None
-            if replace is not None:
+            if replace is not None and (not seed or media_type not in member["anilist_lists"]):
                 member["anilist_lists"][media_type] = copy.deepcopy(replace)
                 self._dirty = True
             snapshot = copy.deepcopy(member["anilist_lists"].get(media_type))

@@ -177,6 +177,17 @@ def test_debug_activity_previews_are_private_without_sync_or_preferences_changes
             assert i.followup.send.await_args.kwargs['ephemeral']
             assert render.await_args.kwargs=={'preview':True,'sample':True}
             assert render.await_args.args[1]['source']=='wetrakr'
+        await bot.simkl_debug.callback(i,app_commands.Choice(name='Reading Activity card',value='activity_reading'))
+        assert i.followup.send.await_args.kwargs['ephemeral']
+        assert render.await_args.kwargs=={'preview':True,'sample':True}
+        assert render.await_args.args[1]['source']=='anilist'
+        assert render.await_args.args[1]['meta']['media_type']=='manga'
+        saved_part=render.await_args.args[1]
+        saved=discord.Embed(title='Recent Manga',description='Read Chapter 3 of **Recent Manga**')
+        bot.storage.get_activity_messages.return_value=[{'parts':[saved_part],'rendered':saved.to_dict()}]
+        await bot.simkl_debug.callback(i,app_commands.Choice(name='Reading Activity card',value='activity_reading'))
+        assert render.await_args.kwargs=={'preview':True,'sample':False}
+        assert render.await_args.args[0].title=='Recent Manga'
         writer.assert_not_awaited();poll.assert_not_awaited()
     asyncio.run(run())
 

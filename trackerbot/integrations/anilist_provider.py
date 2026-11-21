@@ -38,7 +38,7 @@ def list_update(entry, previous):
         first = 1
     if repeating and old_status != "REPEATING" and entry.status == "COMPLETED" and entry.repeat and entry.repeat > (old_repeat or 0):
         first = 1
-    advanced = bool(progress and old_progress is not None and progress >= first)
+    advanced = bool(progress and progress >= first)
     if advanced and entry.status in {"CURRENT", "COMPLETED", "REPEATING"}:
         verb = ("Reread" if repeating else "Read") if reading else ("Rewatched" if repeating else "Watched")
         if movie:
@@ -96,7 +96,7 @@ class AniListLinkModal(discord.ui.Modal, title="Link your AniList account"):
             return
         await interaction.followup.send(
             "AniList linked. Use `/bingecord source provider:AniList` for anime and "
-            "`/bingecord source manga:On` for manga. Your first check sets a baseline silently.",
+            "`/bingecord source manga:On` for manga.",
             ephemeral=True,
         )
 
@@ -238,11 +238,34 @@ class AniListProvider(BaseProvider):
                         if fetched[key] is not None:
                             count += await self._publish(target, linked, media_type, fetched[key])
                     except (AniListError, discord.HTTPException) as exc:
-                        log.warning("AniList %s sync for guild %s failed (%s). Re-link if the token expired.",
-                                    media_type, target["guild_id"], getattr(exc, "status", None))
+                        detail = str(exc) if isinstance(exc, AniListError) else f"Discord HTTP {exc.status}"
+                        log.warning("AniList %s sync for guild %s failed: %s", media_type, target["guild_id"], detail)
                     if self.retry_at > time.monotonic():
                         return count
         return count
+
+    async def initialize_manga(self, guild_id, uid):
+        """Capture the baseline when manga is enabled, before the next chapter update."""
+        storage = self.app.storage
+        user = await storage.get_user(uid)
+        linked = (user or {}).get("anilist")
+        if not linked:
+            return False
+        token = linked["access_token"]
+        active, baseline = await storage.anilist_snapshot(guild_id, uid, token, "MANGA")
+        if not active or baseline is not None:
+            return active
+        try:
+            async with aiohttp.ClientSession() as session:
+                entries = await self._read_list(AniListClient(session), linked, "MANGA")
+        except AniListError as exc:
+            log.warning("AniList manga baseline for guild %s failed: %s", guild_id, exc)
+            return False
+        active, _ = await storage.anilist_snapshot(
+            guild_id, uid, token, "MANGA",
+            replace={str(entry.media_id): progress_state(entry) for entry in entries}, seed=True,
+        )
+        return active
 
     async def _publish(self, target, linked, media_type, entries):
         guild_id, uid = target["guild_id"], target["discord_user_id"]
@@ -253,7 +276,9 @@ class AniListProvider(BaseProvider):
             return 0
         latest = {str(entry.media_id): progress_state(entry) for entry in entries}
         if baseline is None:
-            await storage.anilist_snapshot(guild_id, uid, token, media_type, replace=latest)
+            await storage.anilist_snapshot(guild_id, uid, token, media_type, replace=latest, seed=True)
+            log.info("AniList %s baseline checked for guild %s, member %s (%s entries).",
+                     media_type, guild_id, uid, len(latest))
             return 0
         channel_id = int(target["channel_id"])
         count = 0
@@ -266,6 +291,8 @@ class AniListProvider(BaseProvider):
             if not (await storage.anilist_snapshot(guild_id, uid, token, media_type))[0]:
                 return count
             if not await self._send(channel, target, linked, entry, update):
+                log.warning("AniList %s activity could not post in guild %s for member %s; update remains pending.",
+                            media_type, guild_id, uid)
                 return count
             count += 1
             baseline[key] = latest[key]
@@ -303,7 +330,8 @@ class AniListProvider(BaseProvider):
                                      title=entry.title, title_url=entry.site_url, poster=entry.cover_url,
                                      preferences=prefs, status_activity=bool(meta.get("status")), provider="AniList")
         participant = {"guild": guild_id, "user": uid, "source": "anilist", "account": account.account_id, "meta": meta}
-        marker = current_post.set({"parts": [participant], "standalone": True})
+        marker = current_post.set({"parts": [participant], "standalone": True,
+                                   "base": embed.to_dict(), "rendered": embed.to_dict()})
         try:
             return await self.app.send_embed(channel, embed, "AniList activity")
         finally:

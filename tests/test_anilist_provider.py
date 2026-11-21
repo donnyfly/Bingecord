@@ -69,11 +69,13 @@ def test_manga_and_anime_switch_independently_and_deliver_after_baseline(tmp_pat
         await store.set_channel("1", 3)
         assert await store.set_anilist_manga("1", "2", True)
         assert await store.get_activity_provider("1", "2") == "simkl"
-        assert await provider.poll("1") == 0
+        assert await provider.initialize_manga("1", "2")
         assert [call.args[-1] for call in provider._read_list.await_args_list] == ["MANGA"]
         provider._send.assert_not_awaited()
 
         provider._read_list.side_effect = lambda _, linked, kind: (entry(kind, progress=5),)
+        assert await provider.initialize_manga("1", "2")
+        assert provider._read_list.await_count == 1
         provider._send.return_value = False
         assert await provider.poll("1") == 0
         provider._send.return_value = True
