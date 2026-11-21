@@ -320,6 +320,8 @@ class AniListProvider(BaseProvider):
         meta.update(media_type=media, ids={"anilist": entry.media_id})
         prefs = await self.app.prefs(guild_id, uid)
         if media == "manga":
+            if entry.mal_id:
+                meta["ids"]["mal"] = entry.mal_id
             prefs = {**prefs, "style": "card"}
         elif entry.score and prefs.get("show_personal", True):
             desc += f"\n💬 Your list rating: {entry.score:g}/10"

@@ -2,6 +2,7 @@
 import asyncio
 from collections import OrderedDict
 from io import BytesIO
+from html.parser import HTMLParser
 from datetime import datetime,timezone
 from zoneinfo import ZoneInfo,ZoneInfoNotFoundError
 from pathlib import Path
@@ -19,7 +20,7 @@ from .typography import font,text as paint,label,SHAPING
 from .card_details import details_view
 
 WHITE=(241,243,248);MUTED=(161,166,180);LINE=(48,51,62)
-HOSTS={'image.tmdb.org','simkl.in','cdn.simkl.in','simkl.net','cdn.simkl.net','cdn.discordapp.com','media.discordapp.net','discord.com','s4.anilist.co'}
+HOSTS={'image.tmdb.org','simkl.in','cdn.simkl.in','simkl.net','cdn.simkl.net','cdn.discordapp.com','media.discordapp.net','discord.com','s4.anilist.co','cdn.myanimelist.net'}
 _images=OrderedDict();_cards=OrderedDict();_download_gate=asyncio.Semaphore(4);_render_gate=asyncio.Semaphore(2)
 
 
@@ -118,6 +119,39 @@ async def _download(session,url):
     while len(_images)>32 or sum(im.width*im.height*4 for _,im in _images.values() if im)>32_000_000:
         _images.popitem(last=False)
     return result
+
+
+class MangaCoverMetadata(HTMLParser):
+    cover_url = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag != 'meta':
+            return
+        fields = dict(attrs)
+        if fields.get('property') == 'og:image':
+            url = image_url(fields.get('content'))
+            if url and urlparse(url).hostname == 'cdn.myanimelist.net' and urlparse(url).path.startswith('/images/manga/'):
+                self.cover_url = url
+
+
+async def _mal_manga_cover(session, mal_id):
+    """Resolve a public cover using AniList's explicit MyAnimeList mapping."""
+    if type(mal_id) is not int or mal_id <= 0:
+        return None
+    parser = MangaCoverMetadata()
+    try:
+        async with session.get(f'https://myanimelist.net/manga/{mal_id}', allow_redirects=False) as response:
+            if response.status != 200:
+                return None
+            remaining = 64_000
+            async for chunk in response.content.iter_chunked(8192):
+                parser.feed(chunk[:remaining].decode('utf-8', errors='replace'))
+                remaining -= len(chunk)
+                if parser.cover_url or remaining <= 0:
+                    break
+    except (aiohttp.ClientError, TimeoutError, ValueError):
+        return None
+    return await _download(session, parser.cover_url)
 
 
 def _wrap(draw,value,size,width,max_lines=2,bold=False):
@@ -424,11 +458,15 @@ def render_activity_png(model,artwork=None):
 
 async def activity_card_kwargs(embed,part,*,preview=False,sample=False,parts=None):
     model=together_model(embed,parts,preview=preview,sample=sample) if parts and len(parts)>1 else card_model(embed,part,preview=preview,sample=sample)
+    mal_id=part.get('meta',{}).get('ids',{}).get('mal') if model.get('reading') else None
+    if mal_id:
+        model['mal_id']=mal_id
     key=hashlib.sha256(json.dumps(model,sort_keys=True).encode()).hexdigest()
     async with _render_gate:
         data=_cards.get(key)
         if data is None:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as session:
+            timeout=aiohttp.ClientTimeout(total=5 if model.get('reading') else 3)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 assets=dict(model);keys=('image','logo','avatar')
                 for index,member in enumerate(model.get('members',[])):
                     name='member:'+str(index);assets[name]=member['avatar'];keys+= (name,)
@@ -444,7 +482,11 @@ async def activity_card_kwargs(embed,part,*,preview=False,sample=False,parts=Non
                     for task in tasks:
                         if not task.done():task.cancel()
                     await asyncio.gather(*tasks,return_exceptions=True)
-            missing_art=bool(model.get('image') and not art.get('image'))
+                if mal_id and not art.get('image'):
+                    fallback=await _mal_manga_cover(session,mal_id)
+                    if fallback is not None:
+                        art['image']=fallback
+            missing_art=bool((model.get('image') or mal_id) and not art.get('image'))
             if missing_art and not model.get('reading'):
                 raise ValueError('Activity artwork is temporarily unavailable')
             data=(await asyncio.to_thread(render_activity_png,model,art)).getvalue()
