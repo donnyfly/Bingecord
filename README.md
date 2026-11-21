@@ -4,10 +4,11 @@ A self-hosted Discord bot that turns your **SIMKL, WeTrakr, or MDBList watch act
 
 It supports automatic provider syncing, episode grouping, artwork and ratings, personal/server statistics, achievements, XP progression, challenges, leaderboards, and optional weekly recaps. All linked-account data is stored locally on your own server.
 
-<img width="500" height="" alt="photo_2026-10-13_13-32-32" src="https://github.com/user-attachments/assets/4589a32a-bc2c-462e-a5e7-2577b092e2cb" />
-<img width="500" height="" alt="photo_2026-10-13_13-32-50" src="https://github.com/user-attachments/assets/ea953ba0-7ae2-46ac-8024-6a31bbcd001e" />
-<img width="500" height="" alt="photo_2026-10-13_13-32-46" src="https://github.com/user-attachments/assets/58ac6edc-d0b7-415e-97b0-913d3cbad894" />
-<img width="500" height="" alt="photo_2026-10-13_13-32-39" src="https://github.com/user-attachments/assets/3677270d-8058-4083-baee-7d94535af417" />
+<img width="500" height="" alt="image" src="https://github.com/user-attachments/assets/943f4581-1441-4374-ad5d-420c4a8c8fe9" />
+<img width="500" height="" alt="image" src="https://github.com/user-attachments/assets/37cf949c-0d44-4506-b187-f1be517aef9a" />
+<img width="500" height="" alt="image" src="https://github.com/user-attachments/assets/39af5576-b9d2-4ef8-893d-f03ba28d7a73" />
+<img width="500" height="" alt="image" src="https://github.com/user-attachments/assets/d0a5393c-027d-4e9c-bbd3-950ab2deb94c" />
+
 
 
 ## What you get
