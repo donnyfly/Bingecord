@@ -227,16 +227,18 @@ class AniListProvider(BaseProvider):
                 for media_type, enabled in (
                     ("ANIME", member["activity_provider"] == "anilist"), ("MANGA", member["anilist_manga"]),
                 ):
-                    if not enabled or not target["channel_id"]:
+                    if not enabled or (media_type == "ANIME" and not target["channel_id"]):
                         continue
                     linked = target["user_data"]["anilist"]
                     key = (linked["account_id"], linked["access_token"], media_type)
                     try:
                         if key not in fetched:
                             fetched[key] = None
-                            fetched[key] = await self._read_list(client, linked, media_type)
+                            observed_at = datetime.now(timezone.utc)
+                            fetched[key] = (await self._read_list(client, linked, media_type), observed_at)
                         if fetched[key] is not None:
-                            count += await self._publish(target, linked, media_type, fetched[key])
+                            entries, observed_at = fetched[key]
+                            count += await self._publish(target, linked, media_type, entries, observed_at)
                     except (AniListError, discord.HTTPException) as exc:
                         detail = str(exc) if isinstance(exc, AniListError) else f"Discord HTTP {exc.status}"
                         log.warning("AniList %s sync for guild %s failed: %s", media_type, target["guild_id"], detail)
@@ -255,19 +257,23 @@ class AniListProvider(BaseProvider):
         active, baseline = await storage.anilist_snapshot(guild_id, uid, token, "MANGA")
         if not active or baseline is not None:
             return active
+        observed_at = datetime.now(timezone.utc)
         try:
             async with aiohttp.ClientSession() as session:
                 entries = await self._read_list(AniListClient(session), linked, "MANGA")
         except AniListError as exc:
             log.warning("AniList manga baseline for guild %s failed: %s", guild_id, exc)
             return False
-        active, _ = await storage.anilist_snapshot(
-            guild_id, uid, token, "MANGA",
-            replace={str(entry.media_id): progress_state(entry) for entry in entries}, seed=True,
-        )
+        snapshot = {str(entry.media_id): progress_state(entry) for entry in entries}
+        if await storage.record_reading(guild_id, uid, token, snapshot, observed_at):
+            active, _ = await storage.anilist_snapshot(
+                guild_id, uid, token, "MANGA", replace=snapshot, seed=True,
+            )
+        else:
+            active, _ = await storage.anilist_snapshot(guild_id, uid, token, "MANGA")
         return active
 
-    async def _publish(self, target, linked, media_type, entries):
+    async def _publish(self, target, linked, media_type, entries, observed_at=None):
         guild_id, uid = target["guild_id"], target["discord_user_id"]
         token = linked["access_token"]
         storage = self.app.storage
@@ -275,10 +281,17 @@ class AniListProvider(BaseProvider):
         if not active:
             return 0
         latest = {str(entry.media_id): progress_state(entry) for entry in entries}
+        if media_type == "MANGA":
+            recorded = await storage.record_reading(guild_id, uid, token, latest, observed_at or datetime.now(timezone.utc))
+            if not recorded:
+                return 0
         if baseline is None:
             await storage.anilist_snapshot(guild_id, uid, token, media_type, replace=latest, seed=True)
             log.info("AniList %s baseline checked for guild %s, member %s (%s entries).",
                      media_type, guild_id, uid, len(latest))
+            return 0
+        if not target["channel_id"]:
+            await storage.anilist_snapshot(guild_id, uid, token, media_type, replace=latest)
             return 0
         channel_id = int(target["channel_id"])
         count = 0

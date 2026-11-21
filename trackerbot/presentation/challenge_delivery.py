@@ -36,7 +36,7 @@ async def challenge_card(send,user,state,*,now,ephemeral=False):
     if ephemeral:kwargs['ephemeral']=True
     for section in state['sections']:
         text='\n'.join(f"{'✓' if row['done'] else '○'} **{row['name']}** · {row['value']:g}/{row['target']} · +{row['xp']:,} XP\n{requirement(row)}"+(' · Awaiting title details' if row.get('pending') and not row['done'] else '') for row in section['rows'])
-        embed.add_field(name=section['scope'].title()+' · Resets '+discord.utils.format_dt(datetime.fromisoformat(section['end']),'R'),value=text,inline=False)
+        embed.add_field(name=section['scope'].title()+(' reading' if section.get('reading') else '')+' · Resets '+discord.utils.format_dt(datetime.fromisoformat(section['end']),'R'),value=text,inline=False)
     try:
         data=await asyncio.to_thread(render_challenges_png,user.display_name,state,avatar=images.get('avatar'),posters=posters,now=now)
         from .card_details import details_view

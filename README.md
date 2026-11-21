@@ -151,7 +151,22 @@ Enable any combination of SIMKL, WeTrakr and MDBList. None is the primary provid
 3. In Discord, run `/bingecord link provider:AniList`, authorize on AniList, and enter the authorization code in the bot's form.
 4. Use `/bingecord source provider:AniList` for anime and independently set `/bingecord source manga:On` for manga. To keep SIMKL for watching and use AniList for manga, leave the watch source on SIMKL and turn manga on.
 
-Each selected list starts with a silent baseline and posts later progress and status changes in the server's activity channel. Turning manga on attempts to set its baseline immediately. If it is pending, run `/bingecord checknow` before updating your next chapter. AniList anime uses the Watch Activity layout and the episode numbers from each AniList entry. Manga posts a portrait-cover Reading Activity card. Admins can use `/bingecord debug` with **Reading Activity card** to preview it privately. Private list entries are skipped. AniList compares list snapshots, so multiple edits between checks are summarized by the latest state. AniList activity is currently separate from XP, Watched Together, and recommendations. If authorization expires, link AniList again.
+Each selected list starts with a silent baseline and posts later progress and status changes in the server's activity channel. Turning manga on attempts to set its baseline immediately. If it is pending, run `/bingecord checknow` before updating your next chapter. AniList anime uses the Watch Activity layout and the episode numbers from each AniList entry. Manga posts a portrait-cover Reading Activity card. Admins can use `/bingecord debug` with **Reading Activity card** to preview it privately. Private list entries are skipped. AniList compares list snapshots, so multiple edits between checks are summarized by the latest state. AniList anime activity is separate from XP. AniList activity does not contribute to Watched Together or recommendations. If authorization expires, link AniList again.
+
+Manga tracking adds an AniList section to member and server stats, a Reading section to
+weekly recaps, and a Manga chapters category to the leaderboard. The initial list
+snapshot contributes to lifetime totals and can unlock lifetime reading achievements
+and their one-time XP rewards. Current chapter totals use the progress reported on
+public list entries. Daily and weekly reading challenges, reading streaks, the
+weekly community reading goal, and period leaderboards use new chapter progress
+detected after the initial sync. Manga never earns per-chapter XP.
+
+The weekly community reading goal is 100 chapters. When the server reaches it,
+readers who contributed at least 3 chapters receive 350 XP after the week ends
+if progression is enabled. Personal challenges reset in UTC. Server recaps,
+community goals, and period leaderboards use the server timezone. Updates are
+credited to the time Bingecord detects them because snapshots can combine several
+AniList edits. Relinking seeds a fresh baseline and preserves previously earned XP.
 
 ### 5. Create the Docker setup
 

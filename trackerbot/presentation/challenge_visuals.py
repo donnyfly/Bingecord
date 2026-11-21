@@ -10,7 +10,9 @@ WHITE=(241,243,248);MUTED=(161,166,180);ACCENT=(154,140,232);GREEN=(82,196,166);
 
 def render_challenges_png(name,state,*,avatar=None,posters=None,now=None):
     now=now or datetime.now(timezone.utc);posters=posters or {}
-    image=background((1080,1500),ACCENT);draw=ImageDraw.Draw(image)
+    has_reading=any(section.get("reading") for section in state["sections"])
+    extra=558 if has_reading else 0
+    image=background((1080,1500+extra),ACCENT);draw=ImageDraw.Draw(image)
     def text(x,y,value,size=20,fill=WHITE,bold=False,width=900):
         face=fit(draw,str(value),size,width,bold)
         paint(draw,(x,y),short(draw,str(value),face.size,width,bold),font=face,fill=fill)
@@ -20,15 +22,17 @@ def render_challenges_png(name,state,*,avatar=None,posters=None,now=None):
         draw.ellipse((56,78,116,138),fill=LINE)
         paint(draw,(86,108),str(name)[:1].upper(),font=font(25,True),fill=ACCENT,anchor='mm')
     text(134,78,name,32,bold=True,width=520)
-    text(134,120,'Your next watch, with a little extra purpose.',16,MUTED,width=520)
+    text(134,120,'Watching and reading goals' if has_reading else 'Watching goals',16,MUTED,width=520)
     panel(image,(712,70,1024,164),22);label(draw,(734,85),'Earned this week')
     text(734,109,f"{state.get('earned',0):,} XP",30,ACCENT,True,width=268)
     for index,section in enumerate(state['sections']):
-        y=195+index*526;daily=section['scope']=='daily';accent=ACCENT if daily else (121,169,235)
-        label(draw,(56,y),'Daily picks' if daily else 'Weekly pursuits',size=17,fill=WHITE)
+        daily=section['scope']=='daily';accent=ACCENT if daily else (121,169,235)
+        y=195+index*526 if index<2 else 1247+(index-2)*203
+        title=('Daily reading' if daily else 'Weekly reading') if section.get("reading") else ('Daily picks' if daily else 'Weekly pursuits')
+        label(draw,(56,y),title,size=17,fill=WHITE)
         end=datetime.fromisoformat(section['end']);hours=max(0,int((end-now).total_seconds()//3600));remaining=f'{hours//24}d {hours%24}h' if hours>=24 else f'{hours}h'
         count=sum(r['done'] for r in section['rows'])
-        text(702,y,f'{count} / 3 complete · Resets in {remaining}',14,MUTED,width=322)
+        text(702,y,f'{count} / {len(section['rows'])} complete · Resets in {remaining}',14,MUTED,width=322)
         for row_index,row in enumerate(section['rows']):
             top=y+36+row_index*153;done=row['done'];colour=GREEN if done else accent
             panel(image,(56,top,1024,top+137),20)
@@ -52,9 +56,9 @@ def render_challenges_png(name,state,*,avatar=None,posters=None,now=None):
                 draw.ellipse((914,top+40,966,top+92),outline=colour,width=2)
                 if done:draw.line((927,top+66,937,top+76,954,top+55),fill=colour,width=3)
                 else:paint(draw,(940,top+66),'+' if row['kind']=='minutes' else '?',font=font(27,True),fill=colour,anchor='mm')
-    panel(image,(56,1255,1024,1440),22);label(draw,(80,1276),'How your progress counts')
-    text(80,1310,'Shared across SIMKL, WeTrakr and MDBList.',21,bold=True,width=900)
-    text(80,1346,'Weekly discovery: a film, 3 regular episodes, or a verified season finish.',15,MUTED,width=900)
-    text(80,1376,'Daily genre picks need a film or 2 regular episodes. Collection goals count each title once.',14,MUTED,width=900)
-    text(56,1460,'Resets at 00:00 UTC · Rewards are additional to watch XP · Removed watches can reverse rewards',12,MUTED,width=968)
+    panel(image,(56,1255+extra,1024,1440+extra),22);label(draw,(80,1276+extra),'How your progress counts')
+    text(80,1310+extra,'Shared across SIMKL, WeTrakr and MDBList.',21,bold=True,width=900)
+    text(80,1346+extra,'Weekly discovery: a film, 3 regular episodes, or a verified season finish.',15,MUTED,width=900)
+    text(80,1376+extra,'Daily genre picks need a film or 2 regular episodes. Collection goals count each title once.',14,MUTED,width=900)
+    text(56,1460+extra,'Resets at 00:00 UTC · Manga goals count chapter progress detected after the initial sync' if has_reading else 'Resets at 00:00 UTC · Removed watches can reverse rewards',12,MUTED,width=968)
     return png(image)

@@ -3,6 +3,7 @@ import copy
 from collections import defaultdict
 from datetime import date,datetime,timedelta,timezone
 from .community_events import metadata_key,parse_stamp
+from . import reading
 
 DAILY_START=date(2026,11,20)
 WEEKLY_START=date(2026,11,23)
@@ -125,6 +126,14 @@ def progress(progression,challenge,start,end,*,watch_rows=None):
             'poster_path':r['meta'].get('poster_path')} for k,r in list(distinct.items())[:6]]}
 
 
+def reading_periods(now):
+    day = now.astimezone(timezone.utc).date()
+    monday = day - timedelta(days=day.weekday())
+    for scope, at, days in (("daily", day, 1), ("weekly", monday, 7)):
+        start = datetime.combine(at, datetime.min.time(), tzinfo=timezone.utc)
+        yield scope, start, start + timedelta(days=days)
+
+
 def snapshot(progression,now,*,preview=False):
     day=now.astimezone(timezone.utc).date();monday=day-timedelta(days=day.weekday());sections=[]
     earned=0;watch_rows=watches(progression)
@@ -150,6 +159,17 @@ def snapshot(progression,now,*,preview=False):
             done=ch['id'] in progression.get('challenge_completions',{}).get(f'{scope}:{at.isoformat()}',{}) if not preview else state['value']>=ch['target']
             rows.append({**ch,**state,'done':done})
         sections.append({'scope':scope,'end':end.isoformat(),'rows':rows})
+    if "reading_events" in progression:
+        for scope, start, end in reading_periods(now):
+            events = list(reading.in_period(progression["reading_events"], start, end))
+            completed = progression.get("challenge_completions", {}).get(f"{scope}:{start.date().isoformat()}", {})
+            sections.append({
+                "scope": scope, "reading": True, "end": end.isoformat(),
+                "rows": [
+                    {**ch, "value": reading.challenge_value(events, ch["kind"]), "done": ch["id"] in completed}
+                    for ch in reading.challenges(scope)
+                ],
+            })
     return {'sections':sections,'earned':earned,'preview':preview}
 
 
@@ -159,4 +179,6 @@ def requirement(challenge):
             'classic_film':'Watch a film released before 2000','distinct_films':f'Watch {target} different films',
             'new_series':'Start S1E1 of a series new to your credited history',
             'genres':f'{target} genres across {target} qualifying titles','decades':f'Titles from {target} different decades',
-            'film_and_season':'Watch a film and finish a verified season'}.get(kind,challenge['name'])
+             "reading_chapters": f"Read {target} manga chapters",
+            "reading_variety": f"Read at least 3 chapters each from {target} manga",
+            'film_and_season':'Watch a film and finish a verified season' }.get(kind,challenge['name'])

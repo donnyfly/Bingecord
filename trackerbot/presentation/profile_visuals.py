@@ -106,7 +106,8 @@ def render_profile_png(name, data, artwork=None):
     artwork=artwork or {};featured=data.get('featured_titles') or []
     hero=artwork.get('hero')
     accent=accent_for_tier(data['level'],data['prestige'])
-    image=background((1080,1380),accent,hero);draw=ImageDraw.Draw(image)
+    reading=data.get("reading")
+    image=background((1080,1380+(155 if reading is not None else 0)),accent,hero);draw=ImageDraw.Draw(image)
     def text(x,y,value,size=20,colour=WHITE,bold=False,width=None):
         value=str(value);face=fit(draw,value,size,width,bold) if width else font(size,bold)
         card_text(draw,(x,y),value,font=face,fill=colour)
@@ -197,6 +198,13 @@ def render_profile_png(name, data, artwork=None):
     for idx,(key,title) in enumerate([('watch_xp','Watch XP'),('achievement_xp','Achievements'),('challenge_xp','Challenges'),('community_xp','Community')]):
         x=78+idx*240;label(x,1231,title);text(x,1258,f"{data[key]:,}",24,WHITE,True,width=200)
     text(56,1335,f"{data['lifetime_xp']:,} lifetime XP · {data['last_30']:,} watches in 30 days",14,MUTED)
+    if reading is not None:
+        from trackerbot.core.reading import STATUS_LABELS
+        panel(image,(56,1370,1024,1500))
+        label(80,1389,'Manga · AniList')
+        text(80,1419,f"{reading['chapters']:,} chapters recorded · {reading['completed']:,} manga finished",25,WHITE,True,width=920)
+        statuses=" · ".join(f"{reading['statuses'][status]:,} {name.lower()}" for status,name in STATUS_LABELS.items())
+        text(80,1460,statuses,16,MUTED,width=920)
     return png(image)
 
 
@@ -212,7 +220,8 @@ def render_summary_png(guild_name, heading, subtitle, metrics, leaders, *, icon=
         from .social_visuals import render_recap
         return render_recap(guild_name,subtitle,metrics,leaders,icon=icon,story=story,avatars=avatars,artwork=artwork)
     accent=(121,159,235) if 'week' in heading.lower() else (239,190,105)
-    image=background((1080,980),accent);draw=ImageDraw.Draw(image)
+    manga=dict(metrics).get("Manga chapters")
+    image=background((1080,980+(126 if manga is not None else 0)),accent);draw=ImageDraw.Draw(image)
     def text(x,y,value,size=20,colour=WHITE,bold=False,width=900):
         card_text(draw,(x,y),str(value),font=fit(draw,value,size,width,bold),fill=colour)
     card_label(draw,(56,38),f'Bingecord · {heading}',fill=MUTED)
@@ -242,5 +251,9 @@ def render_summary_png(guild_name, heading, subtitle, metrics, leaders, *, icon=
         card_label(draw,(82,y),label,fill=accent)
         text(82,y+24,short(draw,value,24,914,True),24,WHITE,True,width=914)
         if idx<len(highlights)-1:draw.line((82,y+69,998,y+69),fill=LINE)
-    text(56,944,'Anime totals are included in episodes and movies · Members use their selected source',14,MUTED)
+    if manga is not None:
+        panel(image,(56,944,1024,1050))
+        card_label(draw,(80,964),'Manga · AniList',fill=MUTED)
+        text(80,995,f"{manga:,} chapters recorded · {dict(metrics)['Manga finished']:,} manga finished",24,WHITE,True,width=920)
+    text(56,1070 if manga is not None else 944,'Anime totals are included in episodes and movies · Members use their selected source',14,MUTED)
     return png(image)

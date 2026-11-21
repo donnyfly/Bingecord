@@ -15,7 +15,7 @@ from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from trackerbot.core.progression import challenge_pool, challenges_for, roll_prestige, xp_for_level, xp_for_watch, watch_minutes, event_watch_minutes, WATCH_XP_RULE
 from trackerbot.core.community import challenge_for_week, watch_contributions, split_pool, minute_contributions, watchathon_goal, watchathon_rewards
-from trackerbot.core import watch_ledger
+from trackerbot.core import reading, watch_ledger
 from trackerbot.core.providers import TRACKER_NAMES, provider_linked
 from trackerbot.core.tracker_mapping import identity_from_event, identity_from_play, normalized_ids
 
@@ -470,6 +470,8 @@ def _revoke_unmet_watch_challenges(progression: dict,*,modern_only=False) -> int
         requirements = {item['id']: item for item in legacy+definitions}
         counts = daily[day] if scope == "daily" else weekly[day]
         for challenge_id, reward in list(completions.items()):
+            if challenge_id.startswith("reading_"):
+                continue
             definition = reward.get("definition") or requirements.get(challenge_id)
             if modern_only and (definition or {}).get('version')!=2:continue
             if definition and _personal_challenge_value(progression,definition,day,scope,counts,score_cache) < definition['target']:
@@ -1149,6 +1151,179 @@ class Storage:
             await self.flush()
         return True, snapshot
 
+    async def record_reading(self, guild_id, user_id, token, snapshot, observed_at):
+        """Commit reading independently of Discord card delivery."""
+        gid, uid = str(guild_id), str(user_id)
+        async with _lock:
+            guild = self._guild(gid)
+            member = self._guild_user(gid, uid)
+            user = self._user(uid)
+            if not member or not user or not member["anilist_manga"] or not provider_linked(member, user, "anilist"):
+                return False
+            linked = user["anilist"]
+            if linked["access_token"] != token:
+                return False
+            account = str(linked["account_id"])
+            record = guild.setdefault("reading", {}).setdefault(uid, {})
+            stamp = observed_at.isoformat()
+            if record.get("observed_at", "") >= stamp:
+                return False
+            delivery_baseline = member["anilist_lists"].get("MANGA")
+            seed = delivery_baseline is None
+            previous = record.get("snapshot", delivery_baseline or {}) if record.get("account", account) == account else {}
+            if record.get("account", account) != account:
+                seed = True
+            changed = seed or record.get("snapshot") != snapshot
+            events = []
+            if changed:
+                events = list(reading.observe(snapshot, previous, record.setdefault("ceilings", {}), account, observed_at, seed=seed))
+                record.update(account=account, snapshot=copy.deepcopy(snapshot))
+            record["observed_at"] = stamp
+            if events:
+                record.setdefault("events", []).extend(events)
+            features = guild["features"]
+            progression = user["progression"]
+            global_events = progression.setdefault("reading_events", [])
+            credited = progression.setdefault("reading_ceilings", {})
+            for event in events:
+                if not event["chapters"]:
+                    continue
+                key = event["pass_key"]
+                start = max(event["first"], credited.get(key, 0) + 1)
+                if start <= event["last"]:
+                    global_events.append({**event, "first": start, "chapters": event["last"] - start + 1})
+                    credited[key] = event["last"]
+            if any(event["chapters"] for event in events) and features["progression"] and features["challenges"]:
+                self._complete_reading_challenges(progression, observed_at)
+            if features["achievements"] and features["progression"]:
+                metrics = reading.lifetime(snapshot)
+                metrics["streak"] = reading.longest_streak(record.get("events", []), _resolve_timezone(guild.get("timezone")))
+                changed |= self._unlock_reading_achievements(member, progression, metrics, stamp)
+            self._dirty |= changed
+        await self.flush()
+        return True
+
+    @staticmethod
+    def _unlock_reading_achievements(member, progression, metrics, stamp):
+        unlocked = member["achievements"]
+        awarded = progression["achievement_xp_awarded"]
+        changed = False
+        for key, (name, _, kind, threshold, amount) in reading.READING_ACHIEVEMENTS.items():
+            if metrics[kind] < threshold:
+                continue
+            if key not in unlocked:
+                unlocked[key] = {"unlocked_at": stamp}
+                changed = True
+            if key in awarded:
+                continue
+            awarded[key] = stamp
+            changed = True
+            progression["xp"] += amount
+            progression["lifetime_xp"] += amount
+            progression["xp_events"].append({
+                "at": stamp, "amount": amount, "media_type": "achievement", "title": name,
+                "event_key": f"achievement:{key}", "achievement_id": key,
+            })
+        if changed:
+            roll_prestige(progression)
+        return changed
+
+    @staticmethod
+    def _complete_reading_challenges(progression, now):
+        from .personal_challenges import reading_periods
+        completions = progression["challenge_completions"]
+        for scope, start, end in reading_periods(now):
+            period = f"{scope}:{start.date().isoformat()}"
+            events = list(reading.in_period(progression["reading_events"], start, end))
+            for challenge in reading.challenges(scope):
+                key = challenge["id"]
+                if key in completions.get(period, {}) or reading.challenge_value(events, challenge["kind"]) < challenge["target"]:
+                    continue
+                xp = challenge["xp"]
+                completions.setdefault(period, {})[key] = {
+                    "completed_at": now.isoformat(), "xp": xp, "definition": challenge,
+                }
+                progression["xp"] += xp
+                progression["lifetime_xp"] += xp
+                progression["pending_challenge_notifications"].append({
+                    "key": f"{period}:{key}", "name": challenge["name"], "period": scope.title(), "xp": xp,
+                })
+        roll_prestige(progression)
+
+    async def get_reading_statistics(self, guild_id, user_id):
+        async with _lock:
+            guild = self._guild(str(guild_id)) or {}
+            member = self._guild_user(str(guild_id), str(user_id))
+            if not member or not member["anilist_manga"]:
+                return None
+            records = guild.get("reading", {})
+            record = records.get(str(user_id), {})
+            baseline = member["anilist_lists"].get("MANGA")
+            if baseline is None:
+                return None
+            snapshot = record.get("snapshot", baseline)
+            stats = reading.lifetime(snapshot)
+            stats["streak"] = reading.longest_streak(record.get("events", []), _resolve_timezone(guild.get("timezone")))
+            return stats
+
+    async def get_guild_reading_summary(self, guild_id, start, end):
+        async with _lock:
+            guild = self._guild(str(guild_id)) or {}
+            return reading.summary(
+                event for record in guild.get("reading", {}).values()
+                for event in reading.in_period(record.get("events", []), start, end)
+            )
+
+    async def get_reading_community(self, guild_id, week, start, end, now):
+        """Settle reading goals separately from the watch event."""
+        async with _lock:
+            guild = self._guild(str(guild_id))
+            if not guild:
+                return None
+            records = guild.get("reading", {})
+            enabled = any(member.get("anilist_manga") for member in guild["users"].values())
+            goals = guild.setdefault("reading_community", {})
+            if week not in goals and enabled:
+                goals[week] = {"start": start.isoformat(), "end": end.isoformat()}
+                self._dirty = True
+            for key, goal in goals.items():
+                if goal.get("settled") or now < datetime.fromisoformat(goal["end"]):
+                    continue
+                contributions = self._reading_contributions(records, goal)
+                if sum(contributions.values()) >= reading.COMMUNITY_TARGET and guild["features"]["progression"]:
+                    for uid, count in contributions.items():
+                        user = self._user(uid)
+                        if not user or count < reading.COMMUNITY_MINIMUM:
+                            continue
+                        progression = user["progression"]
+                        reward_key = f"{guild_id}:reading:{key}"
+                        if reward_key in progression["community_rewards"]:
+                            continue
+                        progression["community_rewards"][reward_key] = reading.COMMUNITY_XP
+                        progression["xp"] += reading.COMMUNITY_XP
+                        progression["lifetime_xp"] += reading.COMMUNITY_XP
+                        roll_prestige(progression)
+                goal["settled"] = True
+                self._dirty = True
+            goal = goals.get(week)
+            result = None
+            if goal:
+                contributions = self._reading_contributions(records, goal)
+                result = {
+                    "chapters": sum(contributions.values()), "contributions": contributions,
+                    "end": goal["end"], "xp": reading.COMMUNITY_XP if guild["features"]["progression"] else 0,
+                }
+        await self.flush()
+        return result
+
+    @staticmethod
+    def _reading_contributions(records, goal):
+        start, end = datetime.fromisoformat(goal["start"]), datetime.fromisoformat(goal["end"])
+        return {
+            uid: sum(event["chapters"] for event in reading.in_period(record.get("events", []), start, end))
+            for uid, record in records.items()
+        }
+
     async def get_activity_provider(self, guild_id: str | int, discord_user_id: str) -> str | None:
         async with _lock:
             guild_user = self._guild_user(str(guild_id), str(discord_user_id))
@@ -1760,7 +1935,7 @@ class Storage:
                     for gid,unlocks in guild_updates.items():
                         member=replacement['guilds'][gid]['users'][user_id]
                         prior=member.get('achievements') or {}
-                        member['achievements']={aid:copy.deepcopy(prior.get(aid) or {'unlocked_at':settings['rebuilt_at']}) for aid in unlocks}
+                        member['achievements']={aid:copy.deepcopy(prior.get(aid) or {'unlocked_at':settings['rebuilt_at']}) for aid in set(unlocks) | (prior.keys() & reading.READING_ACHIEVEMENTS.keys())}
                         stats=member.get('statistics') or _default_statistics()
                         current=stats.get('watch_events')
                         if isinstance(current,dict):
@@ -2132,12 +2307,15 @@ class Storage:
             if not record or record.get('expires_at','')<datetime.now(timezone.utc).isoformat():return None
             return copy.deepcopy(record)
 
-    async def get_challenge_state(self, discord_user_id: str) -> dict:
+    async def get_challenge_state(self, discord_user_id: str, *, reading_enabled=False) -> dict:
         async with _lock:
             user = self._user(discord_user_id)
             if not user:
                 return {}
-            return {key:copy.deepcopy(user['progression'].get(key,[] if key in {'xp_events','challenge_finishes'} else {})) for key in ('xp_events','challenge_completions','challenge_sets','challenge_metadata','challenge_finishes','occurrence_ledger')}
+            result = {key:copy.deepcopy(user['progression'].get(key,[] if key in {'xp_events','challenge_finishes'} else {})) for key in ('xp_events','challenge_completions','challenge_sets','challenge_metadata','challenge_finishes','occurrence_ledger')}
+            if reading_enabled:
+                result["reading_events"] = copy.deepcopy(user["progression"].get("reading_events", []))
+            return result
 
     async def get_pending_challenge_notifications(self, discord_user_id: str) -> list[dict]:
         async with _lock:
@@ -2600,7 +2778,13 @@ class Storage:
                 global_user = self._user(uid) or {}
                 provider=user.get("activity_provider","simkl")
                 stats=_statistics_for_provider(user,provider,guild.get("timezone"))
+                baseline = user["anilist_lists"].get("MANGA") if user["anilist_manga"] else None
+                manga = {}
+                if baseline is not None:
+                    record = guild.get("reading", {}).get(uid, {})
+                    manga["reading"] = reading.lifetime(record.get("snapshot", baseline))
                 results.append({
+                    **manga,
                     "discord_user_id": uid,
                     "simkl_username": ((global_user.get(provider) or {}).get("username")
                                        if provider!="simkl" else
@@ -2627,6 +2811,18 @@ class Storage:
                 stats=_statistics_for_provider(user,provider,guild.get("timezone"))
                 from .server_cards import board_facts
                 facts=board_facts(stats,str(_resolve_timezone(guild.get('timezone'))),datetime.now(_resolve_timezone(guild.get('timezone'))).date(),p)
+                zone = _resolve_timezone(guild.get("timezone"))
+                today = datetime.now(zone).date()
+                current = user["anilist_lists"].get("MANGA") if user["anilist_manga"] else None
+                if current is not None:
+                    record = (guild.get("reading") or {}).get(uid, {})
+                    facts["periods"]["all"]["manga"] = reading.lifetime(record.get("snapshot", current))["chapters"]
+                    for period, first_day in (("week", today - timedelta(days=today.weekday())), ("month", today - timedelta(days=29))):
+                        start = datetime.combine(first_day, datetime.min.time(), tzinfo=zone)
+                        end = datetime.combine(today + timedelta(days=1), datetime.min.time(), tzinfo=zone)
+                        facts["periods"][period]["manga"] = sum(
+                            event["chapters"] for event in reading.in_period(record.get("events", []), start, end)
+                        )
                 rows.append({
                     **facts,
                     "discord_user_id":uid,

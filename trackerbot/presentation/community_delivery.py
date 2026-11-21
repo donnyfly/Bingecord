@@ -2,6 +2,7 @@
 import asyncio
 from datetime import datetime
 import discord
+from trackerbot.core.reading import COMMUNITY_MINIMUM, COMMUNITY_TARGET
 from .community_visuals import render_community_png
 from .discord_artwork import load_discord_artwork,resolve_card_members
 
@@ -52,6 +53,16 @@ async def community_card(send,guild,state,*,viewer=None,preview=False,heading=No
         lines=[f"<@{uid}> · {deltas.get(uid,awards.get(uid,0)):+,} XP" for uid in recipients[:5]]
         if len(recipients)>5:lines.append(f'+ {len(recipients)-5} more recipients')
         if lines:embed.add_field(name='Reward results',value='\n'.join(lines),inline=False)
+    reading=state.get("reading")
+    if reading:
+        text=f"**{reading['chapters']:,} / {COMMUNITY_TARGET:,}** manga chapters"
+        text+=" · Ends "+discord.utils.format_dt(datetime.fromisoformat(reading["end"]),style="R")
+        if viewer:
+            count=reading["contributions"].get(str(viewer),0)
+            text+=f"\nYour contribution: **{count:,}** chapters"
+        if reading["xp"]:
+            text+=f"\n**+{reading['xp']:,} XP** for members with {COMMUNITY_MINIMUM}+ chapters if the goal is reached."
+        embed.add_field(name="Community Reading Goal",value=text,inline=False)
     kwargs={'embed':embed,'allowed_mentions':discord.AllowedMentions.none()}
     if preview:kwargs['ephemeral']=True
     try:

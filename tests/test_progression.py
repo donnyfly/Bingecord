@@ -34,7 +34,8 @@ def test_challenge_rotation():
 def test_expanded_achievement_catalog_has_reconciled_categories():
     assert len(ACHIEVEMENTS) >= 35
     assert {item["category"] for item in ACHIEVEMENTS.values()} <= {
-        "total","episodes","movies","anime_episodes","anime_movies","unique_titles","active_days","streak"
+        "total","episodes","movies","anime_episodes","anime_movies","unique_titles","active_days","streak",
+        "reading_chapters","reading_completed","reading_streak"
     }
 
 

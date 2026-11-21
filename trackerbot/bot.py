@@ -18,6 +18,7 @@ from trackerbot.core.storage import DEFAULT_FEATURES, EPOCH_ISO, storage
 from trackerbot.core.watch_delivery import WatchActivity, WatchBatch, WatchCycle, current_cycle, watch_key, deliver_watch, current_details
 from trackerbot.core.activity_details import ActivityDetails
 from trackerbot.core.achievements import ACHIEVEMENTS, all_achievements
+from trackerbot.core import reading
 from trackerbot.core.progression import RANKS, challenges_for, challenge_progress, level_progress, rank_for_level, xp_for_level, xp_for_watch
 from trackerbot.presentation.level_visuals import accent_for_tier, prestige_style, render_achievement_gif, render_level_up_gif, render_prestige_gif
 from trackerbot.presentation.profile_visuals import profile_snapshot, render_profile_png, render_leaderboard_png, render_summary_png
@@ -1939,6 +1940,8 @@ async def evaluate_achievements(g, uid, notify_channel=None):
     now=datetime.now(timezone.utc).isoformat()
 
     for achievement_id, achievement in all_achievements():
+        if achievement_id in reading.READING_ACHIEVEMENTS:
+            continue
         already_unlocked=achievement_id in unlocked
         qualifies=progress.get(achievement["category"],0) >= achievement["threshold"]
 
@@ -2287,6 +2290,9 @@ async def _refresh_community_state(guild_id_value):
         await refresh_community_completions(sys.modules[__name__],guild_id_value,now)
     except Exception:log.warning('Community completion verification deferred for guild %s.',guild_id_value,exc_info=True)
     state=await storage.get_community_state(guild_id_value,key,start,end,now)
+    reading_goal=await storage.get_reading_community(guild_id_value,key,start,end,now)
+    if reading_goal:
+        state={**state,"reading":reading_goal}
     channel_id=await storage.get_channel(guild_id_value)
     channel=bot.get_channel(int(channel_id)) if channel_id else None
     if channel_id and channel is None:
@@ -2391,6 +2397,19 @@ def build_weekly_recap(rows, start, end, guild_name, period_label, *, with_visua
         return embed,metrics,leaders
     return embed
 
+def reading_summary_text(stats, *, weekly=False):
+    counts = stats["statuses"]
+    if weekly:
+        headline = f"**{stats['chapters']:,}** chapters logged · **{stats['started']:,}** started"
+        return headline + "\n" + " · ".join(
+            f"{counts.get(status, 0):,} {'resumed' if status == 'CURRENT' else label.lower()}"
+            for status, label in reading.STATUS_LABELS.items()
+            if status == "COMPLETED" or counts.get(status)
+        )
+    headline = f"**{stats['chapters']:,}** chapters recorded · **{stats['completed']:,}** manga finished"
+    return headline + "\n" + " · ".join(f"{counts[status]:,} {label.lower()}" for status, label in reading.STATUS_LABELS.items())
+
+
 async def generate_weekly_recap(guild, period="current"):
     timezone_info=await storage.get_timezone(guild.id)
     start,end=weekly_period(timezone_info["name"],period)
@@ -2399,6 +2418,13 @@ async def generate_weekly_recap(guild, period="current"):
     from trackerbot.core.server_cards import recap_facts
     base=build_weekly_recap(rows,start,end,guild.name,label,with_visual=True)
     story=recap_facts(rows,start,end,timezone_info['name'])
+    zone=ZoneInfo(timezone_info["name"])
+    reading_start=datetime.combine(start,datetime.min.time(),tzinfo=zone)
+    reading_end=datetime.combine(end+timedelta(days=1),datetime.min.time(),tzinfo=zone)
+    reading_totals=await storage.get_guild_reading_summary(guild.id,reading_start,reading_end)
+    if reading_totals["chapters"] or reading_totals["statuses"]:
+        base[0].add_field(name="Reading · AniList",value=reading_summary_text(reading_totals, weekly=True),inline=False)
+        story["reading"]=reading_totals
     return (*base,{'story':story,'guild':guild}),f"{start.isoformat()} → {end.isoformat()}"
 
 async def send_visual_summary(send,guild_name,heading,result,filename,*,icon=None,preview=False):
@@ -2657,7 +2683,9 @@ async def simkl_challenges(i):
         except Exception:log.warning('Personal challenge enrichment deferred for guild %s.',g,exc_info=True)
     from trackerbot.core.personal_challenges import snapshot
     from trackerbot.presentation.challenge_delivery import challenge_card
-    now=datetime.now(timezone.utc);state=await storage.get_challenge_state(str(i.user.id))
+    now=datetime.now(timezone.utc)
+    manga_stats=await storage.get_reading_statistics(g,str(i.user.id)) if g else None
+    state=await storage.get_challenge_state(str(i.user.id),reading_enabled=True) if manga_stats is not None else await storage.get_challenge_state(str(i.user.id))
     await challenge_card(i.followup.send,i.user,snapshot(state,now),now=now)
 
 
@@ -2753,6 +2781,7 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         await i.response.send_message("This command must be used in a server.",ephemeral=True)
         return
     target=user or i.user
+    await i.response.defer()
     await evaluate_achievements(g,str(target.id))
     unlocked=await storage.get_achievements(g,str(target.id))
     timezone_info=await storage.get_timezone(g)
@@ -2762,8 +2791,16 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         timezone_info["name"],
     )
 
+    manga_stats=await storage.get_reading_statistics(g,str(target.id))
+    if manga_stats is not None:
+        progress.update({f"reading_{kind}": manga_stats[kind] for kind in ("chapters", "completed", "streak")})
+
     lines=[]
+    visible_total=0
     for aid,achievement in all_achievements():
+        if aid in reading.READING_ACHIEVEMENTS and manga_stats is None and aid not in unlocked:
+            continue
+        visible_total+=1
         if aid in unlocked:
             stamp=unlocked[aid].get("unlocked_at")
             when=""
@@ -2794,11 +2831,11 @@ async def simkl_achievements(i,user: discord.Member | None = None):
     for index,chunk in enumerate(pages):
         embed=discord.Embed(title=f"🏆 {target.display_name}'s Achievements · {index+1}/{len(pages)}",
                             description="\n\n".join(chunk),color=0xF1C40F)
-        embed.set_footer(text=f"{len(unlocked)}/{len(ACHIEVEMENTS)} unlocked")
+        embed.set_footer(text=f"{len(unlocked)}/{visible_total} unlocked")
         embeds.append(embed)
     if embeds:
         embeds[0].set_thumbnail(url=target.display_avatar.url)
-    await i.response.send_message(embeds=embeds)
+    await i.followup.send(embeds=embeds)
 
 
 @bingecord_commands.command(name="debug",description="(Admin) Privately preview cards and inspect completion without changing XP.")
@@ -3064,11 +3101,12 @@ async def show_profile(i,user,*,preview=False):
     await i.response.defer(ephemeral=preview)
     if not preview:await evaluate_achievements(g,str(target.id))
     stats=await storage.get_statistics(g,str(target.id))
+    manga_stats=await storage.get_reading_statistics(g,str(target.id))
     source = await storage.get_activity_provider(g, str(target.id)) or 'simkl'
     active_wetrakr = source != 'simkl'
     source_label = provider_registry.get(source).manifest.display_name
     history=await storage.get_history_import_state(g,str(target.id))
-    if not active_wetrakr and history["linked"] and not history["complete"] and not (int(stats.get("episodes_watched",0))+int(stats.get("movies_watched",0))):
+    if manga_stats is None and not active_wetrakr and history["linked"] and not history["complete"] and not (int(stats.get("episodes_watched",0))+int(stats.get("movies_watched",0))):
         await i.followup.send("This SIMKL history import is still pending. Watch totals will appear here when it finishes; the bot retries automatically.",ephemeral=True)
         return
     progression=await storage.get_progression(str(target.id))
@@ -3081,10 +3119,15 @@ async def show_profile(i,user,*,preview=False):
         embed.add_field(name="Watch history",value=f"{stats.get('episodes_watched',0):,} episodes · {stats.get('movies_watched',0):,} movies",inline=False)
         embed.add_field(name="Anime (included above)",value=f"{stats.get('anime_episodes_watched',0):,} episodes · {stats.get('anime_movies_watched',0):,} movies",inline=False)
         embed.add_field(name="Streak",value=f"{current} current · {longest} longest",inline=False)
+        if manga_stats is not None:
+            embed.add_field(name="Manga · AniList",value=reading_summary_text(manga_stats),inline=False)
         await i.followup.send(embed=embed)
         return
     today=datetime.now(ZoneInfo(timezone_info["name"])).date()
     data=profile_snapshot(stats,progression,unlocked_achievements,current,longest,today=today)
+    data["reading"] = manga_stats
+    if manga_stats is None:
+        data["achievement_total"] -= sum(key not in unlocked_achievements for key in reading.READING_ACHIEVEMENTS)
     data["provider_label"] = source_label
     data["preview"] = preview
     data["achievements_enabled"]=features["achievements"]
@@ -3095,6 +3138,8 @@ async def show_profile(i,user,*,preview=False):
                      + (f"**{data['achievements']}/{data['achievement_total']} achievements**" if features["achievements"] else "Achievements disabled")),
         color=discord.Color.from_rgb(*accent_for_tier(data["level"],data["prestige"])),
     )
+    if manga_stats is not None:
+        embed.add_field(name="Manga · AniList",value=reading_summary_text(manga_stats),inline=False)
     try:
         from trackerbot.presentation.profile_artwork import load_profile_artwork, enrich_profile_genres
         await enrich_profile_genres(tmdb,data)
@@ -3416,6 +3461,7 @@ LEADERBOARD_CHOICES=[
     app_commands.Choice(name="Episodes",value="episodes"),
     app_commands.Choice(name="Movies",value="movies"),
     app_commands.Choice(name="Anime",value="anime"),
+    app_commands.Choice(name="Manga chapters",value="manga"),
     app_commands.Choice(name="Unique titles",value="titles"),
     app_commands.Choice(name="Current streak",value="streak"),
     app_commands.Choice(name="XP / progression",value="xp"),
@@ -3444,7 +3490,7 @@ async def show_leaderboard(i,category=None,*,period=None,preview=False):
     if category in global_categories:period='all'
     await i.response.defer(**({'ephemeral':True} if preview else {}))
     rows=await storage.get_guild_leaderboard_snapshot(g)
-    labels={'total':'Total watches','episodes':'Episodes','movies':'Movies','anime':'Anime','titles':'Unique titles',
+    labels={'total':'Total watches','episodes':'Episodes','movies':'Movies','anime':'Anime','manga':'Manga chapters','titles':'Unique titles',
             'streak':'Current streak','xp':'XP progression','level':'Level','prestige':'Prestige'}
     periods={'all':'All-time','week':'This week','month':'Last 30 days'}
     def ranked():
@@ -3456,7 +3502,7 @@ async def show_leaderboard(i,category=None,*,period=None,preview=False):
             if period!='all' or selected:row.update({k:v for k,v in selected.items() if k not in {'featured'}})
             if period!='all' and not selected:
                 for key in ('total','episodes','movies','anime','titles'):row[key]=0
-            row['featured']=selected.get('featured',[])
+            row['featured']=selected.get('featured',[]) if category!='manga' else []
             row.setdefault('titles',0);row.setdefault('streak',0)
             member=i.guild.get_member(int(row['discord_user_id']))
             row['name']=member.display_name if member else row.get('simkl_username') if row.get('simkl_username') and not str(row['simkl_username']).isdigit() else 'Member '+str(row['discord_user_id'])[-4:]
@@ -3476,7 +3522,7 @@ async def show_leaderboard(i,category=None,*,period=None,preview=False):
         display=[{**r,'name':members[str(r['discord_user_id'])].display_name if str(r['discord_user_id']) in members else r['name']} for r in page_rows]
         full=discord.Embed(title=f'{i.guild.name} · {labels[category]}',description=periods[period],color=0xEFBE69)
         full.add_field(name='Rankings',value='\n'.join(f"**{n}.** <@{r['discord_user_id']}> · **{r['progression_xp'] if category=='xp' else r.get(category,0):,}**" for n,r in enumerate(display,start+1)) or 'No activity yet.',inline=False)
-        full.set_footer(text=f'Page {page}/{max(1,pages)} · Selected tracker history · Shared global progression')
+        full.set_footer(text=f'Page {page}/{max(1,pages)} · '+('AniList manga' if category=='manga' else 'Selected tracker history · Shared global progression'))
         view.details_embed=full
         try:
             assets={uid:m.display_avatar for uid,m in members.items()};assets['icon']=getattr(i.guild,'icon',None)
@@ -3619,6 +3665,14 @@ def build_server_stats(rows, guild_name, *, with_visual=False):
             inline=False,
         )
 
+    reading_rows=[row["reading"] for row in rows if row.get("reading") is not None]
+    if reading_rows:
+        manga={
+            "chapters": sum(row["chapters"] for row in reading_rows),
+            "completed": sum(row["completed"] for row in reading_rows),
+            "statuses": {status: sum(row["statuses"][status] for row in reading_rows) for status in reading.STATUS_LABELS},
+        }
+        embed.add_field(name="Manga · AniList",value=reading_summary_text(manga),inline=False)
     embed.set_footer(text="All-time statistics · Server-wide")
     if with_visual:
         metrics=[("Total watches",total_watches),("Episodes",episodes),("Movies",movies),
@@ -3626,6 +3680,8 @@ def build_server_stats(rows, guild_name, *, with_visual=False):
         leaders=[("Tracked users",str(linked))]
         leaders.extend((f"#{n} watcher",f"{names[uid]} · {total:,} watches") for n,(total,uid) in enumerate(total_watchers[:2],1))
         leaders.extend((f"#{n} title",f"{top['title']} · {top['count']:,}") for n,top in enumerate(top_titles[:2],1))
+        if reading_rows:
+            metrics.extend([("Manga chapters",manga["chapters"]),("Manga finished",manga["completed"])])
         return embed,metrics,leaders
     return embed
 
@@ -3637,7 +3693,7 @@ async def simkl_server_stats(i):
         await i.response.send_message("This command must be used in a server.",ephemeral=True); return
     rows=await storage.get_guild_statistics(g)
     if not any(
-        int(row["statistics"].get("episodes_watched",0)) + int(row["statistics"].get("movies_watched",0))
+        row.get("reading") is not None or int(row["statistics"].get("episodes_watched",0)) + int(row["statistics"].get("movies_watched",0))
         for row in rows
     ):
         pending=sum(not row.get("history_seeded",True) for row in rows)
