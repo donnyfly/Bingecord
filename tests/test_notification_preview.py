@@ -470,6 +470,45 @@ def test_debug_server_cards_are_private_and_use_live_renderers(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_debug_weekly_recap_previews_reading_when_the_week_is_empty(monkeypatch):
+    async def scenario():
+        from trackerbot.presentation import card_details
+
+        interaction = _interaction()
+        interaction.guild.name = "Server"
+        monkeypatch.setattr(bot.storage, "get_guild_statistics", AsyncMock(return_value=[]))
+        reading_totals = AsyncMock(return_value={"chapters": 0, "started": 0, "statuses": {}})
+        monkeypatch.setattr(bot.storage, "get_guild_reading_summary", reading_totals)
+        details = AsyncMock()
+        monkeypatch.setattr(card_details, "details_view", details)
+        captured = []
+        renderer = bot.render_summary_png
+
+        def render(*args, story, **kwargs):
+            captured.append(story["reading"])
+            return renderer(*args, story=story, **kwargs)
+
+        monkeypatch.setattr(bot, "render_summary_png", render)
+        feature = app_commands.Choice(name="Weekly recap card", value="weekly_recap")
+        (embed, _, _, extras), _ = await bot.generate_weekly_recap(interaction.guild)
+        assert "reading" not in extras["story"]
+        assert not embed.fields
+
+        await bot.simkl_debug.callback(interaction, feature)
+        message = interaction.followup.send.await_args.kwargs
+        assert message["ephemeral"] is True
+        assert Image.open(message["file"].fp).height == 1575
+        assert details.await_args.args[0].fields[0].name == "Reading · AniList · Sample data"
+        assert captured[0]["sample"] is True
+
+        reading_totals.return_value = {"chapters": 0, "started": 1, "statuses": {}}
+        await bot.simkl_debug.callback(interaction, feature)
+        assert captured[1] == reading_totals.return_value
+        assert details.await_args.args[0].fields[0].name == "Reading · AniList"
+
+    asyncio.run(scenario())
+
+
 def test_debug_leaderboard_uses_private_real_page_renderer(monkeypatch):
     async def scenario():
         from io import BytesIO

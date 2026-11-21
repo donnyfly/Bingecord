@@ -130,7 +130,7 @@ def render_recap(guild_name,subtitle,metrics,leaders,*,icon=None,story=None,avat
     if not entries:text(56,1190,'No dated title records are available for this period yet.',20,MUTED)
     if reading:
         panel(image,(56,1370,1024,1515))
-        label(draw,(80,1390),'Reading · AniList')
+        label(draw,(80,1390),'Reading · AniList' + (' · Sample data' if reading.get('sample') else ''))
         statuses=reading["statuses"]
         text(80,1416,f"{reading['chapters']:,} chapters logged · {reading['started']:,} started · {statuses.get('COMPLETED',0):,} finished",26,bold=True,width=920)
         changes=" · ".join(f"{statuses[key]:,} {'resumed' if key == 'CURRENT' else name.lower()}" for key,name in STATUS_LABELS.items()

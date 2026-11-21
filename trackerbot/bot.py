@@ -2410,7 +2410,7 @@ def reading_summary_text(stats, *, weekly=False):
     return headline + "\n" + " · ".join(f"{counts[status]:,} {label.lower()}" for status, label in reading.STATUS_LABELS.items())
 
 
-async def generate_weekly_recap(guild, period="current"):
+async def generate_weekly_recap(guild, period="current", *, preview=False):
     timezone_info=await storage.get_timezone(guild.id)
     start,end=weekly_period(timezone_info["name"],period)
     rows=await storage.get_guild_statistics(guild.id)
@@ -2422,8 +2422,12 @@ async def generate_weekly_recap(guild, period="current"):
     reading_start=datetime.combine(start,datetime.min.time(),tzinfo=zone)
     reading_end=datetime.combine(end+timedelta(days=1),datetime.min.time(),tzinfo=zone)
     reading_totals=await storage.get_guild_reading_summary(guild.id,reading_start,reading_end)
-    if reading_totals["chapters"] or reading_totals["statuses"]:
-        base[0].add_field(name="Reading · AniList",value=reading_summary_text(reading_totals, weekly=True),inline=False)
+    has_reading_activity=bool(reading_totals["chapters"] or reading_totals["started"] or reading_totals["statuses"])
+    if preview and not has_reading_activity:
+        reading_totals={"chapters":18,"started":2,"statuses":{"COMPLETED":1,"PAUSED":1},"sample":True}
+    if has_reading_activity or preview:
+        name="Reading · AniList" + (" · Sample data" if reading_totals.get("sample") else "")
+        base[0].add_field(name=name,value=reading_summary_text(reading_totals, weekly=True),inline=False)
         story["reading"]=reading_totals
     return (*base,{'story':story,'guild':guild}),f"{start.isoformat()} → {end.isoformat()}"
 
@@ -3000,7 +3004,7 @@ async def simkl_debug(
     if feature.value in {"server_stats","weekly_recap"}:
         await i.response.defer(ephemeral=True)
         if feature.value == 'weekly_recap':
-            result=await generate_weekly_recap(i.guild)
+            result=await generate_weekly_recap(i.guild,preview=True)
             heading='weekly recap'
         else:
             rows=await storage.get_guild_statistics(str(i.guild.id))
