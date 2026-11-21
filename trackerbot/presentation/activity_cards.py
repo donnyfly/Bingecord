@@ -19,7 +19,7 @@ from .typography import font,text as paint,label,SHAPING
 from .card_details import details_view
 
 WHITE=(241,243,248);MUTED=(161,166,180);LINE=(48,51,62)
-HOSTS={'image.tmdb.org','simkl.in','cdn.simkl.in','simkl.net','cdn.simkl.net','cdn.discordapp.com','media.discordapp.net','discord.com'}
+HOSTS={'image.tmdb.org','simkl.in','cdn.simkl.in','simkl.net','cdn.simkl.net','cdn.discordapp.com','media.discordapp.net','discord.com','s4.anilist.co'}
 _images=OrderedDict();_cards=OrderedDict();_download_gate=asyncio.Semaphore(4);_render_gate=asyncio.Semaphore(2)
 
 
@@ -42,8 +42,9 @@ def clean(value):
 
 
 def card_model(embed,part,*,preview=False,sample=False):
+    reading=part.get('meta',{}).get('media_type')=='manga'
     lines=[line.strip() for line in (embed.description or '').splitlines() if line.strip()]
-    ratings=[];notes=[];episode_title=[];first=lines[0] if lines else 'Watched'
+    ratings=[];notes=[];episode_title=[];first=lines[0] if lines else ('Read' if reading else 'Watched')
     for line in lines[1:]:
         if re.search(r'\b(IMDb|MAL)\b',line):
             # Episode embeds must never acquire MAL or show-level fallback ratings.
@@ -55,17 +56,18 @@ def card_model(embed,part,*,preview=False,sample=False):
         elif line.startswith(('🆕','🔁')) or any(word in line for word in ('Finished Season','Finished **Season','Finished the series','Completed the series','Completed this series','Caught up')):
             notes.append(('NEW · ' if line.startswith('🆕') else '')+clean(re.sub(r'^[^\w]+','',line)))
         else:episode_title.append(clean(line))
-    title=clean(embed.title) or 'Watch activity';action=clean(first)
+    activity='Reading activity' if reading else 'Watch activity'
+    title=clean(embed.title) or activity;action=clean(first)
     action=re.sub(r'\s+of\s+'+re.escape(title)+r'\s*$','',action,flags=re.I)
     if part.get('meta',{}).get('movie') or part.get('meta',{}).get('status'):
-        action=re.sub(re.escape(title)+r'\s*$','',action,flags=re.I).strip() or 'Watched'
+        action=re.sub(re.escape(title)+r'\s*$','',action,flags=re.I).strip() or ('Read' if reading else 'Watched')
     footer=embed.footer.text or part.get('source','Tracker')
-    return {'title':title,'author':clean(embed.author.name) or 'Watch activity','action':action,
+    return {'title':title,'author':clean(embed.author.name) or activity,'action':action,
             'episode_title':' · '.join(episode_title),'ratings':ratings,'notes':notes,'source':footer,
             'image':getattr(embed.image,'url',None),'logo':getattr(embed.thumbnail,'url',None),
             'avatar':getattr(embed.author,'icon_url',None),'timestamp':embed.timestamp.astimezone(timezone.utc).isoformat() if embed.timestamp else None,
             'tracker':str(part.get('source','')).lower(),'timezone':part.get('display_timezone','UTC'),
-            'movie':bool(part.get('meta',{}).get('movie')),'preview':preview,'sample':sample}
+            'movie':bool(part.get('meta',{}).get('movie')),'reading':reading,'preview':preview,'sample':sample}
 
 
 def together_model(embed,parts,*,preview=False,sample=False):
@@ -272,7 +274,61 @@ def activity_layout(model):
                 member_positions=member_positions,members_height=members_height)
 
 
+def render_reading_png(model, artwork):
+    accent=(154,140,232)
+    art=artwork.get('image')
+    text_x=400
+    text_width=632
+    size=(1080,640)
+    image=background(size,accent,art)
+    draw=ImageDraw.Draw(image)
+
+    def text(x, y, value, size, colour=WHITE, bold=False, width=text_width):
+        face=fit(draw,value,size,width,bold)
+        paint(draw,(x,y),short(draw,value,face.size,width,bold),font=face,fill=colour)
+
+    preview=' · Sample preview' if model.get('sample') else ' · Preview' if model.get('preview') else ''
+    label(draw,(48,25),'Bingecord · Reading activity'+preview)
+    avatar=artwork.get('avatar')
+    if avatar:
+        cover(image,avatar,(48,62,92,106),22)
+    else:
+        draw.ellipse((48,62,92,106),fill=LINE)
+        paint(draw,(70,84),model['author'][:1].upper(),font=font(20,True),fill=accent,anchor='mm')
+    text(106,68,model['author'],28,bold=True,width=926)
+    cover_box=(48,128,364,582)
+    if art:
+        cover(image,art,cover_box,16,contain=True)
+    else:
+        panel(image,cover_box,16)
+        draw.rounded_rectangle((175,317,237,385),6,outline=accent,width=3)
+        draw.line((206,317,206,385),fill=accent,width=3)
+
+    y=158
+    for line in _wrap(draw,model['action'],34,text_width,2,True):
+        text(text_x,y,line,34,accent,bold=True)
+        y+=42
+    y+=8
+    for line in _wrap(draw,model['title'],46,text_width,3,True):
+        text(text_x,y,line,46,bold=True)
+        y+=53
+    y+=14
+    for note in model.get('notes',[])[:3]:
+        width=min(text_width,round(draw.textlength(note,font=font(19,True),**SHAPING))+36)
+        panel(image,(text_x,y,text_x+width,y+40),12)
+        text(text_x+18,y+7,note,19,accent if note.startswith('NEW') else (82,196,166),True,width-36)
+        y+=48
+
+    text(48,604,'Manga · AniList',18,MUTED,width=350)
+    timestamp=local_timestamp(model)
+    if timestamp:
+        paint(draw,(1032,604),timestamp,font=font(18),fill=MUTED,anchor='ra')
+    return png(image)
+
+
 def render_activity_png(model,artwork=None):
+    if model.get('reading'):
+        return render_reading_png(model,artwork or {})
     artwork=artwork or {};accent=(239,190,105) if model['movie'] else (154,140,232)
     layout=activity_layout(model);height=layout['height'];hero=artwork.get('image')
     image=ambient_background((1080,height),accent,hero,layout['hero_bottom']);draw=ImageDraw.Draw(image)
@@ -388,15 +444,18 @@ async def activity_card_kwargs(embed,part,*,preview=False,sample=False,parts=Non
                     for task in tasks:
                         if not task.done():task.cancel()
                     await asyncio.gather(*tasks,return_exceptions=True)
-            if model.get('image') and not art.get('image'):raise ValueError('Activity artwork is temporarily unavailable')
+            missing_art=bool(model.get('image') and not art.get('image'))
+            if missing_art and not model.get('reading'):
+                raise ValueError('Activity artwork is temporarily unavailable')
             data=(await asyncio.to_thread(render_activity_png,model,art)).getvalue()
-            _cards[key]=data
-            while len(_cards)>16 or sum(map(len,_cards.values()))>24_000_000:_cards.popitem(last=False)
+            if not missing_art:
+                _cards[key]=data
+                while len(_cards)>16 or sum(map(len,_cards.values()))>24_000_000:_cards.popitem(last=False)
         else:_cards.move_to_end(key)
     view=await details_view(embed,owner=part.get('preview_owner',part.get('user')) if preview else None,guild=part.get('guild'))
     target=str(embed.url or '')
     if urlparse(target).scheme=='https':
-        service={'simkl':'SIMKL','wetrakr':'WeTrakr','mdblist':'MDBList'}.get(model['tracker'],'tracker')
+        service={'simkl':'SIMKL','wetrakr':'WeTrakr','mdblist':'MDBList','anilist':'AniList'}.get(model['tracker'],'tracker')
         view.add_item(discord.ui.Button(label='View on '+service,url=target))
     # Explicit None also removes the legacy rich embed when refreshing an old card.
     return {'embed':None,'file':discord.File(BytesIO(data),filename='activity.png'),'view':view}
@@ -404,5 +463,7 @@ async def activity_card_kwargs(embed,part,*,preview=False,sample=False,parts=Non
 
 
 def eligible(parts):
+    if any(p.get('meta',{}).get('media_type')=='manga' for p in parts):
+        return len(parts)==1 and parts[0].get('source')=='anilist'
     if len(parts)==1 and parts[0].get('meta',{}).get('status'):return True
     return bool(parts) and all(not p.get('meta',{}).get('status') and bool(p.get('meta',{}).get('movie') or p.get('meta',{}).get('episodes')) for p in parts)

@@ -42,6 +42,34 @@ def test_artwork_hosts_proxy_and_limits():
         assert image_url(bad) is None
 
 
+def test_manga_card_uses_portrait_cover_and_anilist_link(monkeypatch):
+    from trackerbot.presentation import activity_cards
+    from trackerbot.presentation.card_details import configure
+
+    async def run():
+        configure(lambda:None)
+        cover_url='https://s4.anilist.co/file/cover.jpg'
+        embed=discord.Embed(title='Manga Title',url='https://anilist.co/manga/42',
+                            description='Read Chapters 12–16 of **Manga Title**\n🆕 Started reading this manga.')
+        embed.set_image(url=cover_url)
+        part={'source':'anilist','user':'1','meta':{'media_type':'manga'}}
+        model=card_model(embed,part)
+        assert eligible([part]) and not eligible([part,part])
+        assert model['reading'] and model['action']=='Read Chapters 12–16'
+        assert model['notes']==['NEW · Started reading this manga.']
+        assert image_url(cover_url)==cover_url
+        art=Image.new('RGB',(200,300),(220,30,30))
+        monkeypatch.setattr(activity_cards,'_download',AsyncMock(side_effect=lambda _,url:art if url==cover_url else None))
+        payload=await activity_card_kwargs(embed,part)
+        result=Image.open(payload['file'].fp)
+        assert result.size==(1080,640)
+        assert result.getpixel((200,320))==(220,30,30)
+        assert payload['view'].children[-1].label=='View on AniList'
+        assert payload['view'].children[-1].url==embed.url
+
+    asyncio.run(run())
+
+
 def test_episode_and_film_render_shapes_missing_art_and_long_names():
     for movie in (False,True):
         embed,part=example(movie);model=card_model(embed,part,preview=True)
