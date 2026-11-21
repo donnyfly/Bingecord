@@ -69,7 +69,7 @@ def list_update(entry, previous):
 
 
 class AniListLinkModal(discord.ui.Modal, title="Link your AniList account"):
-    code = discord.ui.TextInput(label="AniList authorization code", max_length=4096, style=discord.TextStyle.paragraph)
+    code = discord.ui.TextInput(label="AniList authorization code", max_length=4000, style=discord.TextStyle.paragraph)
 
     def __init__(self, provider):
         super().__init__(timeout=600)
@@ -112,6 +112,7 @@ class AniListProvider(BaseProvider):
                 "AniList linking requires a server and configured AniList OAuth credentials.", ephemeral=True,
             )
             return
+        await interaction.response.defer(ephemeral=True)
         query = urlencode({"client_id": self.app.ANILIST_CLIENT_ID, "redirect_uri": PIN_URL, "response_type": "code"})
         view = discord.ui.View(timeout=600)
         view.add_item(discord.ui.Button(label="Authorize on AniList", url=f"https://anilist.co/api/v2/oauth/authorize?{query}"))
@@ -123,9 +124,9 @@ class AniListProvider(BaseProvider):
 
         button.callback = open_modal
         view.add_item(button)
-        await interaction.response.send_message(
-            "Authorize on AniList, then paste the code into the form below.",
-            view=view, ephemeral=True,
+        await interaction.edit_original_response(
+            content="Authorize on AniList, then paste the code into the form below.",
+            view=view,
         )
 
     async def unlink(self, interaction):

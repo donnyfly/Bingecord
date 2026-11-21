@@ -28,6 +28,28 @@ def test_progress_range_and_status(kind, label):
     assert list_update(entry(kind, progress=5), progress_state(entry(kind, private=True))) is None
 
 
+def test_authorize_acknowledges_command_and_opens_a_discord_compatible_modal():
+    async def run():
+        provider = AniListProvider(SimpleNamespace(ANILIST_CLIENT_ID="123", ANILIST_CLIENT_SECRET="secret"))
+        response = SimpleNamespace(defer=AsyncMock())
+
+        async def edit_original_response(**kwargs):
+            response.defer.assert_awaited_once_with(ephemeral=True)
+
+        user = SimpleNamespace(id=42)
+        command = SimpleNamespace(guild_id=1, user=user, response=response,
+                                  edit_original_response=AsyncMock(side_effect=edit_original_response))
+        await provider.authorize(command)
+        view = command.edit_original_response.await_args.kwargs["view"]
+        reply = SimpleNamespace(user=user, response=SimpleNamespace(send_modal=AsyncMock()))
+        await view.children[1].callback(reply)
+        reply.response.send_modal.assert_awaited_once()
+        modal = reply.response.send_modal.await_args.args[0]
+        assert modal.to_dict()["components"][0]["components"][0]["max_length"] == 4000
+
+    asyncio.run(run())
+
+
 def test_manga_and_anime_switch_independently_and_deliver_after_baseline(tmp_path, monkeypatch):
     monkeypatch.setattr(storage_module, "DATA_PATH", str(tmp_path / "data.json"))
     store = storage_module.Storage()
