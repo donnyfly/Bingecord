@@ -525,3 +525,50 @@ def test_together_member_tiles_stay_within_grid_and_footer(count):
         assert 0<=x and x+486<=984
         assert layout['members_top']+row*124+112<layout['height']-32
     assert Image.open(render_activity_png(model)).height==layout['height']
+
+
+@pytest.mark.parametrize("still", ["available", "missing", "broken"])
+def test_episode_card_uses_series_backdrop_and_logo_independently(monkeypatch, still):
+    from trackerbot.presentation import activity_cards as cards
+
+    async def run():
+        cards._cards.clear()
+        embed, part = example()
+        still_url = "https://image.tmdb.org/still.jpg"
+        backdrop_url = "https://image.tmdb.org/series.jpg"
+        logo_url = "https://image.tmdb.org/title.png"
+        if still != "missing":
+            embed.set_image(url=still_url)
+        before = embed.to_dict()
+        images = {backdrop_url: "series backdrop", logo_url: "TV logo"}
+        if still == "available":
+            images[still_url] = "episode still"
+        monkeypatch.setattr(cards, "_download", AsyncMock(side_effect=lambda _, url: images.get(url)))
+        render = Mock(return_value=BytesIO(b"card"))
+        monkeypatch.setattr(cards, "render_activity_png", render)
+        tmdb = SimpleNamespace(get_tv_backdrop=AsyncMock(return_value=backdrop_url),
+                               get_tv_logo=AsyncMock(return_value=logo_url))
+        await activity_card_kwargs(embed, part, tmdb_client=tmdb)
+        assert render.call_args.args[1] == {
+            "image": "episode still" if still == "available" else "series backdrop",
+            "logo": "TV logo",
+        }
+        if still == "available":
+            tmdb.get_tv_backdrop.assert_not_awaited()
+        else:
+            tmdb.get_tv_backdrop.assert_awaited_once_with("1")
+        assert embed.to_dict() == before
+        cards._cards.clear()
+
+    asyncio.run(run())
+
+
+def test_visual_embed_keeps_show_logo_when_episode_still_is_missing():
+    from test_notification_preview import bot
+
+    logo = "https://image.tmdb.org/title.png"
+    embed = bot.build_embed("shows", "Watched S1E03", datetime.now(timezone.utc),
+                            "Viewer", None, None, None, logo=logo,
+                            preferences={"style": "card", "artwork": "poster"})
+    assert not embed.image
+    assert embed.thumbnail.url == logo

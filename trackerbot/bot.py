@@ -467,8 +467,8 @@ def build_embed(t,desc,ts,name,member,image,profile,title=None,title_url=None,po
             e.set_thumbnail(url=selected)
         else:
             e.set_image(url=selected)
-            if (p["style"]=="card" or p["artwork"] in ("auto", "backdrop")) and logo:
-                e.set_thumbnail(url=logo)
+    if logo and (p["style"]=="card" or (selected and p["style"]!="minimal" and p["artwork"] in ("auto", "backdrop"))):
+        e.set_thumbnail(url=logo)
     e.set_footer(text=f"{label} · {provider}"); return e
 
 
@@ -498,8 +498,8 @@ async def send_embed(ch,e,what):
                     part['display_timezone']=(await storage.get_activity_timezone(part['guild'],part['user']))['name']
                     if len(post['parts'])>1:
                         await resolve_activity_card_members(post['parts'])
-                        kwargs.update(await activity_card_kwargs(e,part,parts=post['parts']))
-                    else:kwargs.update(await activity_card_kwargs(e,part))
+                        kwargs.update(await activity_card_kwargs(e,part,parts=post['parts'],tmdb_client=tmdb))
+                    else:kwargs.update(await activity_card_kwargs(e,part,tmdb_client=tmdb))
                     post['presentation']='card'
                 except Exception:log.warning('Activity card unavailable; using native embed.',exc_info=True)
         message=await ch.send(**kwargs)
@@ -679,7 +679,7 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
                 desc+="\n\n🆕 Started watching this series."
                 start_claimed.add(sid)
             logo=None
-            if p["artwork"] in ("auto", "backdrop"):
+            if p.get("style") == "card" or p["artwork"] in ("auto", "backdrop"):
                 try:
                     logo=await tmdb.get_tv_logo(series_tmdb_id) if series_tmdb_id is not None else None
                 except Exception:
@@ -2968,7 +2968,10 @@ async def simkl_debug(
             if group_parts and not sample:await resolve_activity_card_members(group_parts)
             part={**part,'display_timezone':(await storage.get_activity_timezone(g,uid))['name'],'preview_owner':uid}
             if group_parts:group_parts[0]=part
-            kwargs=await activity_card_kwargs(embed,part,preview=True,sample=sample,**({'parts':group_parts} if group_parts else {}))
+            options={'parts':group_parts} if group_parts else {}
+            if not sample and not reading and not status_preview and not part['meta'].get('movie'):
+                options['tmdb_client']=tmdb
+            kwargs=await activity_card_kwargs(embed,part,preview=True,sample=sample,**options)
             await i.followup.send(**kwargs,ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
         except Exception:
             await i.followup.send('Card artwork is temporarily unavailable. Try again shortly; no preferences or XP were changed.',ephemeral=True)
@@ -4597,8 +4600,7 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
     if started:description+='\n\n🆕 Started watching this series.'
     embed=build_embed(media,description,parse_iso(play['watched_at']),name,member,image,provider.profile_url(account),
         title=title,title_url=provider.title_url('movies' if movie else 'shows',ids),poster=poster,logo=logo,preferences=p,provider='MDBList')
-    # A missing still must not suppress an independently available title logo.
-    if logo and p.get('style','card')!='minimal' and p.get('artwork','auto') in {'auto','backdrop'}:
+    if logo and not embed.thumbnail and p.get('style') in {'rich','compact'} and p.get('artwork','auto') in {'auto','backdrop'}:
         embed.set_thumbnail(url=logo)
     end=last_play or play
     detail_meta={'ids':ids,'movie':movie,'season':None if movie else play['season'],

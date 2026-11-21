@@ -496,13 +496,47 @@ def render_activity_png(model,artwork=None):
     return png(image)
 
 
-async def activity_card_kwargs(embed,part,*,preview=False,sample=False,parts=None):
+async def _load_episode_artwork(session, client, ids, art):
+    """Fill missing landscape art and logo independently after decoding."""
+    series_id = ids.get("tmdb")
+    try:
+        async with asyncio.timeout(5):
+            if not series_id and ids.get("tvdb"):
+                series_id = await client.find_series_by_tvdb(ids["tvdb"])
+            if not series_id and ids.get("imdb"):
+                series_id = await client.find_series_by_imdb(ids["imdb"])
+            if not series_id:
+                return
+
+            async def fill(name, lookup):
+                if name not in art:
+                    source = await lookup(series_id)
+                    if source:
+                        asset = await _download(session, source)
+                        if asset is not None:
+                            art[name] = asset
+
+            async with asyncio.TaskGroup() as tasks:
+                tasks.create_task(fill("image", client.get_tv_backdrop))
+                tasks.create_task(fill("logo", client.get_tv_logo))
+    except TimeoutError:
+        return
+
+
+async def activity_card_kwargs(embed,part,*,preview=False,sample=False,parts=None,tmdb_client=None):
     model=together_model(embed,parts,preview=preview,sample=sample) if parts and len(parts)>1 else card_model(embed,part,preview=preview,sample=sample)
     mal_id=part.get('meta',{}).get('ids',{}).get('mal') if model.get('reading') else None
     if mal_id:
         model['mal_id']=mal_id
     if model.get('reading'):
         model['banner']=part.get('meta',{}).get('banner_url')
+    meta=part.get('meta',{})
+    episode_ids=None
+    if tmdb_client is not None and not model['movie'] and not model['reading'] and not meta.get('status') and meta.get('episodes'):
+        ids=meta.get('ids') or {}
+        episode_ids={key: ids[key] for key in ('tmdb','tvdb','imdb') if ids.get(key)}
+        if episode_ids:
+            model['series_artwork_ids']=episode_ids
     key=hashlib.sha256(json.dumps(model,sort_keys=True).encode()).hexdigest()
     async with _render_gate:
         data=_cards.get(key)
@@ -527,15 +561,19 @@ async def activity_card_kwargs(embed,part,*,preview=False,sample=False,parts=Non
                     for task in tasks:
                         if not task.done():task.cancel()
                     await asyncio.gather(*tasks,return_exceptions=True)
+                missing_preferred=bool(model.get('image') and 'image' not in art)
+                if episode_ids and ('image' not in art or 'logo' not in art):
+                    await _load_episode_artwork(session,tmdb_client,episode_ids,art)
                 if mal_id and not art.get('image'):
                     fallback=await _mal_manga_cover(session,mal_id)
                     if fallback is not None:
                         art['image']=fallback
             missing_art=bool((model.get('image') or mal_id) and not art.get('image'))
-            if missing_art and not model.get('reading'):
+            if missing_art and not (model.get('reading') or episode_ids):
                 raise ValueError('Activity artwork is temporarily unavailable')
             data=(await asyncio.to_thread(render_activity_png,model,art)).getvalue()
-            if not missing_art and not (model.get('banner') and not art.get('banner')):
+            incomplete_episode=episode_ids and (missing_preferred or 'image' not in art or 'logo' not in art)
+            if not missing_art and not incomplete_episode and not (model.get('banner') and not art.get('banner')):
                 _cards[key]=data
                 while len(_cards)>16 or sum(map(len,_cards.values()))>24_000_000:_cards.popitem(last=False)
         else:_cards.move_to_end(key)

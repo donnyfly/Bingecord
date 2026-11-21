@@ -99,6 +99,7 @@ class TmdbClient:
             tuple,
             dict | None,
         ] = {}
+        self._imdb_series_cache: dict[str, int] = {}
         self._genre_cache: dict[str, dict[int, str]] = {}
 
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -246,6 +247,16 @@ class TmdbClient:
             )
 
         return series_id
+
+    async def find_series_by_imdb(self, imdb_id) -> int | None:
+        if not isinstance(imdb_id, str) or not imdb_id.startswith("tt") or not imdb_id[2:].isascii() or not imdb_id[2:].isdigit():
+            return None
+        if imdb_id not in self._imdb_series_cache:
+            data = await self._get_json(f"{API_BASE}/find/{imdb_id}", {"external_source": "imdb_id"})
+            results = (data or {}).get("tv_results") or []
+            if len(results) == 1 and type(results[0].get("id")) is int:
+                self._imdb_series_cache[imdb_id] = results[0]["id"]
+        return self._imdb_series_cache.get(imdb_id)
 
     # ------------------------------------------------------------------
     # TV episode details
@@ -1340,34 +1351,21 @@ class TmdbClient:
             return None
         if series_id in self._tv_backdrop_cache:
             return self._tv_backdrop_cache[series_id]
-        data = await self._get_json(
-            f"{API_BASE}/tv/{series_id}/images",
-            {"include_image_language": "en,null"},
-        )
-        if not data:
-            self._tv_backdrop_cache[series_id] = None
-            return None
-        backdrops = data.get("backdrops") or []
-        if not backdrops:
-            self._tv_backdrop_cache[series_id] = None
-            return None
-        backdrops = sorted(
-            backdrops,
-            key=lambda image: (
-                image.get("vote_average", 0),
-                image.get("vote_count", 0),
-            ),
-            reverse=True,
-        )
-        path = backdrops[0].get("file_path")
-        result = f"{IMAGE_BASE}{path}" if path else None
-        self._tv_backdrop_cache[series_id] = result
-        return result
+        path = await self._get_title_image(f"{API_BASE}/tv/{series_id}/images", "backdrops")
+        if path:
+            self._tv_backdrop_cache[series_id] = f"{IMAGE_BASE}{path}"
+        return self._tv_backdrop_cache.get(series_id)
 
-
-    # ------------------------------------------------------------------
-    # Title logos
-    # ------------------------------------------------------------------
+    async def _get_title_image(self, endpoint: str, field: str) -> str | None:
+        """Prefer English and neutral artwork, then allow other languages."""
+        for params in ({"include_image_language": "en,null"}, None):
+            data = await self._get_json(endpoint, params)
+            if data is None:
+                return None
+            images = [image for image in data.get(field, []) or [] if image.get("file_path")]
+            if images:
+                return max(images, key=lambda image: (image.get("vote_average", 0), image.get("vote_count", 0)))["file_path"]
+        return None
 
     async def _get_title_logo(
         self,
@@ -1375,40 +1373,13 @@ class TmdbClient:
         cache: dict[int, str | None],
         item_id: int,
     ) -> str | None:
-        """Return the highest-rated English/neutral transparent title logo."""
-
-        if item_id in cache:
-            return cache[item_id]
-
-        data = await self._get_json(
-            path,
-            {
-                "include_image_language": "en,null",
-            },
-        )
-
-        if not data:
-            cache[item_id] = None
-            return None
-
-        logos = data.get("logos") or []
-        if not logos:
-            cache[item_id] = None
-            return None
-
-        logos = sorted(
-            logos,
-            key=lambda image: (
-                image.get("vote_average", 0),
-                image.get("vote_count", 0),
-            ),
-            reverse=True,
-        )
-
-        logo_path = logos[0].get("file_path")
-        result = f"https://image.tmdb.org/t/p/w500{logo_path}" if logo_path else None
-        cache[item_id] = result
-        return result
+        if item_id not in cache:
+            logo_path = await self._get_title_image(path, "logos")
+            if logo_path:
+                if logo_path.endswith(".svg"):
+                    logo_path = logo_path.removesuffix(".svg") + ".png"
+                cache[item_id] = f"https://image.tmdb.org/t/p/w500{logo_path}"
+        return cache.get(item_id)
 
     async def get_movie_logo(self, movie_id) -> str | None:
         try:
