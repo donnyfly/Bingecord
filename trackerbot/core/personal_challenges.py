@@ -159,9 +159,9 @@ def snapshot(progression,now,*,preview=False):
             done=ch['id'] in progression.get('challenge_completions',{}).get(f'{scope}:{at.isoformat()}',{}) if not preview else state['value']>=ch['target']
             rows.append({**ch,**state,'done':done})
         sections.append({'scope':scope,'end':end.isoformat(),'rows':rows})
-    if "reading_events" in progression:
+    if preview or "reading_events" in progression:
         for scope, start, end in reading_periods(now):
-            events = list(reading.in_period(progression["reading_events"], start, end))
+            events = list(reading.in_period(progression.get("reading_events", []), start, end))
             completed = progression.get("challenge_completions", {}).get(f"{scope}:{start.date().isoformat()}", {})
             sections.append({
                 "scope": scope, "reading": True, "end": end.isoformat(),

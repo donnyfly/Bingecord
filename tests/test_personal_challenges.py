@@ -128,7 +128,7 @@ def test_card_snapshot_is_readonly_and_preview_uses_new_rules():
     assert all(r.get('version')==2 for r in preview['sections'][0]['rows'])
     from trackerbot.presentation.challenge_visuals import render_challenges_png
     image=render_challenges_png('A long member display name with unicode 日本語',preview,now=datetime(2026,11,19,12,tzinfo=timezone.utc))
-    assert Image.open(image).size==(1080,1500)
+    assert Image.open(image).size==(1080,2058)
 
 
 def test_storage_refresh_validates_completion_support_and_keeps_shared_metadata(tmp_path,monkeypatch):
@@ -166,7 +166,10 @@ def test_private_debug_preview_does_not_enrich_or_award(monkeypatch):
         send=AsyncMock();monkeypatch.setattr(delivery,'challenge_card',send)
         await bot.simkl_debug.callback(i,app_commands.Choice(name='Personal challenges card',value='challenges'))
         refresh.assert_not_awaited();assert send.await_args.kwargs['ephemeral']
-        assert send.await_args.args[2]['preview']
+        preview=send.await_args.args[2]
+        assert preview['preview']
+        assert [row['target'] for section in preview['sections'] if section.get('reading') for row in section['rows']]==[3,15,2]
+        bot.storage.get_challenge_state.assert_awaited_once_with('42',reading_enabled=True)
     asyncio.run(run())
 
 
@@ -197,6 +200,7 @@ def test_delivery_keeps_readable_objectives_when_renderer_fails(monkeypatch):
         send=AsyncMock();await delivery.challenge_card(send,user,state,now=START,ephemeral=True)
         kwargs=send.await_args.kwargs
         assert kwargs['ephemeral'] and 'file' not in kwargs
-        assert len(kwargs['embed'].fields)==2
+        assert len(kwargs['embed'].fields)==4
         assert 'Watch 30 minutes' in kwargs['embed'].fields[0].value
+        assert 'Read 3 manga chapters' in kwargs['embed'].fields[2].value
     asyncio.run(run())

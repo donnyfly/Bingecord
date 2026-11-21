@@ -161,12 +161,17 @@ public list entries. Daily and weekly reading challenges, reading streaks, the
 weekly community reading goal, and period leaderboards use new chapter progress
 detected after the initial sync. Manga never earns per-chapter XP.
 
-The weekly community reading goal is 100 chapters. When the server reaches it,
+The weekly community reading goal runs alongside the rotating watch events and
+targets 100 chapters each week. When the server reaches it,
 readers who contributed at least 3 chapters receive 350 XP after the week ends
 if progression is enabled. Personal challenges reset in UTC. Server recaps,
 community goals, and period leaderboards use the server timezone. Updates are
 credited to the time Bingecord detects them because snapshots can combine several
 AniList edits. Relinking seeds a fresh baseline and preserves previously earned XP.
+
+Admins can preview daily and weekly manga goals through **Personal challenges card**
+in `/bingecord debug`. To preview the server goal, choose **Community event card**
+and set `community_event` to **Community Reading Goal**.
 
 ### 5. Create the Docker setup
 

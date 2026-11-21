@@ -49,7 +49,9 @@ def test_successful_personal_card_is_compact_but_details_retain_objectives(monke
         kwargs=send.await_args.kwargs
         assert kwargs['embed'] is None and kwargs['file'].filename=='challenges.png'
         assert 'Preview' in kwargs['view'].embed.title
-        assert len(kwargs['view'].embed.fields)==2
+        fields=kwargs['view'].embed.fields
+        assert len(fields)==4
+        assert 'Read 15 manga chapters' in fields[3].value
     asyncio.run(run())
 
 

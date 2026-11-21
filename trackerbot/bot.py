@@ -2866,7 +2866,8 @@ async def simkl_achievements(i,user: discord.Member | None = None):
     ],
     rank=[app_commands.Choice(name=name,value=minimum) for minimum,name in RANKS],
     community_event=[app_commands.Choice(name=name,value=value) for value,name in
-                     [('watchathon','Watchathon'),('genres','Genre Expedition'),('bingo','Community Bingo'),('decades','Decade Discovery')]],
+                     [('watchathon','Watchathon'),('genres','Genre Expedition'),('bingo','Community Bingo'),
+                      ('decades','Decade Discovery'),('reading','Community Reading Goal')]],
 )
 @app_commands.autocomplete(achievement=achievement_autocomplete)
 @app_commands.describe(
@@ -2893,7 +2894,11 @@ async def simkl_debug(
         await i.response.defer(ephemeral=True)
         zone=(await storage.get_timezone(str(i.guild.id)))['name'];now=datetime.now(timezone.utc)
         week,start,end=community_week(now,zone)
-        state=await storage.preview_community_event(str(i.guild.id),week,start,end,now,community_event.value if community_event else None)
+        event_kind=community_event.value if community_event else None
+        if event_kind == 'reading':
+            state=await storage.preview_community_event(str(i.guild.id),week,start,end,now,include_reading=True)
+        else:
+            state=await storage.preview_community_event(str(i.guild.id),week,start,end,now,event_kind)
         if not state:
             await i.followup.send('No linked community data to preview.',ephemeral=True)
             return
@@ -2970,7 +2975,7 @@ async def simkl_debug(
         await i.response.defer(ephemeral=True)
         from trackerbot.core.personal_challenges import snapshot
         from trackerbot.presentation.challenge_delivery import challenge_card
-        now=datetime.now(timezone.utc);state=await storage.get_challenge_state(str(i.user.id))
+        now=datetime.now(timezone.utc);state=await storage.get_challenge_state(str(i.user.id),reading_enabled=True)
         await challenge_card(i.followup.send,i.user,snapshot(state,now,preview=True),now=now,ephemeral=True)
         return
     if feature.value == "streak":
