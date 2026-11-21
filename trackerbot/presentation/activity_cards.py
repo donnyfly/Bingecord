@@ -308,13 +308,34 @@ def activity_layout(model):
                 member_positions=member_positions,members_height=members_height)
 
 
+def reading_background(size, accent, cover_art, banner):
+    image=background(size,accent,cover_art or banner)
+    source=banner or cover_art
+    if source is None:
+        return image
+    backdrop=ImageOps.fit(
+        source.convert('RGB'),size,method=Image.Resampling.LANCZOS,
+        centering=(0.5,0.62),
+    )
+    backdrop=backdrop.filter(ImageFilter.GaussianBlur(3 if banner else 14))
+    backdrop=ImageEnhance.Brightness(backdrop).enhance(0.59 if banner else 0.55)
+    # Reveal the artwork toward the right and fade it into the footer.
+    mask=Image.new('L',(65,65))
+    mask.putdata([
+        round(255 * min(1,max(0,(x-15)/49)) * min(1,(64-y)/23))
+        for y in range(65) for x in range(65)
+    ])
+    image.paste(backdrop,(0,0),mask.resize(size,Image.Resampling.BILINEAR))
+    return image
+
+
 def render_reading_png(model, artwork):
     accent=(154,140,232)
     art=artwork.get('image')
     text_x=400
     text_width=632
     size=(1080,640)
-    image=background(size,accent,art)
+    image=reading_background(size,accent,art,artwork.get('banner'))
     draw=ImageDraw.Draw(image)
 
     def text(x, y, value, size, colour=WHITE, bold=False, width=text_width):
@@ -332,22 +353,34 @@ def render_reading_png(model, artwork):
     text(106,68,model['author'],28,bold=True,width=926)
     cover_box=(48,128,364,582)
     if art:
-        cover(image,art,cover_box,16,contain=True)
+        left,top,right,bottom=cover_box
+        fitted=ImageOps.contain(art,(right-left,bottom-top),method=Image.Resampling.LANCZOS)
+        x=left+(right-left-fitted.width)//2
+        y=top+(bottom-top-fitted.height)//2
+        frame=(x,y,x+fitted.width,y+fitted.height)
+        cover(image,fitted,frame,14)
+        draw.rounded_rectangle((x,y,frame[2]-1,frame[3]-1),14,outline=(167,151,128),width=1)
     else:
         panel(image,cover_box,16)
         draw.rounded_rectangle((175,317,237,385),6,outline=accent,width=3)
         draw.line((206,317,206,385),fill=accent,width=3)
 
-    y=158
-    for line in _wrap(draw,model['action'],34,text_width,2,True):
+    title_lines=_wrap(draw,model['title'],50,text_width,3,True)
+    action_lines=_wrap(draw,model['action'],34,text_width,2,True)
+    notes=model.get('notes',[])[:3]
+    content_height=56*len(title_lines)+8+42*len(action_lines)
+    if notes:
+        content_height+=14+48*len(notes)
+    y=cover_box[1]+(cover_box[3]-cover_box[1]-content_height)//2
+    for line in title_lines:
+        text(text_x,y,line,50,bold=True)
+        y+=56
+    y+=8
+    for line in action_lines:
         text(text_x,y,line,34,accent,bold=True)
         y+=42
-    y+=8
-    for line in _wrap(draw,model['title'],46,text_width,3,True):
-        text(text_x,y,line,46,bold=True)
-        y+=53
     y+=14
-    for note in model.get('notes',[])[:3]:
+    for note in notes:
         width=min(text_width,round(draw.textlength(note,font=font(19,True),**SHAPING))+36)
         panel(image,(text_x,y,text_x+width,y+40),12)
         text(text_x+18,y+7,note,19,accent if note.startswith('NEW') else (82,196,166),True,width-36)
@@ -461,6 +494,8 @@ async def activity_card_kwargs(embed,part,*,preview=False,sample=False,parts=Non
     mal_id=part.get('meta',{}).get('ids',{}).get('mal') if model.get('reading') else None
     if mal_id:
         model['mal_id']=mal_id
+    if model.get('reading'):
+        model['banner']=part.get('meta',{}).get('banner_url')
     key=hashlib.sha256(json.dumps(model,sort_keys=True).encode()).hexdigest()
     async with _render_gate:
         data=_cards.get(key)
@@ -468,6 +503,8 @@ async def activity_card_kwargs(embed,part,*,preview=False,sample=False,parts=Non
             timeout=aiohttp.ClientTimeout(total=5 if model.get('reading') else 3)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 assets=dict(model);keys=('image','logo','avatar')
+                if assets.get('banner'):
+                    keys+=('banner',)
                 for index,member in enumerate(model.get('members',[])):
                     name='member:'+str(index);assets[name]=member['avatar'];keys+= (name,)
                 async def load(name):return name,await _download(session,assets.get(name))
@@ -475,7 +512,8 @@ async def activity_card_kwargs(embed,part,*,preview=False,sample=False,parts=Non
                 art={}
                 try:
                     async with asyncio.timeout(5):
-                        for name,value in await asyncio.gather(*tasks):
+                        for task in asyncio.as_completed(tasks):
+                            name,value=await task
                             if value is not None:art[name]=value
                 except TimeoutError:pass
                 finally:
@@ -490,7 +528,7 @@ async def activity_card_kwargs(embed,part,*,preview=False,sample=False,parts=Non
             if missing_art and not model.get('reading'):
                 raise ValueError('Activity artwork is temporarily unavailable')
             data=(await asyncio.to_thread(render_activity_png,model,art)).getvalue()
-            if not missing_art:
+            if not missing_art and not (model.get('banner') and not art.get('banner')):
                 _cards[key]=data
                 while len(_cards)>16 or sum(map(len,_cards.values()))>24_000_000:_cards.popitem(last=False)
         else:_cards.move_to_end(key)

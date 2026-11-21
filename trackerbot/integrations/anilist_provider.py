@@ -322,6 +322,8 @@ class AniListProvider(BaseProvider):
         if media == "manga":
             if entry.mal_id:
                 meta["ids"]["mal"] = entry.mal_id
+            if entry.banner_url:
+                meta["banner_url"] = entry.banner_url
             prefs = {**prefs, "style": "card"}
         elif entry.score and prefs.get("show_personal", True):
             desc += f"\n💬 Your list rating: {entry.score:g}/10"
