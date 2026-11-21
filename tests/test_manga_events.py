@@ -40,4 +40,5 @@ def test_manga_rotation_scores_distinct_titles_and_bingo_lines():
         result = score(goal, records)
         assert result["total"] == (11 if kind == "readathon" else 2 if kind == "manga_decades" else 3 if kind == "manga_bingo" else 2)
         if kind == "manga_bingo":
+            assert [o.get("titles") for o in result["objectives"][:3]] == [["A"], ["B"], ["C"]]
             assert [o["done"] for o in result["objectives"]] == [True,True,True,False,False,False,False,False,False]

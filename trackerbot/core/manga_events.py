@@ -60,6 +60,7 @@ def score(goal, records):
     kind = goal.get("kind", "legacy")
     target, minimum, required = (goal.get("target", COMMUNITY_TARGET), goal.get("minimum", COMMUNITY_MINIMUM), goal.get("required", 1))
     options = defaultdict(set)
+    eligible_titles = set()
     support = defaultdict(set)
     objectives = []
     total = sum(chapters.values())
@@ -90,15 +91,24 @@ def score(goal, records):
                 )))
             for slot, users in matches.items():
                 if users:
+                    eligible_titles.add(title)
                     options[slot].add((title,))
                     support[slot].update(users)
         if kind == "manga_bingo":
             line_matches = [_matching({slot: options[slot] for slot in line}) for line in LINES]
             matched = max(line_matches, key=len)
-            objectives = [{"label": label, "done": i in matched, "available": bool(options[i])} for i, label in enumerate(BINGO)]
+            objectives = [
+                {"label": label, "done": index in matched, "available": bool(options[index])}
+                for index, label in enumerate(BINGO)
+            ]
         else:
             matched = _matching(options)
             objectives = [{"label": str(slot), "done": True} for slot in sorted(matched)]
+        for objective, slot in zip(objectives, range(len(BINGO)) if kind == "manga_bingo" else sorted(matched)):
+            if slot in matched:
+                title = metadata.get(matched[slot][0], {}).get("title")
+                if title:
+                    objective["titles"] = [title]
         total = len(matched)
 
     contributions = Counter(chapters)
@@ -112,6 +122,6 @@ def score(goal, records):
         "kind": kind, "target": target, "minimum": minimum, "required": required,
         "qualified": qualified, "contributions": dict(chapters), "eligible": dict(contributions),
         "total": total, "chapters": sum(chapters.values()), "objectives": objectives,
-        "pending": pending, "reached": total >= target and len(qualified) >= required, "end": goal["end"],
+        "eligible_titles": len(eligible_titles), "pending": pending, "reached": total >= target and len(qualified) >= required, "end": goal["end"],
         "titles": [dict(metadata[title], count=sum(by_title[title].values())) for title in titles[:5] if title in metadata],
     }

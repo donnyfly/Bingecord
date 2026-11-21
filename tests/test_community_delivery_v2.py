@@ -71,7 +71,7 @@ def test_debug_community_reading_goal_without_a_live_event(tmp_path, monkeypatch
         from trackerbot.presentation.manga_pages import community_page
         payload = await community_page(interaction.guild, preview["reading"], "42", preview=True)
         assert payload["view"].embed.title == "Community Readathon"
-        assert Image.open(payload["file"].fp).width == 1080
+        assert Image.open(payload["file"].fp).size == (1080, 1500)
         assert store._data == before
 
     asyncio.run(run())
