@@ -1151,7 +1151,7 @@ class Storage:
             await self.flush()
         return True, snapshot
 
-    async def record_reading(self, guild_id, user_id, token, snapshot, observed_at):
+    async def record_reading(self, guild_id, user_id, token, snapshot, observed_at, *, catalogue=None):
         """Commit reading independently of Discord card delivery."""
         gid, uid = str(guild_id), str(user_id)
         async with _lock:
@@ -1178,6 +1178,15 @@ class Storage:
             if changed:
                 events = list(reading.observe(snapshot, previous, record.setdefault("ceilings", {}), account, observed_at, seed=seed))
                 record.update(account=account, snapshot=copy.deepcopy(snapshot))
+            if catalogue is not None:
+                saved = record.setdefault("catalogue", {})
+                for media_id, state in snapshot.items():
+                    if state[4] and media_id in saved:
+                        del saved[media_id]
+                        changed = True
+                if any(saved.get(key) != value for key, value in catalogue.items()):
+                    saved.update(copy.deepcopy(catalogue))
+                    changed = True
             record["observed_at"] = stamp
             if events:
                 record.setdefault("events", []).extend(events)
@@ -1266,34 +1275,39 @@ class Storage:
             stats["streak"] = reading.longest_streak(record.get("events", []), _resolve_timezone(guild.get("timezone")))
             return stats
 
-    async def get_guild_reading_summary(self, guild_id, start, end):
+    async def get_guild_reading_summary(self, guild_id, start, end, *, with_readers=False):
         async with _lock:
             guild = self._guild(str(guild_id)) or {}
-            return reading.summary(
-                event for record in guild.get("reading", {}).values()
-                for event in reading.in_period(record.get("events", []), start, end)
-            )
+            records = guild.get("reading", {})
+            weekly = {uid: list(reading.in_period(record.get("events", []), start, end)) for uid, record in records.items()}
+            result = reading.summary(event for events in weekly.values() for event in events)
+            if with_readers:
+                result["readers"] = {uid: count for uid, events in weekly.items() if (count := sum(e["chapters"] for e in events))}
+            return result
 
     async def get_reading_community(self, guild_id, week, start, end, now):
         """Settle reading goals separately from the watch event."""
+        from .manga_events import FIRST_WEEK, new_goal, score
         async with _lock:
             guild = self._guild(str(guild_id))
             if not guild:
                 return None
             records = guild.get("reading", {})
-            enabled = any(member.get("anilist_manga") for member in guild["users"].values())
+            enabled = {uid for uid, member in guild["users"].items() if member.get("anilist_manga")}
             goals = guild.setdefault("reading_community", {})
             if week not in goals and enabled:
-                goals[week] = {"start": start.isoformat(), "end": end.isoformat()}
+                goals[week] = new_goal(week, start, end, records, enabled) if week >= FIRST_WEEK.isoformat() else {
+                    "start": start.isoformat(), "end": end.isoformat(),
+                }
                 self._dirty = True
             for key, goal in goals.items():
                 if goal.get("settled") or now < datetime.fromisoformat(goal["end"]):
                     continue
-                contributions = self._reading_contributions(records, goal)
-                if sum(contributions.values()) >= reading.COMMUNITY_TARGET and guild["features"]["progression"]:
-                    for uid, count in contributions.items():
+                result = score(goal, records)
+                if result["reached"] and guild["features"]["progression"]:
+                    for uid in result["qualified"]:
                         user = self._user(uid)
-                        if not user or count < reading.COMMUNITY_MINIMUM:
+                        if not user:
                             continue
                         progression = user["progression"]
                         reward_key = f"{guild_id}:reading:{key}"
@@ -1311,19 +1325,10 @@ class Storage:
         return result
 
     def _reading_community_state(self, guild, goal):
-        contributions = self._reading_contributions(guild.get("reading", {}), goal)
-        return {
-            "chapters": sum(contributions.values()), "contributions": contributions,
-            "end": goal["end"], "xp": reading.COMMUNITY_XP if guild["features"]["progression"] else 0,
-        }
-
-    @staticmethod
-    def _reading_contributions(records, goal):
-        start, end = datetime.fromisoformat(goal["start"]), datetime.fromisoformat(goal["end"])
-        return {
-            uid: sum(event["chapters"] for event in reading.in_period(record.get("events", []), start, end))
-            for uid, record in records.items()
-        }
+        from .manga_events import score
+        return {**score(goal, guild.get("reading", {})),
+                "timezone": str(_resolve_timezone(guild.get("timezone"))),
+                "xp": reading.COMMUNITY_XP if guild["features"]["progression"] else 0}
 
     async def get_activity_provider(self, guild_id: str | int, discord_user_id: str) -> str | None:
         async with _lock:
@@ -2910,10 +2915,15 @@ class Storage:
         from .community_events import event_goal,credited_watches,event_state,ROTATION
         async with _lock:
             guild=self._guild(str(guild_id))
-            if kind == "reading":
+            from .manga_events import ROTATION as MANGA_ROTATION, new_goal
+            if kind == "reading" or kind in MANGA_ROTATION:
                 guild = guild or _default_guild()
-                goal = guild.get("reading_community", {}).get(week) or {"start": start.isoformat(), "end": end.isoformat()}
-                return {"kind": "reading", "name": "Community Reading Goal", "key": week, "preview": True,
+                saved = guild.get("reading_community", {}).get(week)
+                enabled = {uid for uid, member in guild["users"].items() if member.get("anilist_manga")}
+                goal = saved if kind == "reading" and saved else new_goal(
+                    week, start, end, guild.get("reading", {}), enabled, None if kind == "reading" else kind,
+                )
+                return {"kind": "reading", "key": week, "preview": True,
                         "reading": self._reading_community_state(guild, goal)}
             if not guild:return None
             members=guild.get('users') or {};providers={u:m.get('activity_provider','simkl') for u,m in members.items()}

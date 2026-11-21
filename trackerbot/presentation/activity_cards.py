@@ -350,7 +350,7 @@ def render_reading_png(model, artwork):
     else:
         draw.ellipse((48,62,92,106),fill=LINE)
         paint(draw,(70,84),model['author'][:1].upper(),font=font(20,True),fill=accent,anchor='mm')
-    text(106,68,model['author'],28,bold=True,width=926)
+    draw_activity_author(draw, model['author'], 926)
     cover_box=(48,128,364,582)
     if art:
         left,top,right,bottom=cover_box
@@ -393,6 +393,13 @@ def render_reading_png(model, artwork):
     return png(image)
 
 
+def draw_activity_author(draw, author, width):
+    face = fit(draw, author, 33, width, True)
+    value = short(draw, author, face.size, width, True)
+    _, top, _, bottom = draw.textbbox((0, 0), value, font=face)
+    paint(draw, (106, 84 - (top + bottom) // 2), value, font=face, fill=WHITE)
+
+
 def render_activity_png(model,artwork=None):
     if model.get('reading'):
         return render_reading_png(model,artwork or {})
@@ -414,7 +421,7 @@ def render_activity_png(model,artwork=None):
             draw.arc((53,83,73,100),180,350,fill=accent,width=2)
             draw.arc((67,83,87,100),190,360,fill=accent,width=2)
         else:paint(draw,(70,84),model['author'][:1].upper(),font=font(20,True),fill=accent,anchor='mm')
-    text(106,68,model['author'],28,WHITE,True,width=650)
+    draw_activity_author(draw, model['author'], 650)
     top=layout['hero_top'];h=layout['hero_height']
     if hero:tile=cinematic_art(hero,(1080,h))
     else:

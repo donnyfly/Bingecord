@@ -438,7 +438,7 @@ def test_debug_profile_uses_live_renderer_without_awarding_achievements(monkeypa
             interaction.response.defer.assert_awaited_once_with(ephemeral=True)
             assert interaction.followup.send.await_args.kwargs['file'].filename=='profile.png'
             assert interaction.followup.send.await_args.kwargs['embed'] is None
-            assert interaction.followup.send.await_args.kwargs['view'].embed.fields[0].name=='Watch history'
+            assert interaction.followup.send.await_args.kwargs['view'].pages['watch'][2].embed.fields[0].name=='Watch history'
             assert await store.get_progression('42')==before
     asyncio.run(scenario())
 
@@ -472,39 +472,34 @@ def test_debug_server_cards_are_private_and_use_live_renderers(monkeypatch):
 
 def test_debug_weekly_recap_previews_reading_when_the_week_is_empty(monkeypatch):
     async def scenario():
-        from trackerbot.presentation import card_details
-
         interaction = _interaction()
         interaction.guild.name = "Server"
         monkeypatch.setattr(bot.storage, "get_guild_statistics", AsyncMock(return_value=[]))
         reading_totals = AsyncMock(return_value={"chapters": 0, "started": 0, "statuses": {}})
         monkeypatch.setattr(bot.storage, "get_guild_reading_summary", reading_totals)
-        details = AsyncMock()
-        monkeypatch.setattr(card_details, "details_view", details)
-        captured = []
-        renderer = bot.render_summary_png
 
-        def render(*args, story, **kwargs):
-            captured.append(story["reading"])
-            return renderer(*args, story=story, **kwargs)
-
-        monkeypatch.setattr(bot, "render_summary_png", render)
-        feature = app_commands.Choice(name="Weekly recap card", value="weekly_recap")
         (embed, _, _, extras), _ = await bot.generate_weekly_recap(interaction.guild)
         assert "reading" not in extras["story"]
         assert not embed.fields
 
+        feature = app_commands.Choice(name="Weekly recap card", value="weekly_recap")
         await bot.simkl_debug.callback(interaction, feature)
         message = interaction.followup.send.await_args.kwargs
         assert message["ephemeral"] is True
-        assert Image.open(message["file"].fp).height == 1575
-        assert details.await_args.args[0].fields[0].name == "Reading · AniList · Sample data"
-        assert captured[0]["sample"] is True
+        view = message["view"]
+        assert view.watch.disabled and not view.read.disabled
+        assert Image.open(message["file"].fp).height == 1420
+        click = SimpleNamespace(response=SimpleNamespace(defer=AsyncMock()), edit_original_response=AsyncMock())
+        await view.switch(click, "manga")
+        assert click.edit_original_response.await_args.kwargs["attachments"][0].filename == "manga-weekly-recap.png"
+        assert view.pages["manga"][2].embed.footer.text == "Sample data"
+        assert view.read.disabled and not view.watch.disabled
+        await view.switch(click, "watch")
+        assert click.edit_original_response.await_args.kwargs["attachments"][0].filename == "summary-preview.png"
 
         reading_totals.return_value = {"chapters": 0, "started": 1, "statuses": {}}
-        await bot.simkl_debug.callback(interaction, feature)
-        assert captured[1] == reading_totals.return_value
-        assert details.await_args.args[0].fields[0].name == "Reading · AniList"
+        (_, _, _, extras), _ = await bot.generate_weekly_recap(interaction.guild, preview=True)
+        assert extras["manga"] == reading_totals.return_value
 
     asyncio.run(scenario())
 

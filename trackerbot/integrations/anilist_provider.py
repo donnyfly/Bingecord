@@ -22,6 +22,14 @@ def progress_state(entry):
     return [entry.id, entry.status, entry.progress, entry.repeat, entry.private]
 
 
+def manga_catalogue(entries):
+    return {
+        str(entry.media_id): {"title": entry.title, "cover": entry.cover_url, "year": entry.year,
+                              "format": entry.format, "genres": list(entry.genres)}
+        for entry in entries if not entry.private
+    }
+
+
 def list_update(entry, previous):
     """Group a progress increase into one activity and retain status-only changes."""
     if entry.private or previous and (previous[0] != entry.id or previous[4]):
@@ -265,7 +273,7 @@ class AniListProvider(BaseProvider):
             log.warning("AniList manga baseline for guild %s failed: %s", guild_id, exc)
             return False
         snapshot = {str(entry.media_id): progress_state(entry) for entry in entries}
-        if await storage.record_reading(guild_id, uid, token, snapshot, observed_at):
+        if await storage.record_reading(guild_id, uid, token, snapshot, observed_at, catalogue=manga_catalogue(entries)):
             active, _ = await storage.anilist_snapshot(
                 guild_id, uid, token, "MANGA", replace=snapshot, seed=True,
             )
@@ -282,7 +290,8 @@ class AniListProvider(BaseProvider):
             return 0
         latest = {str(entry.media_id): progress_state(entry) for entry in entries}
         if media_type == "MANGA":
-            recorded = await storage.record_reading(guild_id, uid, token, latest, observed_at or datetime.now(timezone.utc))
+            recorded = await storage.record_reading(guild_id, uid, token, latest, observed_at or datetime.now(timezone.utc),
+                                                    catalogue=manga_catalogue(entries))
             if not recorded:
                 return 0
         if baseline is None:

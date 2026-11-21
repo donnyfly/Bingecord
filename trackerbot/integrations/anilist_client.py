@@ -18,6 +18,7 @@ query BingecordList($userId: Int!, $type: MediaType!, $page: Int!) {
       id userId mediaId status progress repeat updatedAt private score(format: POINT_10_DECIMAL)
       media {
         id idMal type format episodes chapters bannerImage genres
+        startDate { year }
         title { english romaji native }
         coverImage { large }
       }
@@ -60,6 +61,7 @@ class AniListEntry:
     score: float | None = None
     genres: tuple[str, ...] = ()
     mal_id: int | None = None
+    year: int | None = None
 
     @property
     def site_url(self) -> str:
@@ -180,5 +182,5 @@ def _parse_entry(row: dict, account_id: int, media_type: MediaType) -> AniListEn
         title["english"] or title["romaji"] or title["native"] or f"AniList #{media['id']}",
         media["format"], row["status"], progress, repeat, updated_at, row["private"],
         total, (media["coverImage"] or {}).get("large"), media["bannerImage"],
-        row.get("score"), tuple(media.get("genres") or ()), media.get("idMal"),
+        row.get("score"), tuple(media.get("genres") or ()), media.get("idMal"), (media.get("startDate") or {}).get("year"),
     )

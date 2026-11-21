@@ -153,25 +153,37 @@ Enable any combination of SIMKL, WeTrakr and MDBList. None is the primary provid
 
 Each selected list starts with a silent baseline and posts later progress and status changes in the server's activity channel. Turning manga on attempts to set its baseline immediately. If it is pending, run `/bingecord checknow` before updating your next chapter. AniList anime uses the Watch Activity layout and the episode numbers from each AniList entry. Manga posts a portrait-cover Reading Activity card. Admins can use `/bingecord debug` with **Reading Activity card** to preview it privately. Private list entries are skipped. AniList compares list snapshots, so multiple edits between checks are summarized by the latest state. AniList anime activity is separate from XP. AniList activity does not contribute to Watched Together or recommendations. If authorization expires, link AniList again.
 
-Manga tracking adds an AniList section to member and server stats, a Reading section to
-weekly recaps, and a Manga chapters category to the leaderboard. The initial list
+Use the **Watch** and **Manga** buttons on member stats, weekly recaps, and community
+event cards to switch pages in the same message. Server stats show AniList totals,
+and the leaderboard has a Manga chapters category. The initial list
 snapshot contributes to lifetime totals and can unlock lifetime reading achievements
 and their one-time XP rewards. Current chapter totals use the progress reported on
 public list entries. Daily and weekly reading challenges, reading streaks, the
 weekly community reading goal, and period leaderboards use new chapter progress
 detected after the initial sync. Manga never earns per-chapter XP.
 
-The weekly community reading goal runs alongside the rotating watch events and
-targets 100 chapters each week. When the server reaches it,
-readers who contributed at least 3 chapters receive 350 XP after the week ends
-if progression is enabled. Personal challenges reset in UTC. Server recaps,
-community goals, and period leaderboards use the server timezone. Updates are
-credited to the time Bingecord detects them because snapshots can combine several
-AniList edits. Relinking seeds a fresh baseline and preserves previously earned XP.
+The manga community rotation runs Monday to Monday in the server timezone alongside
+the watch rotation. The bot fixes each event's targets from readers active in the
+previous 14 days. With no recent reading history, it uses up to two manga-enabled
+members. The event needs two qualifying readers when its baseline has at least
+two readers. Qualifying members receive 350 XP when the team completes the goal
+and progression is enabled.
 
-Admins can preview daily and weekly manga goals through **Personal challenges card**
-in `/bingecord debug`. To preview the server goal, choose **Community event card**
-and set `community_event` to **Community Reading Goal**.
+| Manga event | Team goal | Individual qualification |
+|---|---|---|
+| Community Readathon | 150 chapters per active reader, minimum 200 | 30 chapters |
+| Manga Genre Expedition | 3–8 genres, each from a distinct title | Read 5 chapters of a manga in an eligible genre |
+| Manga Bingo | One line on a 3×3 board, with three distinct titles | Contribute to a board objective |
+| Manga Decades Tour | 2–5 distinct publication decades | Read 5 chapters of a manga with a known publication year |
+
+Personal challenges reset in UTC. Server recaps, community goals, and period
+leaderboards use the server timezone. Updates use the time Bingecord detects
+them because snapshots can combine several AniList edits. Relinking seeds a fresh
+baseline and preserves previously earned XP.
+
+Admins can preview daily and weekly reading goals with **Personal challenges card**
+in `/bingecord debug`. Choose **Community event card** and any manga event from
+`community_event` to preview that event using cached AniList activity.
 
 ### 5. Create the Docker setup
 

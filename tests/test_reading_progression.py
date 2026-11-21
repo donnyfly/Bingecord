@@ -63,10 +63,11 @@ def test_manga_baseline_live_rewards_and_relink(tmp_path, monkeypatch):
         week = start.date().isoformat()
         goal = await store.get_reading_community("1", week, start, end, start)
         assert goal["chapters"] == 15
-        bulk = {**imported_later, "10": [1, "COMPLETED", 345, 0, False]}
+        bulk = {**imported_later, "10": [1, "COMPLETED", 445, 0, False]}
         await observe("1", bulk, start + timedelta(hours=5))
         goal = await store.get_reading_community("1", week, start, end, end)
-        assert goal["chapters"] == 100
+        assert goal["chapters"] == goal["target"] == 200
+        assert goal["reached"]
         await store.get_reading_community("1", week, start, end, end)
         assert (await store.get_progression("2"))["community_rewards"] == {"1:reading:2026-11-23": 350}
 

@@ -3,7 +3,6 @@ from PIL import ImageDraw
 from .card_theme import background,panel,cover,fit,short,png
 from .typography import text as paint,label,font,number_unit,unit_label
 from trackerbot.core.community import CHALLENGES
-from trackerbot.core.reading import COMMUNITY_MINIMUM, COMMUNITY_TARGET
 
 WHITE=(241,243,248);MUTED=(161,166,180);LINE=(48,51,62)
 ACCENTS={'watchathon':(154,140,232),'minutes':(154,140,232),'genres':(82,196,166),
@@ -13,10 +12,7 @@ ACCENTS={'watchathon':(154,140,232),'minutes':(154,140,232),'genres':(82,196,166
 def render_community_png(guild_name,state,*,names=None,avatars=None,viewer=None,posters=None,heading=None,server_icon=None):
     names=names or {};avatars=avatars or {};posters=posters or {}
     accent=ACCENTS.get(state.get('kind'),(154,140,232));modern=state.get('version')==2
-    reading=state.get("reading")
-    reading_only=state.get("kind")=="reading"
-    height=480 if reading_only else 1500+(146 if reading else 0)
-    image=background((1080,height),accent);draw=ImageDraw.Draw(image)
+    image=background((1080,1500),accent);draw=ImageDraw.Draw(image)
     def text(x,y,value,size=20,colour=WHITE,bold=False,width=900):
         value=str(value);face=fit(draw,value,size,width,bold)
         paint(draw,(x,y),short(draw,value,face.size,width,bold),font=face,fill=colour)
@@ -30,21 +26,6 @@ def render_community_png(guild_name,state,*,names=None,avatars=None,viewer=None,
     text(116,68,short(draw,guild_name,30,908,True),30,bold=True,width=908)
     title=state.get('name') or CHALLENGES.get(state.get('kind'),CHALLENGES['minutes'])['name']
     text(56,119,title,37,accent,True,width=968)
-    if reading_only:
-        chapters=reading["chapters"]
-        text(56,172,f"Week of {state['key']} · Chapters logged through AniList",16,MUTED,width=968)
-        panel(image,(56,210,1024,438))
-        tag(80,230,"Server progress")
-        text(80,254,f"{chapters:,} / {COMMUNITY_TARGET:,} chapters",50,accent,True,width=920)
-        draw.rounded_rectangle((80,330,1000,341),5,fill=LINE)
-        if chapters:
-            draw.rounded_rectangle((80,330,80+max(10,int(920*min(1,chapters/COMMUNITY_TARGET))),341),5,fill=accent)
-        if viewer:
-            count=reading["contributions"].get(str(viewer),0)
-            text(80,360,f"You contributed {count:,} {'chapter' if count==1 else 'chapters'}",20,WHITE,width=920)
-        if reading["xp"]:
-            text(80,398,f"+{reading['xp']:,} XP for {COMMUNITY_MINIMUM}+ chapters if the server reaches the goal",16,MUTED,width=920)
-        return png(image)
     status=state.get('status','active')
     caption=heading or {'active':'In progress','goal_reached':'All requirements met · Rewards estimated',
                        'settling':'Sync grace period · Rewards pending','completed':'Event completed · Final rewards',
@@ -141,11 +122,4 @@ def render_community_png(guild_name,state,*,names=None,avatars=None,viewer=None,
         art=posters.get(entry.get('canonical'))
         if art:cover(image,art,(548+index*112,1287,644+index*112,1431),12,contain=True)
     text(56,1461,f"Week of {state.get('key','')} · Next: {state.get('next_event','Community Watchathon')} · No automatic pings",12,MUTED)
-    if reading:
-        panel(image,(56,1500,1024,1614))
-        tag(80,1517,'Community reading goal')
-        personal=f" · You contributed {reading['contributions'].get(str(viewer),0):,}" if viewer else ""
-        text(80,1546,f"{reading['chapters']:,} / {COMMUNITY_TARGET:,} chapters"+personal,23,accent,True,width=920)
-        if reading["xp"]:
-            text(80,1580,f"+{reading['xp']:,} XP for {COMMUNITY_MINIMUM}+ chapters if the server reaches the goal",15,MUTED,width=920)
     return png(image)

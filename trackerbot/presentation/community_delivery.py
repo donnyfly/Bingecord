@@ -2,12 +2,15 @@
 import asyncio
 from datetime import datetime
 import discord
-from trackerbot.core.reading import COMMUNITY_MINIMUM, COMMUNITY_TARGET
 from .community_visuals import render_community_png
 from .discord_artwork import load_discord_artwork,resolve_card_members
 
 
 async def community_card(send,guild,state,*,viewer=None,preview=False,heading=None,client=None):
+    if state.get("kind") == "reading":
+        from .manga_pages import community_page
+        payload = await community_page(guild, state["reading"], viewer, preview=preview, client=client)
+        return await send(**payload, ephemeral=preview, allowed_mentions=discord.AllowedMentions.none())
     names={};assets={};rows=sorted((state.get('contributions') or {}).items(),key=lambda kv:(-kv[1],kv[0]))[:5]
     members=await resolve_card_members(guild,[uid for uid,_ in rows],client)
     for uid,_ in rows:
@@ -45,8 +48,6 @@ async def community_card(send,guild,state,*,viewer=None,preview=False,heading=No
     if state.get('version')==2:
         description+=' · 6-hour sync grace before settlement'
         if state.get('kind')!='watchathon':description+='\nEligible title: a completed movie, 3 regular episodes or a verified season finish.'
-    reading_only=state.get('kind')=='reading'
-    if reading_only:description='Weekly manga reading goal using AniList activity.'
     if preview:description+='\nPrivate rules preview using cached activity. No event or XP changes.'
     embed=discord.Embed(title=heading or title,description=description,color=0x9A8CE8)
     if state.get('status') in {'completed','missed'}:
@@ -55,16 +56,6 @@ async def community_card(send,guild,state,*,viewer=None,preview=False,heading=No
         lines=[f"<@{uid}> · {deltas.get(uid,awards.get(uid,0)):+,} XP" for uid in recipients[:5]]
         if len(recipients)>5:lines.append(f'+ {len(recipients)-5} more recipients')
         if lines:embed.add_field(name='Reward results',value='\n'.join(lines),inline=False)
-    reading=state.get("reading")
-    if reading:
-        text=f"**{reading['chapters']:,} / {COMMUNITY_TARGET:,}** manga chapters"
-        text+=" · Ends "+discord.utils.format_dt(datetime.fromisoformat(reading["end"]),style="R")
-        if viewer:
-            count=reading["contributions"].get(str(viewer),0)
-            text+=f"\nYour contribution: **{count:,}** chapters"
-        if reading["xp"]:
-            text+=f"\n**+{reading['xp']:,} XP** for members with {COMMUNITY_MINIMUM}+ chapters if the goal is reached."
-        embed.add_field(name="Reading progress" if reading_only else "Community Reading Goal",value=text,inline=False)
     kwargs={'embed':embed,'allowed_mentions':discord.AllowedMentions.none()}
     if preview:kwargs['ephemeral']=True
     try:
@@ -76,7 +67,7 @@ async def community_card(send,guild,state,*,viewer=None,preview=False,heading=No
         if lines:detail.add_field(name='Contributors · Top five',value='\n'.join(lines),inline=False)
         objectives=state.get('objectives') or []
         if objectives:detail.add_field(name='Objectives',value='\n'.join(('Complete: ' if o['done'] else 'Needed: ')+o['label']+(f" · {o['count']}/{o['target']} titles" if 'count' in o else '') for o in objectives[:12])[:1024],inline=False)
-        if viewer and not reading_only:detail.add_field(name='Member contribution',value=f"<@{viewer}> · {(state.get('contributions') or {}).get(str(viewer),0):g} {unit}",inline=False)
+        if viewer:detail.add_field(name='Member contribution',value=f"<@{viewer}> · {(state.get('contributions') or {}).get(str(viewer),0):g} {unit}",inline=False)
         from .card_details import details_view
         kwargs['view']=await details_view(detail,owner=viewer if preview else None,guild=getattr(guild,'id',None))
         kwargs.update(embed=None,file=discord.File(image,filename='community.png',description=(heading or title)[:1024]))
