@@ -13,6 +13,7 @@ from trackerbot.integrations.wetrakr_auth import WeTrakrAuth
 from trackerbot.integrations.wetrakr_sync import WeTrakrSync
 from trackerbot.integrations.mdblist_tracking_client import MDBListTrackingClient, MDBListTrackingError
 from trackerbot.integrations.mdblist_provider import MDBListProvider
+from trackerbot.integrations.anilist_provider import AniListProvider
 from trackerbot.core.storage import DEFAULT_FEATURES, EPOCH_ISO, storage
 from trackerbot.core.watch_delivery import WatchActivity, WatchBatch, WatchCycle, current_cycle, watch_key, deliver_watch, current_details
 from trackerbot.core.activity_details import ActivityDetails
@@ -45,6 +46,8 @@ def positive_int_env(name, default, minimum=1):
 DISCORD_BOT_TOKEN=os.getenv("DISCORD_BOT_TOKEN")
 SIMKL_CLIENT_ID=os.getenv("SIMKL_CLIENT_ID", "").strip()
 WETRAKR_API_KEY=os.getenv("WETRAKR_API_KEY", "").strip()
+ANILIST_CLIENT_ID=os.getenv("ANILIST_CLIENT_ID", "").strip()
+ANILIST_CLIENT_SECRET=os.getenv("ANILIST_CLIENT_SECRET", "").strip()
 TMDB_API_KEY=os.getenv("TMDB_API_KEY")
 MDBLIST_API_KEY=os.getenv("MDBLIST_API_KEY")
 POLL_INTERVAL_MINUTES=positive_int_env("POLL_INTERVAL_MINUTES", 60)
@@ -69,7 +72,7 @@ if not TMDB_API_KEY:
 MEDIA_TYPES=("shows","anime","movies"); ACTIVITY_KEYS={"shows":"tv_shows","anime":"anime","movies":"movies"}
 WATCHLIST_STATUSES=("watching","plantowatch","completed","dropped")
 STATUS_TEXT={"watching":"Started watching","plantowatch":"Planned to watch","completed":"Completed","dropped":"Dropped"}
-MEDIA_STYLES={"shows":(0x3498DB,"📺 TV"),"anime":(0xE91E63,"🌸 Anime"),"movies":(0xF1C40F,"🎬 Movie")}
+MEDIA_STYLES={"shows":(0x3498DB,"📺 TV"),"anime":(0xE91E63,"🌸 Anime"),"movies":(0xF1C40F,"🎬 Movie"),"manga":(0x9A8CE8,"Manga")}
 HISTORY_FETCH_TIMEOUT_SECONDS=120; CHECKNOW_COOLDOWN_SECONDS=30
 poll_lock=asyncio.Lock(); last_checknow_at=0.0; linking_users=set(); profile_lookup_attempted=set()
 wetrakr_poll_lock=asyncio.Lock()
@@ -487,7 +490,7 @@ async def send_embed(ch,e,what):
         if post and eligible(post.get('parts') or []):
             part=post['parts'][0]
             p=await prefs(part['guild'],part['user'])
-            if p.get('style')=='card':
+            if p.get('style')=='card' or part['meta'].get('media_type')=='manga':
                 try:
                     part['display_timezone']=(await storage.get_activity_timezone(part['guild'],part['user']))['name']
                     if len(post['parts'])>1:
@@ -4258,7 +4261,9 @@ async def simkl_random(
         item = random.choice(candidates)
         media_type, ids, title = item['media_type'], item['ids'], item['title']
         tmdb_id = ids.get('tmdb')
-        if media_type == 'movies':
+        if not tmdb_id:
+            image, logo = item.get('image'), None
+        elif media_type == 'movies':
             image, logo = await tmdb.get_movie_backdrop(tmdb_id), await tmdb.get_movie_logo(tmdb_id)
         else:
             image, logo = await tmdb.get_tv_backdrop(tmdb_id), await tmdb.get_tv_logo(tmdb_id)
@@ -4549,7 +4554,7 @@ TRACKER_CHOICES=[app_commands.Choice(name=manifest.display_name,value=manifest.n
                  for manifest in BUILTIN_TRACKERS]
 
 
-@bingecord_commands.command(name="link", description="Link your SIMKL, WeTrakr or MDBList account in this server.")
+@bingecord_commands.command(name="link", description="Link a tracking account in this server.")
 @app_commands.choices(provider=TRACKER_CHOICES)
 async def tracker_link(i, provider: app_commands.Choice[str]):
     handler = provider_registry.get(provider.value).authorize if provider.value in {m.name for m in provider_registry.manifests()} else None
@@ -4569,18 +4574,33 @@ async def tracker_unlink(i, provider: app_commands.Choice[str]):
     await handler(i)
 
 
-@bingecord_commands.command(name="source", description="Choose which linked tracker posts your activity in this server.")
-@app_commands.choices(provider=TRACKER_CHOICES)
-async def tracker_source(i, provider: app_commands.Choice[str] | None = None):
+@bingecord_commands.command(name="source", description="Choose your watch tracker or toggle AniList manga in this server.")
+@app_commands.choices(provider=TRACKER_CHOICES, manga=[app_commands.Choice(name="On",value="on"),app_commands.Choice(name="Off",value="off")])
+async def tracker_source(i, provider: app_commands.Choice[str] | None = None, manga: app_commands.Choice[str] | None = None):
     g=guild_id(i)
     if not g:
         await i.response.send_message("This command must be used in a server.",ephemeral=True)
         return
     uid=str(i.user.id)
+    reading_enabled=None if manga is None else manga.value=="on"
+    if reading_enabled and not ANILIST_CLIENT_ID:
+        await i.response.send_message("AniList is not configured on this bot.",ephemeral=True)
+        return
+    if manga is not None and provider is None:
+        if not await storage.set_anilist_manga(g,uid,reading_enabled):
+            await i.response.send_message("Link your AniList account in this server first.",ephemeral=True)
+            return
+        await i.response.send_message(
+            "AniList manga tracking is on. The first check sets a baseline silently." if reading_enabled else "AniList manga tracking is off.",
+            ephemeral=True,
+        )
+        return
     if provider is None:
         source=await storage.get_activity_provider(g,uid)
         active=provider_registry.get(source).manifest.display_name if source else "none"
-        await i.response.send_message(f"Your activity source here is **{active}**. Choose a provider to change it.",ephemeral=True)
+        targets=await storage.get_provider_targets("anilist",g)
+        reading=any(t["discord_user_id"]==uid and t["guild_user_data"]["anilist_manga"] for t in targets)
+        await i.response.send_message(f"Watch source here: **{active}**. Manga tracking: **{'AniList' if reading else 'off'}**.",ephemeral=True)
         return
     if provider.value=="simkl" and not SIMKL_CLIENT_ID:
         await i.response.send_message("SIMKL is not configured on this bot. Set SIMKL_CLIENT_ID first.",ephemeral=True)
@@ -4591,14 +4611,22 @@ async def tracker_source(i, provider: app_commands.Choice[str] | None = None):
     if provider.value=="mdblist" and not mdblist_tracking:
         await i.response.send_message("MDBList OAuth is not configured on this bot. Set MDBLIST_CLIENT_ID first.",ephemeral=True)
         return
-    changed=await storage.set_activity_provider(g,uid,provider.value)
-    if not changed:
-        await i.response.send_message(f"Link your {provider.name} account in this server first.",ephemeral=True)
+    if provider.value=="anilist" and not ANILIST_CLIENT_ID:
+        await i.response.send_message("AniList is not configured on this bot.",ephemeral=True)
         return
-    detail=(f"The next check imports {provider.name} watch history, XP and statistics without posting old activity. "
+    changed=await storage.set_activity_provider(g,uid,provider.value,**({"manga":reading_enabled} if manga is not None else {}))
+    if not changed:
+        required=f"{provider.name} and AniList" if manga is not None and provider.value!="anilist" else provider.name
+        await i.response.send_message(f"Link your {required} account(s) in this server first.",ephemeral=True)
+        return
+    detail=("AniList posts anime activity. The first check sets a baseline silently."
+            if provider.value=="anilist" else
+            f"The next check imports {provider.name} watch history, XP and statistics without posting old activity. "
             "Later watches post normally; switching back preserves your progression."
             if provider.value in {"wetrakr","mdblist"} else
             "SIMKL activity resumes from now; its existing XP and statistics remain in place.")
+    if manga is not None:
+        detail+=f" Manga tracking is {'on' if reading_enabled else 'off'}."
     await i.response.send_message(f"Activity source set to **{provider.name}**. {detail}",ephemeral=True)
 
 
@@ -4751,6 +4779,13 @@ async def simkl_status(i,user: discord.Member | None = None):
         identity=f"• <@{uid}> — active: **{provider_registry.get(selected).manifest.display_name}** · " + (" · ".join(links) or "no linked account")
         if gu.get("mdblist_linked") and u.get("mdblist"):
             identity+=f" · MDBList: **{u['mdblist'].get('username') or 'unknown'}**"
+        if gu.get("anilist_linked") and u.get("anilist"):
+            identity+=f" · AniList: **{u['anilist'].get('username') or 'unknown'}**"
+            identity+=f" · manga: **{'on' if gu.get('anilist_manga') else 'off'}**"
+        if selected=="anilist":
+            state="ready" if "ANIME" in gu.get("anilist_lists",{}) else "first check will set a baseline"
+            lines.append(identity+f"\n  AniList anime sync: **{state}**")
+            continue
         detail_account=(u.get(selected) or {}).get('account_id') if selected!='simkl' else u.get('simkl_account_id') or 'unknown:'+uid
         detail_health=(gu.get('activity_details') or {}).get(f"{selected}:{detail_account}") or {}
         if detail_health.get('error'):identity+=' · personal ratings: **refresh pending**'
@@ -4918,6 +4953,7 @@ provider_registry = ProviderRegistry()
 provider_registry.register(SimklProvider(_sys.modules[__name__]))
 provider_registry.register(WeTrakrProvider(_sys.modules[__name__]))
 provider_registry.register(MDBListProvider(_sys.modules[__name__]))
+provider_registry.register(AniListProvider(_sys.modules[__name__]))
 
 
 async def selected_provider(guild_id, uid):

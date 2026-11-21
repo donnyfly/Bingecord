@@ -7,15 +7,17 @@ import aiohttp
 
 
 ANILIST_GRAPHQL = "https://graphql.anilist.co"
+ANILIST_TOKEN_URL = "https://anilist.co/api/v2/oauth/token"
+PIN_URL = "https://anilist.co/api/v2/oauth/pin"
 VIEWER_QUERY = "query BingecordViewer { Viewer { id name } }"
 ENTRIES_QUERY = """
 query BingecordList($userId: Int!, $type: MediaType!, $page: Int!) {
   Page(page: $page, perPage: 50) {
     pageInfo { hasNextPage }
     mediaList(userId: $userId, type: $type, sort: MEDIA_ID) {
-      id userId mediaId status progress repeat updatedAt private
+      id userId mediaId status progress repeat updatedAt private score(format: POINT_10_DECIMAL)
       media {
-        id type format episodes chapters bannerImage
+        id type format episodes chapters bannerImage genres
         title { english romaji native }
         coverImage { large }
       }
@@ -55,6 +57,8 @@ class AniListEntry:
     total: int | None
     cover_url: str | None
     banner_url: str | None
+    score: float | None = None
+    genres: tuple[str, ...] = ()
 
     @property
     def site_url(self) -> str:
@@ -70,6 +74,27 @@ class AniListPage:
 class AniListClient:
     def __init__(self, session: aiohttp.ClientSession):
         self._session = session
+
+    async def exchange_code(self, code: str, client_id: str, client_secret: str) -> dict:
+        try:
+            async with self._session.post(
+                ANILIST_TOKEN_URL,
+                json={"grant_type": "authorization_code", "client_id": client_id,
+                      "client_secret": client_secret, "redirect_uri": PIN_URL, "code": code},
+                headers={"Accept": "application/json"},
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=20, connect=5),
+            ) as response:
+                if response.status != 200:
+                    raise AniListError(response.status, "authorization code exchange failed")
+                payload = await response.json()
+        except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError, TimeoutError):
+            raise AniListError(0, "authorization connection failed") from None
+        except (aiohttp.ContentTypeError, ValueError):
+            raise AniListError(200, "invalid authorization response") from None
+        if not isinstance(payload, dict) or not isinstance(payload.get("access_token"), str) or not payload["access_token"]:
+            raise AniListError(200, "missing access token")
+        return payload
 
     async def _query(self, token: str, query: str, variables: dict | None = None) -> dict:
         if not token:
@@ -154,4 +179,5 @@ def _parse_entry(row: dict, account_id: int, media_type: MediaType) -> AniListEn
         title["english"] or title["romaji"] or title["native"] or f"AniList #{media['id']}",
         media["format"], row["status"], progress, repeat, updated_at, row["private"],
         total, (media["coverImage"] or {}).get("large"), media["bannerImage"],
+        row.get("score"), tuple(media.get("genres") or ()),
     )

@@ -65,6 +65,7 @@ class ActivityDetails:
         accounts={}
         for manifest in self.app.provider_registry.manifests():
             source=manifest.name
+            if source=='anilist':continue
             configured={'simkl':bool(self.app.SIMKL_CLIENT_ID),'wetrakr':bool(self.app.wetrakr_sync),
                         'mdblist':bool(self.app.mdblist_tracking)}[source]
             if not configured:continue
@@ -378,7 +379,7 @@ class ActivityDetails:
 
     async def remember(self,message):
         post=current_post.get()
-        if not post or not getattr(message,'id',None):return
+        if not post or post.get('standalone') or not getattr(message,'id',None):return
         record=copy.deepcopy(post)
         record.update(message=str(message.id),channel=str(message.channel.id),
                       posted_at=datetime.now(timezone.utc).isoformat())

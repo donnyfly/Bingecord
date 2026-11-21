@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from trackerbot.core.progression import challenge_pool, challenges_for, roll_prestige, xp_for_level, xp_for_watch, watch_minutes, event_watch_minutes, WATCH_XP_RULE
 from trackerbot.core.community import challenge_for_week, watch_contributions, split_pool, minute_contributions, watchathon_goal, watchathon_rewards
 from trackerbot.core import watch_ledger
-from trackerbot.core.providers import provider_linked
+from trackerbot.core.providers import TRACKER_NAMES, provider_linked
 from trackerbot.core.tracker_mapping import identity_from_event, identity_from_play, normalized_ids
 
 DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "store.json")
@@ -503,6 +503,9 @@ def _default_guild_user(start_time_iso: str | None = None) -> dict:
         "simkl_linked": True,
         "wetrakr_linked": False,
         "mdblist_linked": False,
+        "anilist_linked": False,
+        "anilist_manga": False,
+        "anilist_lists": {},
         "mdblist_sync": {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []},
         "activity_provider": "simkl",
         "wetrakr_sync": {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []},
@@ -529,6 +532,7 @@ def _normalise_user(user: dict) -> None:
     user.setdefault("simkl_token", None)
     user.setdefault("wetrakr", None)
     user.setdefault("mdblist", None)
+    user.setdefault("anilist", None)
     user.setdefault("refresh_token", None)
     user.setdefault("token_expires_at", None)
     user.setdefault("simkl_username", "unknown")
@@ -595,9 +599,12 @@ def _normalise_guild_user(user: dict) -> None:
     user.setdefault("simkl_linked", True)
     user.setdefault("wetrakr_linked", False)
     user.setdefault("mdblist_linked", False)
+    user.setdefault("anilist_linked", False)
+    user.setdefault("anilist_manga", False)
+    user.setdefault("anilist_lists", {})
     user.setdefault("mdblist_sync", {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []})
     user.setdefault("activity_provider", "simkl" if user.get("simkl_linked", True) else "wetrakr")
-    if user["activity_provider"] not in {"simkl", "wetrakr", "mdblist"}:
+    if user["activity_provider"] not in TRACKER_NAMES:
         user["activity_provider"] = "simkl"
     if not isinstance(user.get("wetrakr_sync"), dict):
         user["wetrakr_sync"] = {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []}
@@ -731,12 +738,12 @@ class Storage:
             if prior and str(prior.get("account_id")) != str(account.get("id")):
                 if any((other.get("users") or {}).get(uid, {}).get(f"{provider}_linked")
                        for other in self._data["guilds"].values()):
-                    raise ValueError("Unlink the existing WeTrakr account in all servers before switching accounts")
+                    raise ValueError("Unlink the existing account in all servers before switching accounts")
             account_user=account.get("user") if isinstance(account.get("user"),dict) else {}
             account_info=account.get("info") if isinstance(account.get("info"),dict) else {}
             user[provider] = {
                 "access_token": tokens["access_token"],
-                "refresh_token": tokens["refresh_token"],
+                "refresh_token": tokens.get("refresh_token") if provider == "anilist" else tokens["refresh_token"],
                 "expires_at": tokens.get("expires_at"),
                 "account_id": account.get("id") or account_user.get("id"),
                 "username": account.get("username") or account_user.get("username") or account_info.get("username") or "WeTrakr user",
@@ -747,6 +754,8 @@ class Storage:
                 guild["users"][uid]["simkl_linked"] = False
                 guild["users"][uid]["activity_provider"] = provider
             guild["users"][uid][f"{provider}_linked"] = True
+            if provider == "anilist" and (not prior or str(prior.get("account_id")) != str(account.get("id"))):
+                guild["users"][uid]["anilist_lists"] = {}
             if not prior or str(prior.get("account_id")) != str(account.get("id")):
                 guild["users"][uid][f"{provider}_sync"] = {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []}
             self._dirty = True
@@ -775,10 +784,12 @@ class Storage:
             if not user or not user.get(provider) or not guild or uid not in guild["users"] or not guild["users"][uid].get(f"{provider}_linked"):
                 return False
             guild["users"][uid][f"{provider}_linked"] = False
+            if provider == "anilist":
+                guild["users"][uid].update(anilist_manga=False, anilist_lists={})
             if guild["users"][uid]["activity_provider"] == provider:
-                guild["users"][uid]["activity_provider"] = next((p for p in ("simkl","wetrakr","mdblist") if p != provider and provider_linked(guild["users"][uid],user,p)), "simkl")
+                guild["users"][uid]["activity_provider"] = next((p for p in TRACKER_NAMES if p != provider and provider_linked(guild["users"][uid],user,p)), "simkl")
             # Keep the guild membership while the SIMKL link still uses it.
-            if not any(provider_linked(guild["users"][uid],user,p) for p in ("simkl","wetrakr","mdblist")):
+            if not any(provider_linked(guild["users"][uid],user,p) for p in TRACKER_NAMES):
                 guild["users"].pop(uid, None)
             if not any((other.get("users") or {}).get(uid, {}).get(f"{provider}_linked") for other in self._data["guilds"].values()):
                 user[provider] = None
@@ -1047,7 +1058,7 @@ class Storage:
 
     async def get_provider_targets(self, provider: str, guild_id: str | None = None,
                                    active_only: bool = False) -> list[dict]:
-        if provider not in {"simkl", "wetrakr", "mdblist"}:
+        if provider not in TRACKER_NAMES:
             raise ValueError(f"Unknown tracking provider: {provider}")
         async with _lock:
             guild_ids = [str(guild_id)] if guild_id is not None else list(self._data["guilds"].keys())
@@ -1075,15 +1086,25 @@ class Storage:
             return targets
 
     async def set_activity_provider(self, guild_id: str | int, discord_user_id: str,
-                                    provider: str) -> bool:
-        if provider not in {"simkl", "wetrakr", "mdblist"}:
+                                    provider: str | None, *, manga: bool | None = None) -> bool:
+        if provider is not None and provider not in TRACKER_NAMES:
             raise ValueError(f"Unknown tracking provider: {provider}")
         async with _lock:
             guild_user = self._guild_user(str(guild_id), str(discord_user_id))
             user = self._user(str(discord_user_id))
-            if not guild_user or not user or not provider_linked(guild_user, user, provider):
+            if not guild_user or not user:
                 return False
-            if guild_user.get("activity_provider") != provider:
+            if provider is not None and not provider_linked(guild_user, user, provider):
+                return False
+            if manga is not None and not provider_linked(guild_user, user, "anilist"):
+                return False
+            if manga is not None and guild_user["anilist_manga"] != manga:
+                guild_user["anilist_manga"] = manga
+                guild_user["anilist_lists"].pop("MANGA", None)
+                self._dirty = True
+            if provider is not None and guild_user.get("activity_provider") != provider:
+                if "anilist" in (guild_user.get("activity_provider"), provider):
+                    guild_user["anilist_lists"].pop("ANIME", None)
                 guild_user["activity_provider"] = provider
                 if provider in {"wetrakr","mdblist"}:
                     guild_user[f"{provider}_sync"] = {"seeded": False, "checkpoint": None,
@@ -1094,6 +1115,27 @@ class Storage:
                 self._dirty = True
         await self.flush()
         return True
+
+    async def set_anilist_manga(self, guild_id, user_id, enabled: bool) -> bool:
+        return await self.set_activity_provider(guild_id,user_id,None,manga=enabled)
+
+    async def anilist_snapshot(self, guild_id, user_id, token, media_type, *, replace=None):
+        """Validate the active connection before reading or advancing a baseline."""
+        async with _lock:
+            member = self._guild_user(str(guild_id), str(user_id))
+            user = self._user(str(user_id))
+            if not member or not user or not provider_linked(member, user, "anilist"):
+                return False, None
+            selected = member["anilist_manga"] if media_type == "MANGA" else member["activity_provider"] == "anilist"
+            if not selected or user["anilist"]["access_token"] != token:
+                return False, None
+            if replace is not None:
+                member["anilist_lists"][media_type] = copy.deepcopy(replace)
+                self._dirty = True
+            snapshot = copy.deepcopy(member["anilist_lists"].get(media_type))
+        if replace is not None:
+            await self.flush()
+        return True, snapshot
 
     async def get_activity_provider(self, guild_id: str | int, discord_user_id: str) -> str | None:
         async with _lock:
@@ -1536,7 +1578,7 @@ class Storage:
                 return False
             prior = guild["users"][str(discord_user_id)]
             replacement = _default_guild_user(start_time_iso)
-            for key in ("simkl_linked", "wetrakr_linked", "mdblist_linked", "activity_provider"):
+            for key in ("simkl_linked", "wetrakr_linked", "mdblist_linked", "anilist_linked", "anilist_manga", "activity_provider"):
                 replacement[key] = copy.deepcopy(prior.get(key, replacement[key]))
             guild["users"][str(discord_user_id)] = replacement
             self._dirty = True
@@ -2452,6 +2494,7 @@ class Storage:
                 personal = {
                     "wetrakr": copy.deepcopy(existing.get("wetrakr")),
                     "mdblist": copy.deepcopy(existing.get("mdblist")),
+                    "anilist": copy.deepcopy(existing.get("anilist")),
                     "embed_preferences": copy.deepcopy(existing.get("embed_preferences", DEFAULT_EMBED_PREFERENCES)),
                     "embed_preferences_custom": existing.get("embed_preferences_custom", False),
                     "progression": copy.deepcopy(existing.get("progression", {"xp": 0, "lifetime_xp": 0, "prestige": 0, "watch_xp_keys": {}, "xp_events": [], "challenge_completions": {}, "achievement_xp_awarded": {}})),
@@ -2470,7 +2513,7 @@ class Storage:
                 **personal,
             }
             prior_guild_user=self._data["guilds"][str(guild_id)]["users"].get(discord_user_id)
-            if prior_guild_user and (prior_guild_user.get("wetrakr_linked") or prior_guild_user.get("mdblist_linked")):
+            if prior_guild_user and any(prior_guild_user.get(f"{provider}_linked") for provider in TRACKER_NAMES[1:]):
                 prior_guild_user["simkl_linked"] = True
             else:
                 self._data["guilds"][str(guild_id)]["users"][discord_user_id] = _default_guild_user(start_time_iso)
@@ -2493,7 +2536,10 @@ class Storage:
             if guild_user.get("activity_provider") == "simkl" and guild_user.get("wetrakr_linked"):
                 guild_user["activity_provider"] = "wetrakr"
                 guild_user["wetrakr_sync"] = {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []}
-            if not guild_user.get("wetrakr_linked") and not guild_user.get("mdblist_linked"):
+            if guild_user.get("activity_provider") == "simkl" and guild_user.get("anilist_linked"):
+                guild_user["activity_provider"] = "anilist"
+                guild_user["anilist_lists"].pop("ANIME", None)
+            if not any(guild_user.get(f"{provider}_linked") for provider in TRACKER_NAMES[1:]):
                 del guild["users"][discord_user_id]
 
             # Authentication is global and can be reused in other servers.

@@ -77,3 +77,16 @@ def test_rate_limit_exposes_retry_delay_without_response_body():
         asyncio.run(client.viewer("test-token"))
     assert caught.value.status == 429 and caught.value.retry_after == 120
     assert "must not leak" not in str(caught.value)
+
+
+def test_oauth_code_exchange_uses_hosted_pin_redirect():
+    session = Session(Response({"access_token": "test-token", "expires_in": 3600}))
+    client = AniListClient(session)
+    assert asyncio.run(client.exchange_code("test-code", "123", "test-secret"))["expires_in"] == 3600
+    url, request = session.requests[0]
+    assert url == "https://anilist.co/api/v2/oauth/token"
+    assert request["json"] == {
+        "grant_type": "authorization_code", "client_id": "123", "client_secret": "test-secret",
+        "redirect_uri": "https://anilist.co/api/v2/oauth/pin", "code": "test-code",
+    }
+    assert not request["allow_redirects"]

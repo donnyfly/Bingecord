@@ -53,7 +53,7 @@ def card_model(embed,part,*,preview=False,sample=False):
                 ratings.extend(clean(re.sub(r'^[^\w]+','',segment)) for segment in segments)
         elif 'Your ' in line and 'rating' in line:
             ratings.append(clean(re.sub(r'^[^\w]+','',line)))
-        elif line.startswith(('🆕','🔁')) or any(word in line for word in ('Finished Season','Finished **Season','Finished the series','Completed the series','Completed this series','Caught up')):
+        elif line.startswith(('🆕','🔁')) or any(word in line for word in ('Finished Season','Finished **Season','Finished the series','Completed the series','Completed this series','Completed this manga','Caught up')):
             notes.append(('NEW · ' if line.startswith('🆕') else '')+clean(re.sub(r'^[^\w]+','',line)))
         else:episode_title.append(clean(line))
     activity='Reading activity' if reading else 'Watch activity'

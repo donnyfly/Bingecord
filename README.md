@@ -144,6 +144,15 @@ The host configures the application once. Members do not need individual API key
 
 Enable any combination of SIMKL, WeTrakr and MDBList. None is the primary provider; leave unused provider credentials blank.
 
+#### AniList
+
+1. Create an OAuth application in [AniList developer settings](https://anilist.co/settings/developer). Use `https://anilist.co/api/v2/oauth/pin` as the redirect URL.
+2. Set `ANILIST_CLIENT_ID` and `ANILIST_CLIENT_SECRET` in your bot's `.env` and recreate the container.
+3. In Discord, run `/bingecord link provider:AniList`, authorize on AniList, and enter the authorization code in the bot's form.
+4. Use `/bingecord source provider:AniList` for anime and independently set `/bingecord source manga:On` for manga. To keep SIMKL for watching and use AniList for manga, leave the watch source on SIMKL and turn manga on.
+
+Each selected list starts with a silent baseline and posts later progress and status changes in the server's activity channel. AniList anime uses the Watch Activity layout and the episode numbers from each AniList entry. Manga posts a portrait-cover Reading Activity card. Private list entries are skipped. AniList compares list snapshots, so multiple edits between checks are summarized by the latest state. AniList activity is currently separate from XP, Watched Together, and recommendations. If authorization expires, link AniList again.
+
 ### 5. Create the Docker setup
 
 ```bash
