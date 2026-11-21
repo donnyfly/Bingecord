@@ -2894,11 +2894,7 @@ async def simkl_debug(
         await i.response.defer(ephemeral=True)
         zone=(await storage.get_timezone(str(i.guild.id)))['name'];now=datetime.now(timezone.utc)
         week,start,end=community_week(now,zone)
-        event_kind=community_event.value if community_event else None
-        if event_kind == 'reading':
-            state=await storage.preview_community_event(str(i.guild.id),week,start,end,now,include_reading=True)
-        else:
-            state=await storage.preview_community_event(str(i.guild.id),week,start,end,now,event_kind)
+        state=await storage.preview_community_event(str(i.guild.id),week,start,end,now,community_event.value if community_event else None)
         if not state:
             await i.followup.send('No linked community data to preview.',ephemeral=True)
             return

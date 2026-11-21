@@ -45,6 +45,8 @@ async def community_card(send,guild,state,*,viewer=None,preview=False,heading=No
     if state.get('version')==2:
         description+=' · 6-hour sync grace before settlement'
         if state.get('kind')!='watchathon':description+='\nEligible title: a completed movie, 3 regular episodes or a verified season finish.'
+    reading_only=state.get('kind')=='reading'
+    if reading_only:description='Weekly manga reading goal using AniList activity.'
     if preview:description+='\nPrivate rules preview using cached activity. No event or XP changes.'
     embed=discord.Embed(title=heading or title,description=description,color=0x9A8CE8)
     if state.get('status') in {'completed','missed'}:
@@ -62,7 +64,7 @@ async def community_card(send,guild,state,*,viewer=None,preview=False,heading=No
             text+=f"\nYour contribution: **{count:,}** chapters"
         if reading["xp"]:
             text+=f"\n**+{reading['xp']:,} XP** for members with {COMMUNITY_MINIMUM}+ chapters if the goal is reached."
-        embed.add_field(name="Community Reading Goal",value=text,inline=False)
+        embed.add_field(name="Reading progress" if reading_only else "Community Reading Goal",value=text,inline=False)
     kwargs={'embed':embed,'allowed_mentions':discord.AllowedMentions.none()}
     if preview:kwargs['ephemeral']=True
     try:
@@ -74,7 +76,7 @@ async def community_card(send,guild,state,*,viewer=None,preview=False,heading=No
         if lines:detail.add_field(name='Contributors · Top five',value='\n'.join(lines),inline=False)
         objectives=state.get('objectives') or []
         if objectives:detail.add_field(name='Objectives',value='\n'.join(('Complete: ' if o['done'] else 'Needed: ')+o['label']+(f" · {o['count']}/{o['target']} titles" if 'count' in o else '') for o in objectives[:12])[:1024],inline=False)
-        if viewer:detail.add_field(name='Member contribution',value=f"<@{viewer}> · {(state.get('contributions') or {}).get(str(viewer),0):g} {unit}",inline=False)
+        if viewer and not reading_only:detail.add_field(name='Member contribution',value=f"<@{viewer}> · {(state.get('contributions') or {}).get(str(viewer),0):g} {unit}",inline=False)
         from .card_details import details_view
         kwargs['view']=await details_view(detail,owner=viewer if preview else None,guild=getattr(guild,'id',None))
         kwargs.update(embed=None,file=discord.File(image,filename='community.png',description=(heading or title)[:1024]))

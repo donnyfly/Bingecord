@@ -2906,16 +2906,16 @@ class Storage:
             self._dirty=True
         await self.flush()
 
-    async def preview_community_event(self,guild_id,week,start,end,now,kind=None,*,include_reading=False):
+    async def preview_community_event(self,guild_id,week,start,end,now,kind=None):
         from .community_events import event_goal,credited_watches,event_state,ROTATION
         async with _lock:
             guild=self._guild(str(guild_id))
-            if not guild and not include_reading:return None
-            guild = guild or _default_guild()
-            reading_goal = None
-            if include_reading:
+            if kind == "reading":
+                guild = guild or _default_guild()
                 goal = guild.get("reading_community", {}).get(week) or {"start": start.isoformat(), "end": end.isoformat()}
-                reading_goal = self._reading_community_state(guild, goal)
+                return {"kind": "reading", "name": "Community Reading Goal", "key": week, "preview": True,
+                        "reading": self._reading_community_state(guild, goal)}
+            if not guild:return None
             members=guild.get('users') or {};providers={u:m.get('activity_provider','simkl') for u,m in members.items()}
             recent=credited_watches(self._data['users'],members,start-timedelta(days=14),start,providers)
             size=len({r['uid'] for r in recent}) or max(1,min(2,len(members)))
@@ -2934,10 +2934,7 @@ class Storage:
             record.update(start=start.isoformat(),end=end.isoformat(),key=week,preview=True,timezone=guild.get('timezone') or DEFAULT_TIMEZONE)
             watches=credited_watches(self._data['users'],members,start,min(now,end),providers)
             self._community_completion_flags(guild,watches,providers,start,end)
-            state = event_state(record,watches,guild.get('community_metadata') or {},now)
-            if reading_goal is not None:
-                state["reading"] = reading_goal
-            return state
+            return event_state(record,watches,guild.get('community_metadata') or {},now)
 
     async def ack_community_delivery(self,guild_id,week,notice,*,message_id=None,channel_id=None,fingerprint=None):
         async with _lock:

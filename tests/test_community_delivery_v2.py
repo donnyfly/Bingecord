@@ -63,9 +63,12 @@ def test_debug_community_reading_goal_without_a_live_event(tmp_path, monkeypatch
         interaction.response.defer.assert_awaited_once_with(ephemeral=True)
         preview = send.await_args.args[2]
         assert send.await_args.kwargs["preview"]
+        assert preview["kind"] == "reading"
+        assert preview["name"] == "Community Reading Goal"
+        assert "total" not in preview and "art_entries" not in preview
         assert preview["reading"]["chapters"] == 0
         assert preview["reading"]["xp"] == 350
-        assert Image.open(render_community_png("Server", preview, viewer="42")).size == (1080, 1646)
+        assert Image.open(render_community_png("Server", preview, viewer="42")).size == (1080, 480)
         assert store._data == before
 
     asyncio.run(run())
