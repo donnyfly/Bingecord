@@ -63,6 +63,7 @@ def test_render_cache_and_native_links_preserved(monkeypatch):
         two=await activity_card_kwargs(embed,part,preview=True)
         assert render.call_count==1
         assert one['embed'] is None and one['file'].filename=='activity.png'
+        assert one['file'].description is None and two['file'].description is None
         assert one['view'].children[-1].url==embed.url
         assert one['view'].children[-1].label=='View on SIMKL'
         assert embed.to_dict()==before
@@ -397,18 +398,30 @@ def test_together_debug_resolves_members_from_older_native_records(monkeypatch):
     asyncio.run(run())
 
 
-def test_single_card_ratings_share_title_area_without_changing_height():
+def test_single_card_grows_only_when_ratings_need_an_extra_row():
     from trackerbot.presentation.activity_cards import activity_layout
     embed,part=example(True);model=card_model(embed,part)
     layouts=[activity_layout(dict(model,ratings=ratings)) for ratings in ([],['IMDb 8.0/10'],['IMDb 8.0/10','MAL 8.50/10','Your rating: 9/10'])]
-    assert len({l['height'] for l in layouts})==1
+    unrated,single,stacked=layouts
+    assert unrated['height']==single['height']==912
+    assert stacked['height']>single['height']
     for layout in layouts:
         assert layout['ratings_top']==layout['action_top']
         assert layout['rating_height']==86 and layout['rating_gap']==98
         for (x,row),(_,_,width) in zip(layout['rating_positions'],layout['ratings']):
             assert x>=layout['text_width']+24 and x+width<=984
-            assert layout['ratings_top']+row*layout['rating_gap']+layout['rating_height']<layout['notes_top']
-    long=activity_layout(dict(model,title='A title with many words that must wrap within its own column'))
+            assert layout['ratings_top']+row*layout['rating_gap']+layout['rating_height']<layout['height']-32
+    with_note=activity_layout(dict(model,ratings=['IMDb 8.0/10'],notes=['Finished Season 2.']))
+    assert with_note['notes_top']==870 and with_note['height']==966
+    with_stacked_ratings=activity_layout(dict(
+        model,ratings=['IMDb 8.0/10','MAL 8.50/10','Your rating: 9/10'],
+        notes=['Finished Season 2.','Caught up with all currently released episodes.'],
+    ))
+    assert with_stacked_ratings['notes_top']==with_note['notes_top']
+    for (x,row),(_,width) in zip(with_stacked_ratings['note_positions'],with_stacked_ratings['notes']):
+        assert x+width<=with_stacked_ratings['text_width']
+        assert with_stacked_ratings['notes_top']+row*48+38<with_stacked_ratings['height']-32
+    long=activity_layout(dict(model,title='A title with many words that must wrap within its own column',notes=['Finished Season 2.']))
     assert len(long['caption_lines'])==2 and long['notes_top']>long['caption_top']+90
 
 
