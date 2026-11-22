@@ -26,7 +26,7 @@ class MediaPages(discord.ui.View):
         attachment = None
         if file:
             try:
-                attachment = (file.fp.read(), file.filename, file.description)
+                attachment = (file.fp.read(), file.filename)
             finally:
                 # discord.File temporarily replaces fp.close.
                 fp = file.fp
@@ -55,8 +55,8 @@ class MediaPages(discord.ui.View):
                     self.add_item(CardDetails(item.token))
         files = []
         if attachment:
-            data, filename, description = attachment
-            files.append(discord.File(BytesIO(data), filename=filename, description=description))
+            data, filename = attachment
+            files.append(discord.File(BytesIO(data), filename=filename))
         return {"embed": embed, "view": self, "attachments": files}
 
     async def switch(self, interaction, key):

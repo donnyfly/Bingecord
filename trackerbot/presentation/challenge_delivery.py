@@ -42,7 +42,7 @@ async def challenge_card(send,user,state,*,now,ephemeral=False):
         from .card_details import details_view
         detail=embed.copy();detail.title=user.display_name+' · Personal Challenges'+(' · Preview' if state.get('preview') else '')
         kwargs['view']=await details_view(detail,owner=user.id if ephemeral else None)
-        kwargs.update(embed=None,file=discord.File(data,filename='challenges.png',description=detail.title[:1024]))
+        kwargs.update(embed=None,file=discord.File(data,filename='challenges.png'))
     except Exception:
         embed.set_footer(text='Resets at 00:00 UTC · Shared progression across trackers')
     return await send(**kwargs)

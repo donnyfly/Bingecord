@@ -70,7 +70,7 @@ async def community_card(send,guild,state,*,viewer=None,preview=False,heading=No
         if viewer:detail.add_field(name='Member contribution',value=f"<@{viewer}> · {(state.get('contributions') or {}).get(str(viewer),0):g} {unit}",inline=False)
         from .card_details import details_view
         kwargs['view']=await details_view(detail,owner=viewer if preview else None,guild=getattr(guild,'id',None))
-        kwargs.update(embed=None,file=discord.File(image,filename='community.png',description=(heading or title)[:1024]))
+        kwargs.update(embed=None,file=discord.File(image,filename='community.png'))
     except Exception:
         lines=[f"{discord.utils.escape_markdown(names[uid])} · {value:,.1f} {unit}" for uid,value in rows]
         if lines:embed.add_field(name='Contributors · Top five',value='\n'.join(lines),inline=False)

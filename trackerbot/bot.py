@@ -2439,7 +2439,7 @@ async def send_visual_summary(send,guild_name,heading,result,filename,*,icon=Non
                                       icon=art.pop('icon',None),story=story,avatars=art,artwork=title_art)
         from trackerbot.presentation.card_details import details_view
         kwargs['view']=await details_view(embed,guild=getattr(guild,'id',None))
-        kwargs['file']=discord.File(image,filename=filename,description=str(embed.title or heading)[:1024]);embed=None
+        kwargs['file']=discord.File(image,filename=filename);embed=None
     except Exception:
         log.exception('Could not render %s summary; using text fallback.',heading)
         embed.set_image(url=None)
@@ -3552,7 +3552,7 @@ async def show_leaderboard(i,category=None,*,period=None,preview=False):
             image=await asyncio.to_thread(render_leaderboard_png,i.guild.name,labels[category],display,
                 rank_offset=start,avatars=avatars,show_progression=progression_enabled,icon=icon,artwork=artwork,
                 period_label=periods[period],max_value=max((r['progression_xp'] if category=='xp' else r.get(category,0) for r in view.rows),default=1))
-            return None,discord.File(image,filename='leaderboard.png',description=full.title[:1024])
+            return None,discord.File(image,filename='leaderboard.png')
         except Exception:
             log.exception('Leaderboard artwork unavailable for guild %s; using text.',g)
             return full,None

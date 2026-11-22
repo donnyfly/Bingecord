@@ -48,6 +48,7 @@ def test_successful_personal_card_is_compact_but_details_retain_objectives(monke
         send=AsyncMock();await delivery.challenge_card(send,user,state,now=datetime(2026,11,24,tzinfo=timezone.utc),ephemeral=True)
         kwargs=send.await_args.kwargs
         assert kwargs['embed'] is None and kwargs['file'].filename=='challenges.png'
+        assert kwargs['file'].description is None
         assert 'Preview' in kwargs['view'].embed.title
         fields=kwargs['view'].embed.fields
         assert len(fields)==4
@@ -68,6 +69,7 @@ def test_community_compact_results_and_text_fallback(monkeypatch):
         send=AsyncMock();await delivery.community_card(send,guild,s)
         kwargs=send.await_args.kwargs
         assert kwargs['embed'] is None and kwargs['file'].filename=='community.png'
+        assert kwargs['file'].description is None
         detail=kwargs['view'].embed
         assert detail.fields[0].name=='Reward results' and '+1,440 XP' in detail.fields[0].value
         monkeypatch.setattr(delivery,'render_community_png',Mock(side_effect=ValueError('unavailable')))
