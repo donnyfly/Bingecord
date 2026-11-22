@@ -31,8 +31,8 @@ class ProviderManifest:
     def validate_tracker(self) -> None:
         if not self.name or not self.name.isidentifier():
             raise ValueError("Provider name must be a stable identifier")
-        if not (self.supports_history and self.supports_changes and self.supports_account_link):
-            raise ValueError("A watch tracker needs account linking, history and changes")
+        if not (self.supports_changes and self.supports_account_link):
+            raise ValueError("A watch tracker needs account linking and changes")
         if not (self.profile_url_pattern.startswith("https://")
                 and self.title_url_pattern.startswith("https://")):
             raise ValueError("Provider links must use HTTPS")
@@ -46,7 +46,11 @@ BUILTIN_TRACKERS = (
     ProviderManifest("mdblist", "MDBList", True, True, True, True, True, True, True,
                      "https://mdblist.com/@{id}", "https://mdblist.com/{type}/{id}",
                      ("Experimental: targeted journal reconciliation with full snapshot fallback; live mixed-provider grouping and status checks remain required.",)),
+    ProviderManifest("anilist", "AniList", False, True, True, True, False, False, True,
+                     "https://anilist.co/user/{id}", "https://anilist.co/{type}/{id}",
+                     ("Anime watch and manga reading updates use list progress, without historical XP imports.",)),
 )
+TRACKER_NAMES = tuple(manifest.name for manifest in BUILTIN_TRACKERS)
 
 
 @dataclass(frozen=True)
@@ -146,6 +150,6 @@ def provider_linked(guild_user: dict, user: dict, provider: ProviderName) -> boo
     """Legacy SIMKL links default to enabled; new providers require an opt-in."""
     if provider == "simkl":
         return bool(guild_user.get("simkl_linked", True) and user.get("simkl_token"))
-    if provider in {"wetrakr", "mdblist"}:
+    if provider in TRACKER_NAMES:
         return bool(guild_user.get(f"{provider}_linked", False) and user.get(provider))
     raise ValueError(f"Unknown tracking provider: {provider}")

@@ -13,10 +13,14 @@ from trackerbot.integrations.wetrakr_auth import WeTrakrAuth
 from trackerbot.integrations.wetrakr_sync import WeTrakrSync
 from trackerbot.integrations.mdblist_tracking_client import MDBListTrackingClient, MDBListTrackingError
 from trackerbot.integrations.mdblist_provider import MDBListProvider
+from trackerbot.integrations.anilist_provider import AniListProvider
 from trackerbot.core.storage import DEFAULT_FEATURES, EPOCH_ISO, storage
 from trackerbot.core.watch_delivery import WatchActivity, WatchBatch, WatchCycle, current_cycle, watch_key, deliver_watch, current_details
 from trackerbot.core.activity_details import ActivityDetails
 from trackerbot.core.achievements import ACHIEVEMENTS, all_achievements
+from trackerbot.core import reading
+from trackerbot.core.manga_events import ROTATION as MANGA_EVENTS
+from trackerbot.presentation.media_pages import send_media_pages
 from trackerbot.core.progression import RANKS, challenges_for, challenge_progress, level_progress, rank_for_level, xp_for_level, xp_for_watch
 from trackerbot.presentation.level_visuals import accent_for_tier, prestige_style, render_achievement_gif, render_level_up_gif, render_prestige_gif
 from trackerbot.presentation.profile_visuals import profile_snapshot, render_profile_png, render_leaderboard_png, render_summary_png
@@ -45,6 +49,8 @@ def positive_int_env(name, default, minimum=1):
 DISCORD_BOT_TOKEN=os.getenv("DISCORD_BOT_TOKEN")
 SIMKL_CLIENT_ID=os.getenv("SIMKL_CLIENT_ID", "").strip()
 WETRAKR_API_KEY=os.getenv("WETRAKR_API_KEY", "").strip()
+ANILIST_CLIENT_ID=os.getenv("ANILIST_CLIENT_ID", "").strip()
+ANILIST_CLIENT_SECRET=os.getenv("ANILIST_CLIENT_SECRET", "").strip()
 TMDB_API_KEY=os.getenv("TMDB_API_KEY")
 MDBLIST_API_KEY=os.getenv("MDBLIST_API_KEY")
 POLL_INTERVAL_MINUTES=positive_int_env("POLL_INTERVAL_MINUTES", 60)
@@ -69,7 +75,7 @@ if not TMDB_API_KEY:
 MEDIA_TYPES=("shows","anime","movies"); ACTIVITY_KEYS={"shows":"tv_shows","anime":"anime","movies":"movies"}
 WATCHLIST_STATUSES=("watching","plantowatch","completed","dropped")
 STATUS_TEXT={"watching":"Started watching","plantowatch":"Planned to watch","completed":"Completed","dropped":"Dropped"}
-MEDIA_STYLES={"shows":(0x3498DB,"📺 TV"),"anime":(0xE91E63,"🌸 Anime"),"movies":(0xF1C40F,"🎬 Movie")}
+MEDIA_STYLES={"shows":(0x3498DB,"📺 TV"),"anime":(0xE91E63,"🌸 Anime"),"movies":(0xF1C40F,"🎬 Movie"),"manga":(0x9A8CE8,"Manga")}
 HISTORY_FETCH_TIMEOUT_SECONDS=120; CHECKNOW_COOLDOWN_SECONDS=30
 poll_lock=asyncio.Lock(); last_checknow_at=0.0; linking_users=set(); profile_lookup_attempted=set()
 wetrakr_poll_lock=asyncio.Lock()
@@ -90,12 +96,11 @@ else:
 FEATURE_LABELS={"watched_together":"Watched Together", "progression":"Levels, ranks and prestige", "achievements":"Achievements",
                 "challenges":"Daily and weekly challenges", "community":"Community challenges",
                 "weekly_recaps":"Weekly recaps", "leaderboards":"Leaderboards",
-                "statistics":"Statistics cards", "discovery":"Watching, random picks and recommendations"}
+                "statistics":"Statistics cards"}
 COMMAND_FEATURES={"challenges":"challenges","community":"community",
                   "achievements":"achievements","weekly-recap":"weekly_recaps",
                   "leaderboard":"leaderboards","stats":"statistics",
-                  "server-stats":"statistics","watching":"discovery",
-                  "random":"discovery","recommend":"discovery"}
+                  "server-stats":"statistics"}
 
 async def feature_enabled(g, feature):
     features=await storage.get_features(g)
@@ -461,8 +466,8 @@ def build_embed(t,desc,ts,name,member,image,profile,title=None,title_url=None,po
             e.set_thumbnail(url=selected)
         else:
             e.set_image(url=selected)
-            if (p["style"]=="card" or p["artwork"] in ("auto", "backdrop")) and logo:
-                e.set_thumbnail(url=logo)
+    if logo and (p["style"]=="card" or (selected and p["style"]!="minimal" and p["artwork"] in ("auto", "backdrop"))):
+        e.set_thumbnail(url=logo)
     e.set_footer(text=f"{label} · {provider}"); return e
 
 
@@ -487,13 +492,13 @@ async def send_embed(ch,e,what):
         if post and eligible(post.get('parts') or []):
             part=post['parts'][0]
             p=await prefs(part['guild'],part['user'])
-            if p.get('style')=='card':
+            if p.get('style')=='card' or part['meta'].get('media_type')=='manga':
                 try:
                     part['display_timezone']=(await storage.get_activity_timezone(part['guild'],part['user']))['name']
                     if len(post['parts'])>1:
                         await resolve_activity_card_members(post['parts'])
-                        kwargs.update(await activity_card_kwargs(e,part,parts=post['parts']))
-                    else:kwargs.update(await activity_card_kwargs(e,part))
+                        kwargs.update(await activity_card_kwargs(e,part,parts=post['parts'],tmdb_client=tmdb))
+                    else:kwargs.update(await activity_card_kwargs(e,part,tmdb_client=tmdb))
                     post['presentation']='card'
                 except Exception:log.warning('Activity card unavailable; using native embed.',exc_info=True)
         message=await ch.send(**kwargs)
@@ -673,7 +678,7 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
                 desc+="\n\n🆕 Started watching this series."
                 start_claimed.add(sid)
             logo=None
-            if p["artwork"] in ("auto", "backdrop"):
+            if p.get("style") == "card" or p["artwork"] in ("auto", "backdrop"):
                 try:
                     logo=await tmdb.get_tv_logo(series_tmdb_id) if series_tmdb_id is not None else None
                 except Exception:
@@ -1936,6 +1941,8 @@ async def evaluate_achievements(g, uid, notify_channel=None):
     now=datetime.now(timezone.utc).isoformat()
 
     for achievement_id, achievement in all_achievements():
+        if achievement_id in reading.READING_ACHIEVEMENTS:
+            continue
         already_unlocked=achievement_id in unlocked
         qualifies=progress.get(achievement["category"],0) >= achievement["threshold"]
 
@@ -2284,6 +2291,9 @@ async def _refresh_community_state(guild_id_value):
         await refresh_community_completions(sys.modules[__name__],guild_id_value,now)
     except Exception:log.warning('Community completion verification deferred for guild %s.',guild_id_value,exc_info=True)
     state=await storage.get_community_state(guild_id_value,key,start,end,now)
+    reading_goal=await storage.get_reading_community(guild_id_value,key,start,end,now)
+    if reading_goal:
+        state={**state,"manga_event":reading_goal}
     channel_id=await storage.get_channel(guild_id_value)
     channel=bot.get_channel(int(channel_id)) if channel_id else None
     if channel_id and channel is None:
@@ -2388,7 +2398,13 @@ def build_weekly_recap(rows, start, end, guild_name, period_label, *, with_visua
         return embed,metrics,leaders
     return embed
 
-async def generate_weekly_recap(guild, period="current"):
+def reading_summary_text(stats):
+    counts = stats["statuses"]
+    headline = f"**{stats['chapters']:,}** chapters recorded · **{stats['completed']:,}** manga finished"
+    return headline + "\n" + " · ".join(f"{counts[status]:,} {label.lower()}" for status, label in reading.STATUS_LABELS.items())
+
+
+async def generate_weekly_recap(guild, period="current", *, preview=False):
     timezone_info=await storage.get_timezone(guild.id)
     start,end=weekly_period(timezone_info["name"],period)
     rows=await storage.get_guild_statistics(guild.id)
@@ -2396,7 +2412,13 @@ async def generate_weekly_recap(guild, period="current"):
     from trackerbot.core.server_cards import recap_facts
     base=build_weekly_recap(rows,start,end,guild.name,label,with_visual=True)
     story=recap_facts(rows,start,end,timezone_info['name'])
-    return (*base,{'story':story,'guild':guild}),f"{start.isoformat()} → {end.isoformat()}"
+    zone=ZoneInfo(timezone_info["name"])
+    reading_start=datetime.combine(start,datetime.min.time(),tzinfo=zone)
+    reading_end=datetime.combine(end+timedelta(days=1),datetime.min.time(),tzinfo=zone)
+    reading_totals=await storage.get_guild_reading_summary(guild.id,reading_start,reading_end,with_readers=True)
+    if preview and not any(reading_totals[key] for key in ("chapters", "started", "statuses")):
+        reading_totals={"chapters":18,"started":2,"statuses":{"COMPLETED":1,"PAUSED":1},"sample":True}
+    return (*base,{'story':story,'guild':guild,'manga':reading_totals}),f"{start.isoformat()} → {end.isoformat()}"
 
 async def send_visual_summary(send,guild_name,heading,result,filename,*,icon=None,preview=False):
     parts,subtitle=result;embed,metrics,leaders=parts[:3];extras=parts[3] if len(parts)>3 else {}
@@ -2416,10 +2438,15 @@ async def send_visual_summary(send,guild_name,heading,result,filename,*,icon=Non
                                       icon=art.pop('icon',None),story=story,avatars=art,artwork=title_art)
         from trackerbot.presentation.card_details import details_view
         kwargs['view']=await details_view(embed,guild=getattr(guild,'id',None))
-        kwargs['file']=discord.File(image,filename=filename,description=str(embed.title or heading)[:1024]);embed=None
+        kwargs['file']=discord.File(image,filename=filename);embed=None
     except Exception:
         log.exception('Could not render %s summary; using text fallback.',heading)
         embed.set_image(url=None)
+    if "manga" in extras:
+        from trackerbot.presentation.manga_pages import recap_page
+        async def manga():
+            return await recap_page(extras["guild"],subtitle,extras["manga"],preview=preview,client=bot)
+        return await send_media_pages(send,{"embed":embed,**kwargs},manga)
     return await send(embed=embed,**kwargs)
 
 async def send_weekly_recap(guild, period="current"):
@@ -2484,10 +2511,6 @@ async def bingecord_help(i):
         "`style` — customize your activity embeds\n"
         "`mapping` — privately inspect cross-provider watch matches\n"
         "`user-reset` — reset this server's imported tracking state; keeps links and global XP",inline=False)
-    embed.add_field(name="Discover",value=
-        "`watching` — your current watching list\n"
-        "`random` — pick from your planned list\n"
-        "`recommend` — recommendations using your selected account",inline=False)
     embed.add_field(name="Progress & community",value=
         "`stats` — your watches, XP and progression\n"
         "`achievements` / `challenges` — achievements and daily/weekly goals\n"
@@ -2654,7 +2677,9 @@ async def simkl_challenges(i):
         except Exception:log.warning('Personal challenge enrichment deferred for guild %s.',g,exc_info=True)
     from trackerbot.core.personal_challenges import snapshot
     from trackerbot.presentation.challenge_delivery import challenge_card
-    now=datetime.now(timezone.utc);state=await storage.get_challenge_state(str(i.user.id))
+    now=datetime.now(timezone.utc)
+    manga_stats=await storage.get_reading_statistics(g,str(i.user.id)) if g else None
+    state=await storage.get_challenge_state(str(i.user.id),reading_enabled=True) if manga_stats is not None else await storage.get_challenge_state(str(i.user.id))
     await challenge_card(i.followup.send,i.user,snapshot(state,now),now=now)
 
 
@@ -2691,7 +2716,18 @@ async def simkl_community(i,start_new:bool=False):
     if not state:
         await i.followup.send('No community event is available. Community challenges may be disabled.',ephemeral=True)
         return
-    await send_community_card(i.followup.send,i.guild,state,viewer=str(i.user.id))
+    from trackerbot.presentation.manga_pages import community_page
+    uid=str(i.user.id)
+    async def manga():
+        event=state.get("manga_event")
+        if event is None:
+            return {"embed":discord.Embed(title="Manga Community Event",description="No manga event is active. Link AniList and enable manga tracking to start contributing.")}
+        return await community_page(i.guild,event,uid,client=bot)
+
+    async def send_watch(**payload):
+        return await send_media_pages(i.followup.send,payload,manga,owner=i.user.id)
+
+    await send_community_card(send_watch,i.guild,state,viewer=uid)
 
 
 @bingecord_commands.command(name="user-reset",description="Reset your tracker history for this server.")
@@ -2750,6 +2786,7 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         await i.response.send_message("This command must be used in a server.",ephemeral=True)
         return
     target=user or i.user
+    await i.response.defer()
     await evaluate_achievements(g,str(target.id))
     unlocked=await storage.get_achievements(g,str(target.id))
     timezone_info=await storage.get_timezone(g)
@@ -2759,8 +2796,16 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         timezone_info["name"],
     )
 
+    manga_stats=await storage.get_reading_statistics(g,str(target.id))
+    if manga_stats is not None:
+        progress.update({f"reading_{kind}": manga_stats[kind] for kind in ("chapters", "completed", "streak")})
+
     lines=[]
+    visible_total=0
     for aid,achievement in all_achievements():
+        if aid in reading.READING_ACHIEVEMENTS and manga_stats is None and aid not in unlocked:
+            continue
+        visible_total+=1
         if aid in unlocked:
             stamp=unlocked[aid].get("unlocked_at")
             when=""
@@ -2791,11 +2836,11 @@ async def simkl_achievements(i,user: discord.Member | None = None):
     for index,chunk in enumerate(pages):
         embed=discord.Embed(title=f"🏆 {target.display_name}'s Achievements · {index+1}/{len(pages)}",
                             description="\n\n".join(chunk),color=0xF1C40F)
-        embed.set_footer(text=f"{len(unlocked)}/{len(ACHIEVEMENTS)} unlocked")
+        embed.set_footer(text=f"{len(unlocked)}/{visible_total} unlocked")
         embeds.append(embed)
     if embeds:
         embeds[0].set_thumbnail(url=target.display_avatar.url)
-    await i.response.send_message(embeds=embeds)
+    await i.followup.send(embeds=embeds)
 
 
 @bingecord_commands.command(name="debug",description="(Admin) Privately preview cards and inspect completion without changing XP.")
@@ -2814,6 +2859,7 @@ async def simkl_achievements(i,user: discord.Member | None = None):
         app_commands.Choice(name="Film activity card", value="activity_movie"),
         app_commands.Choice(name="Watched Together card", value="activity_together"),
         app_commands.Choice(name="Status activity card", value="activity_status"),
+        app_commands.Choice(name="Reading Activity card", value="activity_reading"),
         app_commands.Choice(name="Profile card", value="profile"),
         app_commands.Choice(name="Leaderboard card", value="leaderboard"),
         app_commands.Choice(name="Server stats card", value="server_stats"),
@@ -2821,7 +2867,8 @@ async def simkl_achievements(i,user: discord.Member | None = None):
     ],
     rank=[app_commands.Choice(name=name,value=minimum) for minimum,name in RANKS],
     community_event=[app_commands.Choice(name=name,value=value) for value,name in
-                     [('watchathon','Watchathon'),('genres','Genre Expedition'),('bingo','Community Bingo'),('decades','Decade Discovery')]],
+                     [('watchathon','Watchathon'),('genres','Genre Expedition'),('bingo','Community Bingo'),
+                      ('decades','Decade Discovery'),('reading','Current Manga Event'), *MANGA_EVENTS.items()]],
 )
 @app_commands.autocomplete(achievement=achievement_autocomplete)
 @app_commands.describe(
@@ -2857,18 +2904,33 @@ async def simkl_debug(
     if community_event is not None:
         await i.response.send_message('The community_event option is only for Community event card previews.',ephemeral=True)
         return
-    if feature.value in {'activity_episode','activity_movie','activity_together','activity_status'}:
+    if feature.value in {'activity_episode','activity_movie','activity_together','activity_status','activity_reading'}:
         await i.response.defer(ephemeral=True)
         from trackerbot.presentation.activity_cards import activity_card_kwargs
-        together=feature.value=='activity_together';status_preview=feature.value=='activity_status';movie=feature.value not in {'activity_episode','activity_status'};group_parts=None;g=str(i.guild.id);uid=str(i.user.id)
-        source=await storage.get_activity_provider(g,uid) or 'simkl'
+        together=feature.value=='activity_together';status_preview=feature.value=='activity_status'
+        reading=feature.value=='activity_reading';movie=feature.value in {'activity_movie','activity_together'}
+        group_parts=None;g=str(i.guild.id);uid=str(i.user.id)
+        source='anilist' if reading else (await storage.get_activity_provider(g,uid) or 'simkl')
         records=await storage.get_activity_messages(g)
+        def matches(record,part):
+            if part['user']!=uid or part['source']!=source or (len(record['parts'])>1)!=together:
+                return False
+            meta=part['meta']
+            if reading:
+                return meta.get('media_type')=='manga'
+            return (meta.get('media_type')!='manga' and bool(meta.get('status'))==status_preview
+                    and (together or status_preview or bool(meta.get('movie'))==movie))
         selected=next(((record,part) for record in reversed(records) for part in record['parts']
-                       if part['user']==uid and part['source']==source and (bool(part['meta'].get('status')) if status_preview else not part['meta'].get('status'))
-                       and (together or status_preview or bool(part['meta'].get('movie'))==movie) and (len(record['parts'])>1 if together else len(record['parts'])==1)),None)
+                       if matches(record,part)),None)
         if selected:
             record,part=selected;embed=discord.Embed.from_dict(record['rendered']);sample=False
             if together:group_parts=[dict(p) for p in record['parts']];part=group_parts[0]
+        elif reading:
+            part={'guild':g,'user':uid,'source':'anilist','meta':{'media_type':'manga'}}
+            embed=discord.Embed(title='Example Manga',description='Read Chapter 1 of **Example Manga**\n🆕 Started reading this manga.',
+                                color=MEDIA_STYLES['manga'][0],timestamp=datetime.now(timezone.utc))
+            embed.set_author(name=i.user.display_name+ "'s Activity",icon_url=getattr(getattr(i.user,'display_avatar',None),'url',None))
+            embed.set_footer(text='Manga · AniList');sample=True
         else:
             part={'guild':g,'user':uid,'source':source,'meta':{'movie':movie,'episodes':[] if movie else [1]}}
             embed=discord.Embed(title='Example Film' if movie else 'Example Series',
@@ -2901,7 +2963,10 @@ async def simkl_debug(
             if group_parts and not sample:await resolve_activity_card_members(group_parts)
             part={**part,'display_timezone':(await storage.get_activity_timezone(g,uid))['name'],'preview_owner':uid}
             if group_parts:group_parts[0]=part
-            kwargs=await activity_card_kwargs(embed,part,preview=True,sample=sample,**({'parts':group_parts} if group_parts else {}))
+            options={'parts':group_parts} if group_parts else {}
+            if not sample and not reading and not status_preview and not part['meta'].get('movie'):
+                options['tmdb_client']=tmdb
+            kwargs=await activity_card_kwargs(embed,part,preview=True,sample=sample,**options)
             await i.followup.send(**kwargs,ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
         except Exception:
             await i.followup.send('Card artwork is temporarily unavailable. Try again shortly; no preferences or XP were changed.',ephemeral=True)
@@ -2910,7 +2975,7 @@ async def simkl_debug(
         await i.response.defer(ephemeral=True)
         from trackerbot.core.personal_challenges import snapshot
         from trackerbot.presentation.challenge_delivery import challenge_card
-        now=datetime.now(timezone.utc);state=await storage.get_challenge_state(str(i.user.id))
+        now=datetime.now(timezone.utc);state=await storage.get_challenge_state(str(i.user.id),reading_enabled=True)
         await challenge_card(i.followup.send,i.user,snapshot(state,now,preview=True),now=now,ephemeral=True)
         return
     if feature.value == "streak":
@@ -2944,7 +3009,7 @@ async def simkl_debug(
     if feature.value in {"server_stats","weekly_recap"}:
         await i.response.defer(ephemeral=True)
         if feature.value == 'weekly_recap':
-            result=await generate_weekly_recap(i.guild)
+            result=await generate_weekly_recap(i.guild,preview=True)
             heading='weekly recap'
         else:
             rows=await storage.get_guild_statistics(str(i.guild.id))
@@ -3045,12 +3110,23 @@ async def show_profile(i,user,*,preview=False):
     await i.response.defer(ephemeral=preview)
     if not preview:await evaluate_achievements(g,str(target.id))
     stats=await storage.get_statistics(g,str(target.id))
+    manga_stats=await storage.get_reading_statistics(g,str(target.id))
+    from trackerbot.presentation.manga_pages import profile_page
+
+    async def manga():
+        return await profile_page(i.guild,target.display_name,manga_stats,preview=preview,
+                                  owner=i.user.id if preview else None)
+
+    async def send_profile(**payload):
+        return await send_media_pages(i.followup.send,payload,manga,owner=i.user.id)
+
     source = await storage.get_activity_provider(g, str(target.id)) or 'simkl'
     active_wetrakr = source != 'simkl'
     source_label = provider_registry.get(source).manifest.display_name
     history=await storage.get_history_import_state(g,str(target.id))
-    if not active_wetrakr and history["linked"] and not history["complete"] and not (int(stats.get("episodes_watched",0))+int(stats.get("movies_watched",0))):
-        await i.followup.send("This SIMKL history import is still pending. Watch totals will appear here when it finishes; the bot retries automatically.",ephemeral=True)
+    if manga_stats is None and not active_wetrakr and history["linked"] and not history["complete"] and not (int(stats.get("episodes_watched",0))+int(stats.get("movies_watched",0))):
+        await send_profile(embed=discord.Embed(title="Watch history import pending",
+            description="Watch totals will appear when the SIMKL import finishes."),ephemeral=True)
         return
     progression=await storage.get_progression(str(target.id))
     timezone_info=await storage.get_timezone(g)
@@ -3062,10 +3138,12 @@ async def show_profile(i,user,*,preview=False):
         embed.add_field(name="Watch history",value=f"{stats.get('episodes_watched',0):,} episodes · {stats.get('movies_watched',0):,} movies",inline=False)
         embed.add_field(name="Anime (included above)",value=f"{stats.get('anime_episodes_watched',0):,} episodes · {stats.get('anime_movies_watched',0):,} movies",inline=False)
         embed.add_field(name="Streak",value=f"{current} current · {longest} longest",inline=False)
-        await i.followup.send(embed=embed)
+        await send_profile(embed=embed)
         return
     today=datetime.now(ZoneInfo(timezone_info["name"])).date()
     data=profile_snapshot(stats,progression,unlocked_achievements,current,longest,today=today)
+    if manga_stats is None:
+        data["achievement_total"] -= sum(key not in unlocked_achievements for key in reading.READING_ACHIEVEMENTS)
     data["provider_label"] = source_label
     data["preview"] = preview
     data["achievements_enabled"]=features["achievements"]
@@ -3085,13 +3163,13 @@ async def show_profile(i,user,*,preview=False):
         detail=embed.copy()
         detail.add_field(name='Watch history',value=f"{data['episodes']:,} episodes · {data['movies']:,} movies · {data['anime_episodes']:,} anime episodes · {data['anime_movies']:,} anime movies",inline=False)
         detail.add_field(name='Streak',value=f"{current} current · {longest} longest",inline=False)
-        await i.followup.send(**await standalone_card(detail,image,'profile.png',owner=i.user.id if preview else None,guild=g,transient=preview),allowed_mentions=discord.AllowedMentions.none())
+        await send_profile(**await standalone_card(detail,image,'profile.png',owner=i.user.id if preview else None,guild=g,transient=preview),allowed_mentions=discord.AllowedMentions.none())
     except Exception:
         log.exception("Could not send profile image for %s; sending embed fallback.",target.id)
         embed.set_image(url=None)
         embed.add_field(name="Watching",value=f"{data['episodes']:,} episodes · {data['movies']:,} movies · {data['anime_episodes']:,} anime episodes · {data['anime_movies']:,} anime movies",inline=False)
         embed.add_field(name="Streak",value=f"{current} current · {longest} longest",inline=False)
-        await i.followup.send(embed=embed)
+        await send_profile(embed=embed)
 
 
 REBUILD_PROVIDER_CHOICES=[app_commands.Choice(name=name,value=value) for name,value in
@@ -3397,6 +3475,7 @@ LEADERBOARD_CHOICES=[
     app_commands.Choice(name="Episodes",value="episodes"),
     app_commands.Choice(name="Movies",value="movies"),
     app_commands.Choice(name="Anime",value="anime"),
+    app_commands.Choice(name="Manga chapters",value="manga"),
     app_commands.Choice(name="Unique titles",value="titles"),
     app_commands.Choice(name="Current streak",value="streak"),
     app_commands.Choice(name="XP / progression",value="xp"),
@@ -3425,7 +3504,7 @@ async def show_leaderboard(i,category=None,*,period=None,preview=False):
     if category in global_categories:period='all'
     await i.response.defer(**({'ephemeral':True} if preview else {}))
     rows=await storage.get_guild_leaderboard_snapshot(g)
-    labels={'total':'Total watches','episodes':'Episodes','movies':'Movies','anime':'Anime','titles':'Unique titles',
+    labels={'total':'Total watches','episodes':'Episodes','movies':'Movies','anime':'Anime','manga':'Manga chapters','titles':'Unique titles',
             'streak':'Current streak','xp':'XP progression','level':'Level','prestige':'Prestige'}
     periods={'all':'All-time','week':'This week','month':'Last 30 days'}
     def ranked():
@@ -3437,7 +3516,7 @@ async def show_leaderboard(i,category=None,*,period=None,preview=False):
             if period!='all' or selected:row.update({k:v for k,v in selected.items() if k not in {'featured'}})
             if period!='all' and not selected:
                 for key in ('total','episodes','movies','anime','titles'):row[key]=0
-            row['featured']=selected.get('featured',[])
+            row['featured']=selected.get('featured',[]) if category!='manga' else []
             row.setdefault('titles',0);row.setdefault('streak',0)
             member=i.guild.get_member(int(row['discord_user_id']))
             row['name']=member.display_name if member else row.get('simkl_username') if row.get('simkl_username') and not str(row['simkl_username']).isdigit() else 'Member '+str(row['discord_user_id'])[-4:]
@@ -3457,7 +3536,7 @@ async def show_leaderboard(i,category=None,*,period=None,preview=False):
         display=[{**r,'name':members[str(r['discord_user_id'])].display_name if str(r['discord_user_id']) in members else r['name']} for r in page_rows]
         full=discord.Embed(title=f'{i.guild.name} · {labels[category]}',description=periods[period],color=0xEFBE69)
         full.add_field(name='Rankings',value='\n'.join(f"**{n}.** <@{r['discord_user_id']}> · **{r['progression_xp'] if category=='xp' else r.get(category,0):,}**" for n,r in enumerate(display,start+1)) or 'No activity yet.',inline=False)
-        full.set_footer(text=f'Page {page}/{max(1,pages)} · Selected tracker history · Shared global progression')
+        full.set_footer(text=f'Page {page}/{max(1,pages)} · '+('AniList manga' if category=='manga' else 'Selected tracker history · Shared global progression'))
         view.details_embed=full
         try:
             assets={uid:m.display_avatar for uid,m in members.items()};assets['icon']=getattr(i.guild,'icon',None)
@@ -3468,7 +3547,7 @@ async def show_leaderboard(i,category=None,*,period=None,preview=False):
             image=await asyncio.to_thread(render_leaderboard_png,i.guild.name,labels[category],display,
                 rank_offset=start,avatars=avatars,show_progression=progression_enabled,icon=icon,artwork=artwork,
                 period_label=periods[period],max_value=max((r['progression_xp'] if category=='xp' else r.get(category,0) for r in view.rows),default=1))
-            return None,discord.File(image,filename='leaderboard.png',description=full.title[:1024])
+            return None,discord.File(image,filename='leaderboard.png')
         except Exception:
             log.exception('Leaderboard artwork unavailable for guild %s; using text.',g)
             return full,None
@@ -3600,6 +3679,14 @@ def build_server_stats(rows, guild_name, *, with_visual=False):
             inline=False,
         )
 
+    reading_rows=[row["reading"] for row in rows if row.get("reading") is not None]
+    if reading_rows:
+        manga={
+            "chapters": sum(row["chapters"] for row in reading_rows),
+            "completed": sum(row["completed"] for row in reading_rows),
+            "statuses": {status: sum(row["statuses"][status] for row in reading_rows) for status in reading.STATUS_LABELS},
+        }
+        embed.add_field(name="Manga · AniList",value=reading_summary_text(manga),inline=False)
     embed.set_footer(text="All-time statistics · Server-wide")
     if with_visual:
         metrics=[("Total watches",total_watches),("Episodes",episodes),("Movies",movies),
@@ -3607,6 +3694,8 @@ def build_server_stats(rows, guild_name, *, with_visual=False):
         leaders=[("Tracked users",str(linked))]
         leaders.extend((f"#{n} watcher",f"{names[uid]} · {total:,} watches") for n,(total,uid) in enumerate(total_watchers[:2],1))
         leaders.extend((f"#{n} title",f"{top['title']} · {top['count']:,}") for n,top in enumerate(top_titles[:2],1))
+        if reading_rows:
+            metrics.extend([("Manga chapters",manga["chapters"]),("Manga finished",manga["completed"])])
         return embed,metrics,leaders
     return embed
 
@@ -3618,7 +3707,7 @@ async def simkl_server_stats(i):
         await i.response.send_message("This command must be used in a server.",ephemeral=True); return
     rows=await storage.get_guild_statistics(g)
     if not any(
-        int(row["statistics"].get("episodes_watched",0)) + int(row["statistics"].get("movies_watched",0))
+        row.get("reading") is not None or int(row["statistics"].get("episodes_watched",0)) + int(row["statistics"].get("movies_watched",0))
         for row in rows
     ):
         pending=sum(not row.get("history_seeded",True) for row in rows)
@@ -3821,7 +3910,8 @@ async def wetrakr_tracking_rows(uid, status, targets):
     return rows
 
 
-@bingecord_commands.command(
+# Discovery commands are on hold. Keep their callbacks available for tests.
+@app_commands.command(
     name="watching",
     description="Show what you're currently watching on your active tracker.",
 )
@@ -4061,7 +4151,7 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
     return rank_candidates(list(candidates.values()))
 
 
-@bingecord_commands.command(
+@app_commands.command(
     name="recommend",
     description="Get personalized recommendations based on your active tracker history.",
 )
@@ -4220,7 +4310,7 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
         )
 
 
-@bingecord_commands.command(name="random",description="Pick something random from your active tracker's plan to watch list.")
+@app_commands.command(name="random",description="Pick something random from your active tracker's plan to watch list.")
 @app_commands.choices(type=RANDOM_TYPE_CHOICES,genre=RANDOM_GENRE_CHOICES)
 @app_commands.describe(
     type="Choose what kind of title to pick.",
@@ -4258,7 +4348,9 @@ async def simkl_random(
         item = random.choice(candidates)
         media_type, ids, title = item['media_type'], item['ids'], item['title']
         tmdb_id = ids.get('tmdb')
-        if media_type == 'movies':
+        if not tmdb_id:
+            image, logo = item.get('image'), None
+        elif media_type == 'movies':
             image, logo = await tmdb.get_movie_backdrop(tmdb_id), await tmdb.get_movie_logo(tmdb_id)
         else:
             image, logo = await tmdb.get_tv_backdrop(tmdb_id), await tmdb.get_tv_logo(tmdb_id)
@@ -4278,7 +4370,24 @@ async def simkl_random(
                             preferences=await storage.get_embed_preferences(g, uid))
         embed.title = f"🎲 Random Pick · {title}"
         embed.set_footer(text=f"{label} · {provider.manifest.display_name} Plan To Watch")
-        await i.followup.send(embed=embed)
+        from trackerbot.presentation.random_reveal import random_reveal, tracker_link
+        fallback = embed.copy()
+        kwargs = {}
+        view = tracker_link(item.get('url'), provider.manifest.display_name)
+        if view:
+            kwargs['view'] = view
+        try:
+            limit = getattr(i, 'filesize_limit', None) or getattr(i.guild, 'filesize_limit', None) or 8_000_000
+            file = await random_reveal(item, candidates, image, limit)
+            embed.set_image(url=None)
+            embed.set_thumbnail(url=None)
+            await i.followup.send(embed=embed, file=file, **kwargs)
+        except discord.HTTPException as exc:
+            if exc.status != 413 and exc.code != 40005:
+                raise
+            await i.followup.send(embed=fallback, **kwargs)
+        except (OSError, ValueError):
+            await i.followup.send(embed=fallback, **kwargs)
     except ValueError as exc:
         await i.followup.send(str(exc), ephemeral=True)
     except Exception:
@@ -4504,8 +4613,7 @@ async def deliver_mdblist_play(ch,gid,uid,name,member,provider,account,play,last
     if started:description+='\n\n🆕 Started watching this series.'
     embed=build_embed(media,description,parse_iso(play['watched_at']),name,member,image,provider.profile_url(account),
         title=title,title_url=provider.title_url('movies' if movie else 'shows',ids),poster=poster,logo=logo,preferences=p,provider='MDBList')
-    # A missing still must not suppress an independently available title logo.
-    if logo and p.get('style','card')!='minimal' and p.get('artwork','auto') in {'auto','backdrop'}:
+    if logo and not embed.thumbnail and p.get('style') in {'rich','compact'} and p.get('artwork','auto') in {'auto','backdrop'}:
         embed.set_thumbnail(url=logo)
     end=last_play or play
     detail_meta={'ids':ids,'movie':movie,'season':None if movie else play['season'],
@@ -4549,7 +4657,7 @@ TRACKER_CHOICES=[app_commands.Choice(name=manifest.display_name,value=manifest.n
                  for manifest in BUILTIN_TRACKERS]
 
 
-@bingecord_commands.command(name="link", description="Link your SIMKL, WeTrakr or MDBList account in this server.")
+@bingecord_commands.command(name="link", description="Link a tracking account in this server.")
 @app_commands.choices(provider=TRACKER_CHOICES)
 async def tracker_link(i, provider: app_commands.Choice[str]):
     handler = provider_registry.get(provider.value).authorize if provider.value in {m.name for m in provider_registry.manifests()} else None
@@ -4569,18 +4677,39 @@ async def tracker_unlink(i, provider: app_commands.Choice[str]):
     await handler(i)
 
 
-@bingecord_commands.command(name="source", description="Choose which linked tracker posts your activity in this server.")
-@app_commands.choices(provider=TRACKER_CHOICES)
-async def tracker_source(i, provider: app_commands.Choice[str] | None = None):
+@bingecord_commands.command(name="source", description="Choose your watch tracker or toggle AniList manga in this server.")
+@app_commands.choices(provider=TRACKER_CHOICES, manga=[app_commands.Choice(name="On",value="on"),app_commands.Choice(name="Off",value="off")])
+async def tracker_source(i, provider: app_commands.Choice[str] | None = None, manga: app_commands.Choice[str] | None = None):
     g=guild_id(i)
     if not g:
         await i.response.send_message("This command must be used in a server.",ephemeral=True)
         return
     uid=str(i.user.id)
+    reading_enabled=None if manga is None else manga.value=="on"
+    if reading_enabled and not ANILIST_CLIENT_ID:
+        await i.response.send_message("AniList is not configured on this bot.",ephemeral=True)
+        return
+    if manga is not None and provider is None:
+        await i.response.defer(ephemeral=True)
+        if not await storage.set_anilist_manga(g,uid,reading_enabled):
+            await i.edit_original_response(content="Link your AniList account in this server first.")
+            return
+        detail="AniList manga tracking is off."
+        if reading_enabled:
+            ready=await provider_registry.get("anilist").initialize_manga(g,uid)
+            detail=("AniList manga tracking is on. You can update your next chapter now." if ready else
+                    "Manga tracking is on, but the baseline is pending. Run `/bingecord checknow` before updating a chapter.")
+        await i.edit_original_response(content=detail)
+        return
     if provider is None:
         source=await storage.get_activity_provider(g,uid)
         active=provider_registry.get(source).manifest.display_name if source else "none"
-        await i.response.send_message(f"Your activity source here is **{active}**. Choose a provider to change it.",ephemeral=True)
+        targets=await storage.get_provider_targets("anilist",g)
+        reading=any(t["discord_user_id"]==uid and t["guild_user_data"]["anilist_manga"] for t in targets)
+        manga_state="off" if not reading else ("AniList · ready" if any(
+            t["discord_user_id"]==uid and "MANGA" in t["guild_user_data"]["anilist_lists"] for t in targets
+        ) else "AniList · baseline pending")
+        await i.response.send_message(f"Watch source here: **{active}**. Manga tracking: **{manga_state}**.",ephemeral=True)
         return
     if provider.value=="simkl" and not SIMKL_CLIENT_ID:
         await i.response.send_message("SIMKL is not configured on this bot. Set SIMKL_CLIENT_ID first.",ephemeral=True)
@@ -4591,15 +4720,28 @@ async def tracker_source(i, provider: app_commands.Choice[str] | None = None):
     if provider.value=="mdblist" and not mdblist_tracking:
         await i.response.send_message("MDBList OAuth is not configured on this bot. Set MDBLIST_CLIENT_ID first.",ephemeral=True)
         return
-    changed=await storage.set_activity_provider(g,uid,provider.value)
-    if not changed:
-        await i.response.send_message(f"Link your {provider.name} account in this server first.",ephemeral=True)
+    if provider.value=="anilist" and not ANILIST_CLIENT_ID:
+        await i.response.send_message("AniList is not configured on this bot.",ephemeral=True)
         return
-    detail=(f"The next check imports {provider.name} watch history, XP and statistics without posting old activity. "
+    await i.response.defer(ephemeral=True)
+    changed=await storage.set_activity_provider(g,uid,provider.value,**({"manga":reading_enabled} if manga is not None else {}))
+    if not changed:
+        required=f"{provider.name} and AniList" if manga is not None and provider.value!="anilist" else provider.name
+        await i.edit_original_response(content=f"Link your {required} account(s) in this server first.")
+        return
+    detail=("AniList posts anime activity. The first check sets a baseline silently."
+            if provider.value=="anilist" else
+            f"The next check imports {provider.name} watch history, XP and statistics without posting old activity. "
             "Later watches post normally; switching back preserves your progression."
             if provider.value in {"wetrakr","mdblist"} else
             "SIMKL activity resumes from now; its existing XP and statistics remain in place.")
-    await i.response.send_message(f"Activity source set to **{provider.name}**. {detail}",ephemeral=True)
+    if manga is not None:
+        detail+=f" Manga tracking is {'on' if reading_enabled else 'off'}."
+    if reading_enabled:
+        ready=await provider_registry.get("anilist").initialize_manga(g,uid)
+        detail+=(" You can update your next chapter now." if ready else
+                 " The manga baseline is pending. Run `/bingecord checknow` before updating a chapter.")
+    await i.edit_original_response(content=f"Activity source set to **{provider.name}**. {detail}")
 
 
 @bingecord_commands.command(name="style",description="Choose your personal style for episode and movie watch activities.")
@@ -4751,6 +4893,13 @@ async def simkl_status(i,user: discord.Member | None = None):
         identity=f"• <@{uid}> — active: **{provider_registry.get(selected).manifest.display_name}** · " + (" · ".join(links) or "no linked account")
         if gu.get("mdblist_linked") and u.get("mdblist"):
             identity+=f" · MDBList: **{u['mdblist'].get('username') or 'unknown'}**"
+        if gu.get("anilist_linked") and u.get("anilist"):
+            identity+=f" · AniList: **{u['anilist'].get('username') or 'unknown'}**"
+            identity+=f" · manga: **{'on' if gu.get('anilist_manga') else 'off'}**"
+        if selected=="anilist":
+            state="ready" if "ANIME" in gu.get("anilist_lists",{}) else "first check will set a baseline"
+            lines.append(identity+f"\n  AniList anime sync: **{state}**")
+            continue
         detail_account=(u.get(selected) or {}).get('account_id') if selected!='simkl' else u.get('simkl_account_id') or 'unknown:'+uid
         detail_health=(gu.get('activity_details') or {}).get(f"{selected}:{detail_account}") or {}
         if detail_health.get('error'):identity+=' · personal ratings: **refresh pending**'
@@ -4918,6 +5067,7 @@ provider_registry = ProviderRegistry()
 provider_registry.register(SimklProvider(_sys.modules[__name__]))
 provider_registry.register(WeTrakrProvider(_sys.modules[__name__]))
 provider_registry.register(MDBListProvider(_sys.modules[__name__]))
+provider_registry.register(AniListProvider(_sys.modules[__name__]))
 
 
 async def selected_provider(guild_id, uid):

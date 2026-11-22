@@ -309,6 +309,8 @@ def rollback_import(progression,provider,before,reward_batch,revoke_challenges):
     rewards=[];batch_xp=0
     for period,completions in data.get('challenge_completions',{}).items():
         for cid,reward in completions.items():
+            if cid.startswith("reading_"):
+                continue
             try:matches=_stamp(reward.get('completed_at'))==batch
             except (ValueError,TypeError):continue
             amount=max(0,int(reward.get('xp',0)))

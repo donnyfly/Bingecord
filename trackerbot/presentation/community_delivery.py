@@ -7,6 +7,10 @@ from .discord_artwork import load_discord_artwork,resolve_card_members
 
 
 async def community_card(send,guild,state,*,viewer=None,preview=False,heading=None,client=None):
+    if state.get("kind") == "reading":
+        from .manga_pages import community_page
+        payload = await community_page(guild, state["reading"], viewer, preview=preview, client=client)
+        return await send(**payload, ephemeral=preview, allowed_mentions=discord.AllowedMentions.none())
     names={};assets={};rows=sorted((state.get('contributions') or {}).items(),key=lambda kv:(-kv[1],kv[0]))[:5]
     members=await resolve_card_members(guild,[uid for uid,_ in rows],client)
     for uid,_ in rows:
@@ -66,7 +70,7 @@ async def community_card(send,guild,state,*,viewer=None,preview=False,heading=No
         if viewer:detail.add_field(name='Member contribution',value=f"<@{viewer}> · {(state.get('contributions') or {}).get(str(viewer),0):g} {unit}",inline=False)
         from .card_details import details_view
         kwargs['view']=await details_view(detail,owner=viewer if preview else None,guild=getattr(guild,'id',None))
-        kwargs.update(embed=None,file=discord.File(image,filename='community.png',description=(heading or title)[:1024]))
+        kwargs.update(embed=None,file=discord.File(image,filename='community.png'))
     except Exception:
         lines=[f"{discord.utils.escape_markdown(names[uid])} · {value:,.1f} {unit}" for uid,value in rows]
         if lines:embed.add_field(name='Contributors · Top five',value='\n'.join(lines),inline=False)

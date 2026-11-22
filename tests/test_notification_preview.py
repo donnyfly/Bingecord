@@ -114,6 +114,7 @@ def test_debug_previews_are_private_and_do_not_write(monkeypatch):
         assert sent["ephemeral"] is True
         assert sent["embed"] is None and sent["view"].embed.title=="🏆 Achievement Unlocked!"
         assert sent["file"].filename == "achievement.gif"
+        assert sent["file"].description is None
 
         rank=_interaction()
         await command.callback(rank, app_commands.Choice(name="Rank up", value="rank"))
@@ -122,6 +123,7 @@ def test_debug_previews_are_private_and_do_not_write(monkeypatch):
         assert sent["ephemeral"] is True
         assert sent["view"].embed.title == "Rank Up"
         assert sent["embed"] is None and sent["file"].filename=="level-up.gif"
+        assert sent["file"].description is None
         selected=_interaction()
         await command.callback(
             selected,app_commands.Choice(name="Level up",value="level"),
@@ -138,6 +140,7 @@ def test_debug_previews_are_private_and_do_not_write(monkeypatch):
         sent=prestige.followup.send.await_args.kwargs
         assert sent["ephemeral"] is True
         assert sent["embed"] is None and sent["file"].filename=="prestige.gif"
+        assert sent["file"].description is None
         assert "Prestige 3" in sent["view"].embed.title
         forbidden.assert_not_awaited()
 
@@ -438,7 +441,7 @@ def test_debug_profile_uses_live_renderer_without_awarding_achievements(monkeypa
             interaction.response.defer.assert_awaited_once_with(ephemeral=True)
             assert interaction.followup.send.await_args.kwargs['file'].filename=='profile.png'
             assert interaction.followup.send.await_args.kwargs['embed'] is None
-            assert interaction.followup.send.await_args.kwargs['view'].embed.fields[0].name=='Watch history'
+            assert interaction.followup.send.await_args.kwargs['view'].pages['watch'][2].embed.fields[0].name=='Watch history'
             assert await store.get_progression('42')==before
     asyncio.run(scenario())
 
@@ -462,11 +465,47 @@ def test_debug_server_cards_are_private_and_use_live_renderers(monkeypatch):
             kwargs=interaction.followup.send.await_args.kwargs
             assert kwargs['ephemeral'] is True
             assert kwargs['file'].filename=='summary-preview.png'
+            assert kwargs['file'].description is None
             assert kwargs['embed'] is None and kwargs['view'] is not None
         assert [item[0] for item in captured]==['server statistics','weekly recap']
         assert captured[0][1][0]==('Total watches',4)
         evaluator.assert_not_awaited()
         assert await bot.storage.get_progression('42')==before
+    asyncio.run(scenario())
+
+
+def test_debug_weekly_recap_previews_reading_when_the_week_is_empty(monkeypatch):
+    async def scenario():
+        interaction = _interaction()
+        interaction.guild.name = "Server"
+        monkeypatch.setattr(bot.storage, "get_guild_statistics", AsyncMock(return_value=[]))
+        reading_totals = AsyncMock(return_value={"chapters": 0, "started": 0, "statuses": {}})
+        monkeypatch.setattr(bot.storage, "get_guild_reading_summary", reading_totals)
+
+        (embed, _, _, extras), _ = await bot.generate_weekly_recap(interaction.guild)
+        assert "reading" not in extras["story"]
+        assert not embed.fields
+
+        feature = app_commands.Choice(name="Weekly recap card", value="weekly_recap")
+        await bot.simkl_debug.callback(interaction, feature)
+        message = interaction.followup.send.await_args.kwargs
+        assert message["ephemeral"] is True
+        view = message["view"]
+        assert view.watch.disabled and not view.read.disabled
+        assert Image.open(message["file"].fp).height == 1420
+        click = SimpleNamespace(response=SimpleNamespace(defer=AsyncMock()), edit_original_response=AsyncMock())
+        await view.switch(click, "manga")
+        assert click.edit_original_response.await_args.kwargs["attachments"][0].filename == "manga-weekly-recap.png"
+        assert click.edit_original_response.await_args.kwargs["attachments"][0].description is None
+        assert view.pages["manga"][2].embed.footer.text == "Sample data"
+        assert view.read.disabled and not view.watch.disabled
+        await view.switch(click, "watch")
+        assert click.edit_original_response.await_args.kwargs["attachments"][0].filename == "summary-preview.png"
+
+        reading_totals.return_value = {"chapters": 0, "started": 1, "statuses": {}}
+        (_, _, _, extras), _ = await bot.generate_weekly_recap(interaction.guild, preview=True)
+        assert extras["manga"] == reading_totals.return_value
+
     asyncio.run(scenario())
 
 
@@ -485,6 +524,7 @@ def test_debug_leaderboard_uses_private_real_page_renderer(monkeypatch):
         interaction.response.defer.assert_awaited_once_with(ephemeral=True)
         kwargs=interaction.followup.send.await_args.kwargs
         assert kwargs['ephemeral'] is True and kwargs['file'].filename=='leaderboard.png'
+        assert kwargs['file'].description is None
         assert captured[0][0]=='Total watches' and captured[0][1][0]['total']==3
     asyncio.run(scenario())
 

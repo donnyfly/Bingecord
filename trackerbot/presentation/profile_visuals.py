@@ -212,7 +212,8 @@ def render_summary_png(guild_name, heading, subtitle, metrics, leaders, *, icon=
         from .social_visuals import render_recap
         return render_recap(guild_name,subtitle,metrics,leaders,icon=icon,story=story,avatars=avatars,artwork=artwork)
     accent=(121,159,235) if 'week' in heading.lower() else (239,190,105)
-    image=background((1080,980),accent);draw=ImageDraw.Draw(image)
+    manga=dict(metrics).get("Manga chapters")
+    image=background((1080,980+(126 if manga is not None else 0)),accent);draw=ImageDraw.Draw(image)
     def text(x,y,value,size=20,colour=WHITE,bold=False,width=900):
         card_text(draw,(x,y),str(value),font=fit(draw,value,size,width,bold),fill=colour)
     card_label(draw,(56,38),f'Bingecord · {heading}',fill=MUTED)
@@ -242,5 +243,9 @@ def render_summary_png(guild_name, heading, subtitle, metrics, leaders, *, icon=
         card_label(draw,(82,y),label,fill=accent)
         text(82,y+24,short(draw,value,24,914,True),24,WHITE,True,width=914)
         if idx<len(highlights)-1:draw.line((82,y+69,998,y+69),fill=LINE)
-    text(56,944,'Anime totals are included in episodes and movies · Members use their selected source',14,MUTED)
+    if manga is not None:
+        panel(image,(56,944,1024,1050))
+        card_label(draw,(80,964),'Manga · AniList',fill=MUTED)
+        text(80,995,f"{manga:,} chapters recorded · {dict(metrics)['Manga finished']:,} manga finished",24,WHITE,True,width=920)
+    text(56,1070 if manga is not None else 944,'Anime totals are included in episodes and movies · Members use their selected source',14,MUTED)
     return png(image)

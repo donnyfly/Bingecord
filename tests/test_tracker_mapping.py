@@ -38,12 +38,12 @@ def test_episode_rewatch_is_a_distinct_occurrence():
     assert not same_watch(original, watch(ids={"tmdb": 37854}, at="2026-09-29T12:00:00Z"))
 
 
-def test_registry_requires_history_changes_and_unique_names():
+def test_registry_requires_account_linking_and_changes():
     good = ProviderManifest("future_tracker", "Future Tracker", True, True, True,
                             True, True, True, True,
                             "https://example.com/u/{id}", "https://example.com/t/{id}")
     good.validate_tracker()
-    with pytest.raises(ValueError, match="history and changes"):
+    with pytest.raises(ValueError, match="account linking and changes"):
         ProviderManifest("metadata_only", "Metadata", False, False, False,
                          False, False, False, True,
                          "https://example.com/u", "https://example.com/t").validate_tracker()

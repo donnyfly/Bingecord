@@ -21,7 +21,6 @@ It supports automatic provider syncing, episode grouping, artwork and ratings, p
 - 🎨 Rich/minimal embeds, optional visual activity cards, artwork choices, and short/detailed activity text
 - 🔗 Per-member, per-server source selection with multiple linked accounts
 - 📊 Personal and server watch statistics
-- 🎲 Watching lists, planned-list random picks, and recommendations
 - 🧩 Cross-provider watch mapping and shared XP duplicate protection
 - 🔥 Watch streaks
 - 🏆 Server leaderboards
@@ -51,9 +50,6 @@ The bot displays **Playing /bingecord help**. Use `/bingecord help` for a privat
 | `/bingecord leaderboard` | Everyone | View server leaderboards |
 | `/bingecord server-stats` | Everyone | View server watch statistics |
 | `/bingecord community` | Everyone | View the rotating weekly cooperative watch goal |
-| `/bingecord watching` | Everyone | View your selected account's watching list and next episodes where available |
-| `/bingecord random` | Everyone | Pick from your selected account's planned list |
-| `/bingecord recommend` | Everyone | Get recommendations using selected-source history and exclusions |
 | `/bingecord style` | Everyone | Change personal activity-post preferences |
 | `/bingecord user-reset` | Everyone | Reset your tracking history for the current server |
 | `/bingecord setchannel` | Manage Server | Choose the activity channel |
@@ -150,6 +146,47 @@ The host configures the application once. Members do not need individual API key
 `MDBLIST_CLIENT_ID` enables **tracking**. `MDBLIST_API_KEY` enables optional **ratings enrichment**. They serve different purposes; the ratings key does not replace member OAuth authorization. See [MDBList integration details](docs/mdblist-integration.md) for provider limitations and validation.
 
 Enable any combination of SIMKL, WeTrakr and MDBList. None is the primary provider; leave unused provider credentials blank.
+
+#### AniList
+
+1. Create an OAuth application in [AniList developer settings](https://anilist.co/settings/developer). Use `https://anilist.co/api/v2/oauth/pin` as the redirect URL.
+2. Set `ANILIST_CLIENT_ID` and `ANILIST_CLIENT_SECRET` in your bot's `.env` and recreate the container.
+3. In Discord, run `/bingecord link provider:AniList`, authorize on AniList, and enter the authorization code in the bot's form.
+4. Use `/bingecord source provider:AniList` for anime and independently set `/bingecord source manga:On` for manga. To keep SIMKL for watching and use AniList for manga, leave the watch source on SIMKL and turn manga on.
+
+Each selected list starts with a silent baseline and posts later progress and status changes in the server's activity channel. Turning manga on attempts to set its baseline immediately. If it is pending, run `/bingecord checknow` before updating your next chapter. AniList anime uses the Watch Activity layout and the episode numbers from each AniList entry. Manga posts a portrait-cover Reading Activity card. Admins can use `/bingecord debug` with **Reading Activity card** to preview it privately. Private list entries are skipped. AniList compares list snapshots, so multiple edits between checks are summarized by the latest state. AniList anime activity is separate from XP. AniList activity does not contribute to Watched Together. If authorization expires, link AniList again.
+
+Use the **Watch** and **Manga** buttons on member stats, weekly recaps, and community
+event cards to switch pages in the same message. Server stats show AniList totals,
+and the leaderboard has a Manga chapters category. The initial list
+snapshot contributes to lifetime totals and can unlock lifetime reading achievements
+and their one-time XP rewards. Current chapter totals use the progress reported on
+public list entries. Daily and weekly reading challenges, reading streaks, the
+weekly community reading goal, and period leaderboards use new chapter progress
+detected after the initial sync. Manga never earns per-chapter XP.
+
+The manga community rotation runs Monday to Monday in the server timezone alongside
+the watch rotation. The bot fixes each event's targets from readers active in the
+previous 14 days. With no recent reading history, it uses up to two manga-enabled
+members. The event needs two qualifying readers when its baseline has at least
+two readers. Qualifying members receive 350 XP when the team completes the goal
+and progression is enabled.
+
+| Manga event | Team goal | Individual qualification |
+|---|---|---|
+| Community Readathon | 150 chapters per active reader, minimum 200 | 30 chapters |
+| Manga Genre Expedition | 3–8 genres, each from a distinct title | Read 5 chapters of a manga in an eligible genre |
+| Manga Bingo | One line on a 3×3 board, with three distinct titles | Contribute to a board objective |
+| Manga Decades Tour | 2–5 distinct publication decades | Read 5 chapters of a manga with a known publication year |
+
+Personal challenges reset in UTC. Server recaps, community goals, and period
+leaderboards use the server timezone. Updates use the time Bingecord detects
+them because snapshots can combine several AniList edits. Relinking seeds a fresh
+baseline and preserves previously earned XP.
+
+Admins can preview daily and weekly reading goals with **Personal challenges card**
+in `/bingecord debug`. Choose **Community event card** and any manga event from
+`community_event` to preview that event using cached AniList activity.
 
 ### 5. Create the Docker setup
 
@@ -545,7 +582,7 @@ Personal daily and weekly objectives have a separate rotation and reward budget 
 
 ## Multiple providers, one progression
 
-Each member selects one source **per server**. The selected account supplies watch totals, history, watching/planned lists and recommendation exclusions. Servers can combine members using different providers.
+Each member selects one source **per server**. The selected account supplies watch totals and history. Servers can combine members using different providers.
 
 XP, levels, ranks and prestige remain shared for the Discord user. Initial imports and source-switch catch-up do not post old watches or replay progression animations. Switching itself does not remove XP.
 

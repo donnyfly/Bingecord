@@ -15,8 +15,8 @@ from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from trackerbot.core.progression import challenge_pool, challenges_for, roll_prestige, xp_for_level, xp_for_watch, watch_minutes, event_watch_minutes, WATCH_XP_RULE
 from trackerbot.core.community import challenge_for_week, watch_contributions, split_pool, minute_contributions, watchathon_goal, watchathon_rewards
-from trackerbot.core import watch_ledger
-from trackerbot.core.providers import provider_linked
+from trackerbot.core import reading, watch_ledger
+from trackerbot.core.providers import TRACKER_NAMES, provider_linked
 from trackerbot.core.tracker_mapping import identity_from_event, identity_from_play, normalized_ids
 
 DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "store.json")
@@ -470,6 +470,8 @@ def _revoke_unmet_watch_challenges(progression: dict,*,modern_only=False) -> int
         requirements = {item['id']: item for item in legacy+definitions}
         counts = daily[day] if scope == "daily" else weekly[day]
         for challenge_id, reward in list(completions.items()):
+            if challenge_id.startswith("reading_"):
+                continue
             definition = reward.get("definition") or requirements.get(challenge_id)
             if modern_only and (definition or {}).get('version')!=2:continue
             if definition and _personal_challenge_value(progression,definition,day,scope,counts,score_cache) < definition['target']:
@@ -503,6 +505,9 @@ def _default_guild_user(start_time_iso: str | None = None) -> dict:
         "simkl_linked": True,
         "wetrakr_linked": False,
         "mdblist_linked": False,
+        "anilist_linked": False,
+        "anilist_manga": False,
+        "anilist_lists": {},
         "mdblist_sync": {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []},
         "activity_provider": "simkl",
         "wetrakr_sync": {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []},
@@ -529,6 +534,7 @@ def _normalise_user(user: dict) -> None:
     user.setdefault("simkl_token", None)
     user.setdefault("wetrakr", None)
     user.setdefault("mdblist", None)
+    user.setdefault("anilist", None)
     user.setdefault("refresh_token", None)
     user.setdefault("token_expires_at", None)
     user.setdefault("simkl_username", "unknown")
@@ -595,9 +601,12 @@ def _normalise_guild_user(user: dict) -> None:
     user.setdefault("simkl_linked", True)
     user.setdefault("wetrakr_linked", False)
     user.setdefault("mdblist_linked", False)
+    user.setdefault("anilist_linked", False)
+    user.setdefault("anilist_manga", False)
+    user.setdefault("anilist_lists", {})
     user.setdefault("mdblist_sync", {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []})
     user.setdefault("activity_provider", "simkl" if user.get("simkl_linked", True) else "wetrakr")
-    if user["activity_provider"] not in {"simkl", "wetrakr", "mdblist"}:
+    if user["activity_provider"] not in TRACKER_NAMES:
         user["activity_provider"] = "simkl"
     if not isinstance(user.get("wetrakr_sync"), dict):
         user["wetrakr_sync"] = {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []}
@@ -731,12 +740,12 @@ class Storage:
             if prior and str(prior.get("account_id")) != str(account.get("id")):
                 if any((other.get("users") or {}).get(uid, {}).get(f"{provider}_linked")
                        for other in self._data["guilds"].values()):
-                    raise ValueError("Unlink the existing WeTrakr account in all servers before switching accounts")
+                    raise ValueError("Unlink the existing account in all servers before switching accounts")
             account_user=account.get("user") if isinstance(account.get("user"),dict) else {}
             account_info=account.get("info") if isinstance(account.get("info"),dict) else {}
             user[provider] = {
                 "access_token": tokens["access_token"],
-                "refresh_token": tokens["refresh_token"],
+                "refresh_token": tokens.get("refresh_token") if provider == "anilist" else tokens["refresh_token"],
                 "expires_at": tokens.get("expires_at"),
                 "account_id": account.get("id") or account_user.get("id"),
                 "username": account.get("username") or account_user.get("username") or account_info.get("username") or "WeTrakr user",
@@ -747,6 +756,8 @@ class Storage:
                 guild["users"][uid]["simkl_linked"] = False
                 guild["users"][uid]["activity_provider"] = provider
             guild["users"][uid][f"{provider}_linked"] = True
+            if provider == "anilist" and (not prior or str(prior.get("account_id")) != str(account.get("id"))):
+                guild["users"][uid]["anilist_lists"] = {}
             if not prior or str(prior.get("account_id")) != str(account.get("id")):
                 guild["users"][uid][f"{provider}_sync"] = {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []}
             self._dirty = True
@@ -775,10 +786,12 @@ class Storage:
             if not user or not user.get(provider) or not guild or uid not in guild["users"] or not guild["users"][uid].get(f"{provider}_linked"):
                 return False
             guild["users"][uid][f"{provider}_linked"] = False
+            if provider == "anilist":
+                guild["users"][uid].update(anilist_manga=False, anilist_lists={})
             if guild["users"][uid]["activity_provider"] == provider:
-                guild["users"][uid]["activity_provider"] = next((p for p in ("simkl","wetrakr","mdblist") if p != provider and provider_linked(guild["users"][uid],user,p)), "simkl")
+                guild["users"][uid]["activity_provider"] = next((p for p in TRACKER_NAMES if p != provider and provider_linked(guild["users"][uid],user,p)), "simkl")
             # Keep the guild membership while the SIMKL link still uses it.
-            if not any(provider_linked(guild["users"][uid],user,p) for p in ("simkl","wetrakr","mdblist")):
+            if not any(provider_linked(guild["users"][uid],user,p) for p in TRACKER_NAMES):
                 guild["users"].pop(uid, None)
             if not any((other.get("users") or {}).get(uid, {}).get(f"{provider}_linked") for other in self._data["guilds"].values()):
                 user[provider] = None
@@ -996,6 +1009,18 @@ class Storage:
         await self.flush()
         return True
 
+    async def activity_account_matches(self, guild_id, user_id, provider, account_id):
+        async with _lock:
+            guild = self._guild(str(guild_id))
+            member = guild["users"].get(str(user_id)) if guild else None
+            user = self._data["users"].get(str(user_id))
+            if not member or not user or member.get("activity_provider") != provider:
+                return False
+            if not provider_linked(member, user, provider):
+                return False
+            current = (user.get("simkl_account_id") or f"unknown:{user_id}") if provider == "simkl" else user[provider].get("account_id")
+            return str(current) == str(account_id)
+
     async def save_activity_message(self, record):
         cutoff=datetime.now(timezone.utc)-timedelta(days=7)
         async with _lock:
@@ -1047,7 +1072,7 @@ class Storage:
 
     async def get_provider_targets(self, provider: str, guild_id: str | None = None,
                                    active_only: bool = False) -> list[dict]:
-        if provider not in {"simkl", "wetrakr", "mdblist"}:
+        if provider not in TRACKER_NAMES:
             raise ValueError(f"Unknown tracking provider: {provider}")
         async with _lock:
             guild_ids = [str(guild_id)] if guild_id is not None else list(self._data["guilds"].keys())
@@ -1075,15 +1100,25 @@ class Storage:
             return targets
 
     async def set_activity_provider(self, guild_id: str | int, discord_user_id: str,
-                                    provider: str) -> bool:
-        if provider not in {"simkl", "wetrakr", "mdblist"}:
+                                    provider: str | None, *, manga: bool | None = None) -> bool:
+        if provider is not None and provider not in TRACKER_NAMES:
             raise ValueError(f"Unknown tracking provider: {provider}")
         async with _lock:
             guild_user = self._guild_user(str(guild_id), str(discord_user_id))
             user = self._user(str(discord_user_id))
-            if not guild_user or not user or not provider_linked(guild_user, user, provider):
+            if not guild_user or not user:
                 return False
-            if guild_user.get("activity_provider") != provider:
+            if provider is not None and not provider_linked(guild_user, user, provider):
+                return False
+            if manga is not None and not provider_linked(guild_user, user, "anilist"):
+                return False
+            if manga is not None and guild_user["anilist_manga"] != manga:
+                guild_user["anilist_manga"] = manga
+                guild_user["anilist_lists"].pop("MANGA", None)
+                self._dirty = True
+            if provider is not None and guild_user.get("activity_provider") != provider:
+                if "anilist" in (guild_user.get("activity_provider"), provider):
+                    guild_user["anilist_lists"].pop("ANIME", None)
                 guild_user["activity_provider"] = provider
                 if provider in {"wetrakr","mdblist"}:
                     guild_user[f"{provider}_sync"] = {"seeded": False, "checkpoint": None,
@@ -1094,6 +1129,206 @@ class Storage:
                 self._dirty = True
         await self.flush()
         return True
+
+    async def set_anilist_manga(self, guild_id, user_id, enabled: bool) -> bool:
+        return await self.set_activity_provider(guild_id,user_id,None,manga=enabled)
+
+    async def anilist_snapshot(self, guild_id, user_id, token, media_type, *, replace=None, seed=False):
+        """Validate the active connection before reading or advancing a baseline."""
+        async with _lock:
+            member = self._guild_user(str(guild_id), str(user_id))
+            user = self._user(str(user_id))
+            if not member or not user or not provider_linked(member, user, "anilist"):
+                return False, None
+            selected = member["anilist_manga"] if media_type == "MANGA" else member["activity_provider"] == "anilist"
+            if not selected or user["anilist"]["access_token"] != token:
+                return False, None
+            if replace is not None and (not seed or media_type not in member["anilist_lists"]):
+                member["anilist_lists"][media_type] = copy.deepcopy(replace)
+                self._dirty = True
+            snapshot = copy.deepcopy(member["anilist_lists"].get(media_type))
+        if replace is not None:
+            await self.flush()
+        return True, snapshot
+
+    async def record_reading(self, guild_id, user_id, token, snapshot, observed_at, *, catalogue=None):
+        """Commit reading independently of Discord card delivery."""
+        gid, uid = str(guild_id), str(user_id)
+        async with _lock:
+            guild = self._guild(gid)
+            member = self._guild_user(gid, uid)
+            user = self._user(uid)
+            if not member or not user or not member["anilist_manga"] or not provider_linked(member, user, "anilist"):
+                return False
+            linked = user["anilist"]
+            if linked["access_token"] != token:
+                return False
+            account = str(linked["account_id"])
+            record = guild.setdefault("reading", {}).setdefault(uid, {})
+            stamp = observed_at.isoformat()
+            if record.get("observed_at", "") >= stamp:
+                return False
+            delivery_baseline = member["anilist_lists"].get("MANGA")
+            seed = delivery_baseline is None
+            previous = record.get("snapshot", delivery_baseline or {}) if record.get("account", account) == account else {}
+            if record.get("account", account) != account:
+                seed = True
+            changed = seed or record.get("snapshot") != snapshot
+            events = []
+            if changed:
+                events = list(reading.observe(snapshot, previous, record.setdefault("ceilings", {}), account, observed_at, seed=seed))
+                record.update(account=account, snapshot=copy.deepcopy(snapshot))
+            if catalogue is not None:
+                saved = record.setdefault("catalogue", {})
+                for media_id, state in snapshot.items():
+                    if state[4] and media_id in saved:
+                        del saved[media_id]
+                        changed = True
+                if any(saved.get(key) != value for key, value in catalogue.items()):
+                    saved.update(copy.deepcopy(catalogue))
+                    changed = True
+            record["observed_at"] = stamp
+            if events:
+                record.setdefault("events", []).extend(events)
+            features = guild["features"]
+            progression = user["progression"]
+            global_events = progression.setdefault("reading_events", [])
+            credited = progression.setdefault("reading_ceilings", {})
+            for event in events:
+                if not event["chapters"]:
+                    continue
+                key = event["pass_key"]
+                start = max(event["first"], credited.get(key, 0) + 1)
+                if start <= event["last"]:
+                    global_events.append({**event, "first": start, "chapters": event["last"] - start + 1})
+                    credited[key] = event["last"]
+            if any(event["chapters"] for event in events) and features["progression"] and features["challenges"]:
+                self._complete_reading_challenges(progression, observed_at)
+            if features["achievements"] and features["progression"]:
+                metrics = reading.lifetime(snapshot)
+                metrics["streak"] = reading.longest_streak(record.get("events", []), _resolve_timezone(guild.get("timezone")))
+                changed |= self._unlock_reading_achievements(member, progression, metrics, stamp)
+            self._dirty |= changed
+        await self.flush()
+        return True
+
+    @staticmethod
+    def _unlock_reading_achievements(member, progression, metrics, stamp):
+        unlocked = member["achievements"]
+        awarded = progression["achievement_xp_awarded"]
+        changed = False
+        for key, (name, _, kind, threshold, amount) in reading.READING_ACHIEVEMENTS.items():
+            if metrics[kind] < threshold:
+                continue
+            if key not in unlocked:
+                unlocked[key] = {"unlocked_at": stamp}
+                changed = True
+            if key in awarded:
+                continue
+            awarded[key] = stamp
+            changed = True
+            progression["xp"] += amount
+            progression["lifetime_xp"] += amount
+            progression["xp_events"].append({
+                "at": stamp, "amount": amount, "media_type": "achievement", "title": name,
+                "event_key": f"achievement:{key}", "achievement_id": key,
+            })
+        if changed:
+            roll_prestige(progression)
+        return changed
+
+    @staticmethod
+    def _complete_reading_challenges(progression, now):
+        from .personal_challenges import reading_periods
+        completions = progression["challenge_completions"]
+        for scope, start, end in reading_periods(now):
+            period = f"{scope}:{start.date().isoformat()}"
+            events = list(reading.in_period(progression["reading_events"], start, end))
+            for challenge in reading.challenges(scope):
+                key = challenge["id"]
+                if key in completions.get(period, {}) or reading.challenge_value(events, challenge["kind"]) < challenge["target"]:
+                    continue
+                xp = challenge["xp"]
+                completions.setdefault(period, {})[key] = {
+                    "completed_at": now.isoformat(), "xp": xp, "definition": challenge,
+                }
+                progression["xp"] += xp
+                progression["lifetime_xp"] += xp
+                progression["pending_challenge_notifications"].append({
+                    "key": f"{period}:{key}", "name": challenge["name"], "period": scope.title(), "xp": xp,
+                })
+        roll_prestige(progression)
+
+    async def get_reading_statistics(self, guild_id, user_id):
+        async with _lock:
+            guild = self._guild(str(guild_id)) or {}
+            member = self._guild_user(str(guild_id), str(user_id))
+            if not member or not member["anilist_manga"]:
+                return None
+            records = guild.get("reading", {})
+            record = records.get(str(user_id), {})
+            baseline = member["anilist_lists"].get("MANGA")
+            if baseline is None:
+                return None
+            snapshot = record.get("snapshot", baseline)
+            stats = reading.lifetime(snapshot)
+            stats["streak"] = reading.longest_streak(record.get("events", []), _resolve_timezone(guild.get("timezone")))
+            return stats
+
+    async def get_guild_reading_summary(self, guild_id, start, end, *, with_readers=False):
+        async with _lock:
+            guild = self._guild(str(guild_id)) or {}
+            records = guild.get("reading", {})
+            weekly = {uid: list(reading.in_period(record.get("events", []), start, end)) for uid, record in records.items()}
+            result = reading.summary(event for events in weekly.values() for event in events)
+            if with_readers:
+                result["readers"] = {uid: count for uid, events in weekly.items() if (count := sum(e["chapters"] for e in events))}
+            return result
+
+    async def get_reading_community(self, guild_id, week, start, end, now):
+        """Settle reading goals separately from the watch event."""
+        from .manga_events import FIRST_WEEK, new_goal, score
+        async with _lock:
+            guild = self._guild(str(guild_id))
+            if not guild:
+                return None
+            records = guild.get("reading", {})
+            enabled = {uid for uid, member in guild["users"].items() if member.get("anilist_manga")}
+            goals = guild.setdefault("reading_community", {})
+            if week not in goals and enabled:
+                goals[week] = new_goal(week, start, end, records, enabled) if week >= FIRST_WEEK.isoformat() else {
+                    "start": start.isoformat(), "end": end.isoformat(),
+                }
+                self._dirty = True
+            for key, goal in goals.items():
+                if goal.get("settled") or now < datetime.fromisoformat(goal["end"]):
+                    continue
+                result = score(goal, records)
+                if result["reached"] and guild["features"]["progression"]:
+                    for uid in result["qualified"]:
+                        user = self._user(uid)
+                        if not user:
+                            continue
+                        progression = user["progression"]
+                        reward_key = f"{guild_id}:reading:{key}"
+                        if reward_key in progression["community_rewards"]:
+                            continue
+                        progression["community_rewards"][reward_key] = reading.COMMUNITY_XP
+                        progression["xp"] += reading.COMMUNITY_XP
+                        progression["lifetime_xp"] += reading.COMMUNITY_XP
+                        roll_prestige(progression)
+                goal["settled"] = True
+                self._dirty = True
+            goal = goals.get(week)
+            result = self._reading_community_state(guild, goal) if goal else None
+        await self.flush()
+        return result
+
+    def _reading_community_state(self, guild, goal):
+        from .manga_events import score
+        return {**score(goal, guild.get("reading", {})),
+                "timezone": str(_resolve_timezone(guild.get("timezone"))),
+                "xp": reading.COMMUNITY_XP if guild["features"]["progression"] else 0}
 
     async def get_activity_provider(self, guild_id: str | int, discord_user_id: str) -> str | None:
         async with _lock:
@@ -1536,7 +1771,7 @@ class Storage:
                 return False
             prior = guild["users"][str(discord_user_id)]
             replacement = _default_guild_user(start_time_iso)
-            for key in ("simkl_linked", "wetrakr_linked", "mdblist_linked", "activity_provider"):
+            for key in ("simkl_linked", "wetrakr_linked", "mdblist_linked", "anilist_linked", "anilist_manga", "activity_provider"):
                 replacement[key] = copy.deepcopy(prior.get(key, replacement[key]))
             guild["users"][str(discord_user_id)] = replacement
             self._dirty = True
@@ -1706,7 +1941,7 @@ class Storage:
                     for gid,unlocks in guild_updates.items():
                         member=replacement['guilds'][gid]['users'][user_id]
                         prior=member.get('achievements') or {}
-                        member['achievements']={aid:copy.deepcopy(prior.get(aid) or {'unlocked_at':settings['rebuilt_at']}) for aid in unlocks}
+                        member['achievements']={aid:copy.deepcopy(prior.get(aid) or {'unlocked_at':settings['rebuilt_at']}) for aid in set(unlocks) | (prior.keys() & reading.READING_ACHIEVEMENTS.keys())}
                         stats=member.get('statistics') or _default_statistics()
                         current=stats.get('watch_events')
                         if isinstance(current,dict):
@@ -2078,12 +2313,15 @@ class Storage:
             if not record or record.get('expires_at','')<datetime.now(timezone.utc).isoformat():return None
             return copy.deepcopy(record)
 
-    async def get_challenge_state(self, discord_user_id: str) -> dict:
+    async def get_challenge_state(self, discord_user_id: str, *, reading_enabled=False) -> dict:
         async with _lock:
             user = self._user(discord_user_id)
             if not user:
                 return {}
-            return {key:copy.deepcopy(user['progression'].get(key,[] if key in {'xp_events','challenge_finishes'} else {})) for key in ('xp_events','challenge_completions','challenge_sets','challenge_metadata','challenge_finishes','occurrence_ledger')}
+            result = {key:copy.deepcopy(user['progression'].get(key,[] if key in {'xp_events','challenge_finishes'} else {})) for key in ('xp_events','challenge_completions','challenge_sets','challenge_metadata','challenge_finishes','occurrence_ledger')}
+            if reading_enabled:
+                result["reading_events"] = copy.deepcopy(user["progression"].get("reading_events", []))
+            return result
 
     async def get_pending_challenge_notifications(self, discord_user_id: str) -> list[dict]:
         async with _lock:
@@ -2452,6 +2690,7 @@ class Storage:
                 personal = {
                     "wetrakr": copy.deepcopy(existing.get("wetrakr")),
                     "mdblist": copy.deepcopy(existing.get("mdblist")),
+                    "anilist": copy.deepcopy(existing.get("anilist")),
                     "embed_preferences": copy.deepcopy(existing.get("embed_preferences", DEFAULT_EMBED_PREFERENCES)),
                     "embed_preferences_custom": existing.get("embed_preferences_custom", False),
                     "progression": copy.deepcopy(existing.get("progression", {"xp": 0, "lifetime_xp": 0, "prestige": 0, "watch_xp_keys": {}, "xp_events": [], "challenge_completions": {}, "achievement_xp_awarded": {}})),
@@ -2470,7 +2709,7 @@ class Storage:
                 **personal,
             }
             prior_guild_user=self._data["guilds"][str(guild_id)]["users"].get(discord_user_id)
-            if prior_guild_user and (prior_guild_user.get("wetrakr_linked") or prior_guild_user.get("mdblist_linked")):
+            if prior_guild_user and any(prior_guild_user.get(f"{provider}_linked") for provider in TRACKER_NAMES[1:]):
                 prior_guild_user["simkl_linked"] = True
             else:
                 self._data["guilds"][str(guild_id)]["users"][discord_user_id] = _default_guild_user(start_time_iso)
@@ -2493,7 +2732,10 @@ class Storage:
             if guild_user.get("activity_provider") == "simkl" and guild_user.get("wetrakr_linked"):
                 guild_user["activity_provider"] = "wetrakr"
                 guild_user["wetrakr_sync"] = {"seeded": False, "checkpoint": None, "last_activity": None, "recent_entry_ids": []}
-            if not guild_user.get("wetrakr_linked") and not guild_user.get("mdblist_linked"):
+            if guild_user.get("activity_provider") == "simkl" and guild_user.get("anilist_linked"):
+                guild_user["activity_provider"] = "anilist"
+                guild_user["anilist_lists"].pop("ANIME", None)
+            if not any(guild_user.get(f"{provider}_linked") for provider in TRACKER_NAMES[1:]):
                 del guild["users"][discord_user_id]
 
             # Authentication is global and can be reused in other servers.
@@ -2542,7 +2784,13 @@ class Storage:
                 global_user = self._user(uid) or {}
                 provider=user.get("activity_provider","simkl")
                 stats=_statistics_for_provider(user,provider,guild.get("timezone"))
+                baseline = user["anilist_lists"].get("MANGA") if user["anilist_manga"] else None
+                manga = {}
+                if baseline is not None:
+                    record = guild.get("reading", {}).get(uid, {})
+                    manga["reading"] = reading.lifetime(record.get("snapshot", baseline))
                 results.append({
+                    **manga,
                     "discord_user_id": uid,
                     "simkl_username": ((global_user.get(provider) or {}).get("username")
                                        if provider!="simkl" else
@@ -2569,6 +2817,18 @@ class Storage:
                 stats=_statistics_for_provider(user,provider,guild.get("timezone"))
                 from .server_cards import board_facts
                 facts=board_facts(stats,str(_resolve_timezone(guild.get('timezone'))),datetime.now(_resolve_timezone(guild.get('timezone'))).date(),p)
+                zone = _resolve_timezone(guild.get("timezone"))
+                today = datetime.now(zone).date()
+                current = user["anilist_lists"].get("MANGA") if user["anilist_manga"] else None
+                if current is not None:
+                    record = (guild.get("reading") or {}).get(uid, {})
+                    facts["periods"]["all"]["manga"] = reading.lifetime(record.get("snapshot", current))["chapters"]
+                    for period, first_day in (("week", today - timedelta(days=today.weekday())), ("month", today - timedelta(days=29))):
+                        start = datetime.combine(first_day, datetime.min.time(), tzinfo=zone)
+                        end = datetime.combine(today + timedelta(days=1), datetime.min.time(), tzinfo=zone)
+                        facts["periods"][period]["manga"] = sum(
+                            event["chapters"] for event in reading.in_period(record.get("events", []), start, end)
+                        )
                 rows.append({
                     **facts,
                     "discord_user_id":uid,
@@ -2655,6 +2915,16 @@ class Storage:
         from .community_events import event_goal,credited_watches,event_state,ROTATION
         async with _lock:
             guild=self._guild(str(guild_id))
+            from .manga_events import ROTATION as MANGA_ROTATION, new_goal
+            if kind == "reading" or kind in MANGA_ROTATION:
+                guild = guild or _default_guild()
+                saved = guild.get("reading_community", {}).get(week)
+                enabled = {uid for uid, member in guild["users"].items() if member.get("anilist_manga")}
+                goal = saved if kind == "reading" and saved else new_goal(
+                    week, start, end, guild.get("reading", {}), enabled, None if kind == "reading" else kind,
+                )
+                return {"kind": "reading", "key": week, "preview": True,
+                        "reading": self._reading_community_state(guild, goal)}
             if not guild:return None
             members=guild.get('users') or {};providers={u:m.get('activity_provider','simkl') for u,m in members.items()}
             recent=credited_watches(self._data['users'],members,start-timedelta(days=14),start,providers)

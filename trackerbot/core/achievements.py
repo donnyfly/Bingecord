@@ -4,6 +4,8 @@ Achievements are intentionally challenging so higher tiers feel meaningful
 rather than being awarded for routine activity.
 """
 
+from .reading import READING_ACHIEVEMENTS
+
 ACHIEVEMENTS = {
     "first_watch": {
         "name": "First Watch",
@@ -176,6 +178,11 @@ for key, name, emoji, description, category, threshold, xp in (
 ):
     ACHIEVEMENTS[key] = {"name": name, "emoji": emoji, "description": description,
                          "category": category, "threshold": threshold, "xp": xp}
+
+
+for key, (name, description, kind, threshold, xp) in READING_ACHIEVEMENTS.items():
+    ACHIEVEMENTS[key] = {"name": name, "emoji": "📖", "description": description,
+                         "category": "reading_" + kind, "threshold": threshold, "xp": xp}
 
 
 def get_achievement(achievement_id):

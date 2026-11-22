@@ -54,4 +54,4 @@ async def details_view(embed,*,owner=None,guild=None):
 async def standalone_card(embed,data,filename,*,owner=None,guild=None,transient=False):
     """Image-only delivery with the complete accessible text behind its button."""
     view=MemoryDetails(embed.copy(),owner) if transient else await details_view(embed,owner=owner,guild=guild)
-    return {'embed':None,'file':discord.File(data,filename=filename,description=str(embed.title or 'Bingecord card')[:1024]),'view':view}
+    return {'embed':None,'file':discord.File(data,filename=filename),'view':view}

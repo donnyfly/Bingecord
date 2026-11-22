@@ -90,11 +90,14 @@ def test_wetrakr_recommendations_exclude_planned_titles(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
-def test_registry_dispatches_both_pollers(monkeypatch):
+def test_registry_dispatches_tracker_pollers(monkeypatch):
     async def run():
         monkeypatch.setattr(bot, 'poll_all', AsyncMock(return_value=2))
         monkeypatch.setattr(bot, 'poll_wetrakr_all', AsyncMock(return_value=3))
-        assert await bot.poll_providers(1, manual=True) == {'simkl': 2, 'wetrakr': 3, 'mdblist':0}
+        anilist = AsyncMock(return_value=4)
+        monkeypatch.setattr(bot.provider_registry.get('anilist'), 'poll', anilist)
+        assert await bot.poll_providers(1, manual=True) == {'simkl': 2, 'wetrakr': 3, 'mdblist':0, 'anilist':4}
+        anilist.assert_awaited_once_with(1, manual=True)
         bot.poll_all.assert_awaited_once_with(1, force_reconcile=True, ignore_failure_threshold=True)
         bot.poll_wetrakr_all.assert_awaited_once_with(1)
     asyncio.run(run())

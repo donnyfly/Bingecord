@@ -42,6 +42,63 @@ def test_artwork_hosts_proxy_and_limits():
         assert image_url(bad) is None
 
 
+@pytest.mark.parametrize('use_fallback,has_banner',[(False,False),(False,True),(True,False)])
+def test_manga_card_uses_portrait_cover_and_anilist_link(monkeypatch,use_fallback,has_banner):
+    from trackerbot.presentation import activity_cards
+    from trackerbot.presentation.card_details import configure
+
+    async def run():
+        configure(lambda:None)
+        cover_url='https://s4.anilist.co/file/cover.jpg'
+        banner_url='https://s4.anilist.co/file/banner.jpg'
+        embed=discord.Embed(title='Manga Title',url='https://anilist.co/manga/42',
+                            description='Read Chapters 12–16 of **Manga Title**\n🆕 Started reading this manga.')
+        embed.set_image(url=cover_url)
+        part={'source':'anilist','user':'1','meta':{'media_type':'manga','ids':{'mal':13},'banner_url':banner_url}}
+        model=card_model(embed,part)
+        assert eligible([part]) and not eligible([part,part])
+        assert model['reading'] and model['action']=='Read Chapters 12–16'
+        assert model['notes']==['NEW · Started reading this manga.']
+        assert image_url(cover_url)==cover_url
+        art=Image.new('RGB',(200,300),(220,30,30))
+        banner=Image.new('RGB',(800,300),(30,80,220))
+        assets={}
+        if not use_fallback:
+            assets[cover_url]=art
+        if has_banner:
+            assets[banner_url]=banner
+        monkeypatch.setattr(activity_cards,'_download',AsyncMock(side_effect=lambda _,url:assets.get(url)))
+        fallback=AsyncMock(return_value=art)
+        monkeypatch.setattr(activity_cards,'_mal_manga_cover',fallback)
+        payload=await activity_card_kwargs(embed,part,preview=use_fallback)
+        result=Image.open(payload['file'].fp)
+        assert result.size==(1080,640)
+        assert result.getpixel((200,320))==(220,30,30)
+        red,_,blue=result.getpixel((1040,220))
+        assert (blue>red) if has_banner else (red>blue)
+        assert payload['view'].children[-1].label=='View on AniList'
+        assert payload['view'].children[-1].url==embed.url
+        if use_fallback:
+            fallback.assert_awaited_once()
+            assert fallback.await_args.args[1]==13
+        else:
+            fallback.assert_not_awaited()
+
+    asyncio.run(run())
+
+
+def test_manga_cover_metadata_uses_only_myanimelist_manga_images():
+    from trackerbot.presentation.activity_cards import MangaCoverMetadata
+
+    parser=MangaCoverMetadata()
+    parser.feed('<meta property="og:image" content="https://example.org/images/manga/test.jpg">')
+    parser.feed('<meta property="og:image" content="https://cdn.myanimelist.net/images/anime/test.jpg">')
+    assert parser.cover_url is None
+    url='https://cdn.myanimelist.net/images/manga/2/253146.jpg'
+    parser.feed(f'<meta content="{url}" property="og:image">')
+    assert parser.cover_url==url
+
+
 def test_episode_and_film_render_shapes_missing_art_and_long_names():
     for movie in (False,True):
         embed,part=example(movie);model=card_model(embed,part,preview=True)
@@ -149,6 +206,17 @@ def test_debug_activity_previews_are_private_without_sync_or_preferences_changes
             assert i.followup.send.await_args.kwargs['ephemeral']
             assert render.await_args.kwargs=={'preview':True,'sample':True}
             assert render.await_args.args[1]['source']=='wetrakr'
+        await bot.simkl_debug.callback(i,app_commands.Choice(name='Reading Activity card',value='activity_reading'))
+        assert i.followup.send.await_args.kwargs['ephemeral']
+        assert render.await_args.kwargs=={'preview':True,'sample':True}
+        assert render.await_args.args[1]['source']=='anilist'
+        assert render.await_args.args[1]['meta']['media_type']=='manga'
+        saved_part=render.await_args.args[1]
+        saved=discord.Embed(title='Recent Manga',description='Read Chapter 3 of **Recent Manga**')
+        bot.storage.get_activity_messages.return_value=[{'parts':[saved_part],'rendered':saved.to_dict()}]
+        await bot.simkl_debug.callback(i,app_commands.Choice(name='Reading Activity card',value='activity_reading'))
+        assert render.await_args.kwargs=={'preview':True,'sample':False}
+        assert render.await_args.args[0].title=='Recent Manga'
         writer.assert_not_awaited();poll.assert_not_awaited()
     asyncio.run(run())
 
@@ -457,3 +525,50 @@ def test_together_member_tiles_stay_within_grid_and_footer(count):
         assert 0<=x and x+486<=984
         assert layout['members_top']+row*124+112<layout['height']-32
     assert Image.open(render_activity_png(model)).height==layout['height']
+
+
+@pytest.mark.parametrize("still", ["available", "missing", "broken"])
+def test_episode_card_uses_series_backdrop_and_logo_independently(monkeypatch, still):
+    from trackerbot.presentation import activity_cards as cards
+
+    async def run():
+        cards._cards.clear()
+        embed, part = example()
+        still_url = "https://image.tmdb.org/still.jpg"
+        backdrop_url = "https://image.tmdb.org/series.jpg"
+        logo_url = "https://image.tmdb.org/title.png"
+        if still != "missing":
+            embed.set_image(url=still_url)
+        before = embed.to_dict()
+        images = {backdrop_url: "series backdrop", logo_url: "TV logo"}
+        if still == "available":
+            images[still_url] = "episode still"
+        monkeypatch.setattr(cards, "_download", AsyncMock(side_effect=lambda _, url: images.get(url)))
+        render = Mock(return_value=BytesIO(b"card"))
+        monkeypatch.setattr(cards, "render_activity_png", render)
+        tmdb = SimpleNamespace(get_tv_backdrop=AsyncMock(return_value=backdrop_url),
+                               get_tv_logo=AsyncMock(return_value=logo_url))
+        await activity_card_kwargs(embed, part, tmdb_client=tmdb)
+        assert render.call_args.args[1] == {
+            "image": "episode still" if still == "available" else "series backdrop",
+            "logo": "TV logo",
+        }
+        if still == "available":
+            tmdb.get_tv_backdrop.assert_not_awaited()
+        else:
+            tmdb.get_tv_backdrop.assert_awaited_once_with("1")
+        assert embed.to_dict() == before
+        cards._cards.clear()
+
+    asyncio.run(run())
+
+
+def test_visual_embed_keeps_show_logo_when_episode_still_is_missing():
+    from test_notification_preview import bot
+
+    logo = "https://image.tmdb.org/title.png"
+    embed = bot.build_embed("shows", "Watched S1E03", datetime.now(timezone.utc),
+                            "Viewer", None, None, None, logo=logo,
+                            preferences={"style": "card", "artwork": "poster"})
+    assert not embed.image
+    assert embed.thumbnail.url == logo

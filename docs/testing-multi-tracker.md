@@ -53,7 +53,6 @@ Use the experimental image and your existing persisted data. Do not reset shared
 | Switch sources without changing either account | Earned XP stays intact; historical activity and reward animations are silent |
 | Recheck unchanged history twice | XP, matches, challenge rewards and watch totals remain stable |
 | WeTrakr anime movie, TV episode, anime episode, S1E1 and an S1E1-starting range | Correct classification, title/profile links and started-series text; IMDb episode ratings when available; no MAL score on watched episodes |
-| `/bingecord watching`, `/bingecord random`, `/bingecord recommend` on each source | Account-specific lists/history and source labels; anime films appear under Anime; planned/dropped/paused titles excluded from fresh recommendations |
 | `/bingecord stats`, achievements, challenges, leaderboard, server stats, weekly recap, community | Selected-source watch counts, one shared progression; mixed-source server counts each member once |
 | `/bingecord debug` level, rank, prestige and achievement previews | Private rendered previews; no XP mutation |
 
@@ -89,19 +88,19 @@ Configure `MDBLIST_CLIENT_ID` (and client secret if required by your registered 
 3. Mark a new TV S01E01, then a consecutive range beginning at S01E01 on another series. Check title/source links, episode IMDb scores when available, no episode MAL score, and the Started watching line. Check anime movie classification separately.
 4. Mark that same watch in SIMKL or WeTrakr after switching to that provider. Check XP does not increase for the matched occurrence. Switch back; history catch-up stays quiet.
 5. Remove the watch on one provider: XP remains while another observation supports it. After both sources have synced their removals, the final support removal reverses XP. A genuine later rewatch remains a separate occurrence.
-6. Check `/bingecord watching`, `/bingecord random`, `/bingecord recommend`, stats, leaderboard and reward cards use MDBList data and shared progression. Verify a new eligible watch can trigger achievement/challenge/prestige notifications.
+6. Check stats, leaderboard and reward cards use MDBList data and shared progression. Verify a new eligible watch can trigger achievement/challenge/prestige notifications.
 7. Restart the bot and check again: no replay or duplicate XP. Check `/bingecord status` reports authorization/quota failures without exposing tokens. Test paused notices and Completed versus Caught up; they are now implemented.
 
 Optional read-only audit: `python3 -m trackerbot.validation.live --help`, then use its `--provider mdblist` option with your persisted store and account selection. The audit does not refresh tokens or mutate XP. Share only redacted report/log output when a live payload fails; never share the store or credentials.
 
 ## MDBList command audit (2026-10-05)
 
-All 23 registered `/bingecord …` commands have a selected-source or shared-data path; none requires an active SIMKL account for an MDBList member. This is a code/fixture audit, not proof of every live endpoint or account configuration.
+All registered `/bingecord …` commands have a selected-source or shared-data path; none requires an active SIMKL account for an MDBList member. This is a code/fixture audit, not proof of every live endpoint or account configuration.
 
 | Commands | MDBList path | Validation |
 | --- | --- | --- |
 | link, unlink, source, status, checknow | MDBList OAuth, account-scoped storage and selected-source snapshot poller | Adapter/storage tests; live linking and activity reported successful |
-| watching, random, recommend | Selected adapter's up-next, watchlist and history/exclusions; MDBList destination IDs | Command fixtures for watching/random; adapter fixtures for recommendation inputs; real discovery payloads still need live checks |
+| Discovery callbacks (slash commands on hold) | Selected adapter's up-next, watchlist and history/exclusions; MDBList destination IDs | Command fixtures for watching/random; adapter fixtures for recommendation inputs; real discovery payloads still need live checks |
 | stats, leaderboard, server-stats, weekly-recap | Selected-source watch projections, shared XP and mixed-server aggregation | Storage/projection and summary tests; live MDBList summary cards still need checking |
 | achievements, challenges, community | Shared ledger/reward events and server progression | Reward/storage tests; challenge command uses neutral branding |
 | mapping, user-reset | Shared occurrence audit; provider-aware server reset and quiet reimport | Command audit and reset/restart/duplicate/removal fixtures |
@@ -117,9 +116,8 @@ Use two members in the same posting channel and enable Watched Together through 
 
 1. Mark the same new movie or exactly matching episode range within 30 minutes, then run one `/bingecord checknow`. Try WeTrakr + WeTrakr, MDBList + MDBList, and one mixed-provider pair. Expect one Watched Together embed with both members and provider labels; each member's XP is independent. Different seasons and different episode ranges must stay separate.
 2. Mark a paused session in MDBList. Expect one poster-only Paused notice, correct source/profile links, and no watch XP. Mark the last available episode of an ongoing series: expect Caught up, not Completed. Complete an ended series: expect Completed. Series status notices may include MAL; episode watch notices must not.
-3. Check `/bingecord watching`, `/bingecord random` and `/bingecord recommend` with anime and anime movies. Anime up-next labels must use shared seasonal numbering while metadata lookups retain source coordinates.
-4. Verify new eligible activity triggers enabled achievement/challenge/prestige notifications. Delete a credited watch and sync each supporting source; only the final support removal reverses watch XP. Source switches and silent imports must not replay reward animations.
-5. Check logs after a normal single-title watch: journal + item history should replace full scans. A truncated item history or an expired journal must use a safe full fallback. Never share OAuth tokens or the persisted store when reporting results.
+3. Verify new eligible activity triggers enabled achievement/challenge/prestige notifications. Delete a credited watch and sync each supporting source; only the final support removal reverses watch XP. Source switches and silent imports must not replay reward animations.
+4. Check logs after a normal single-title watch: journal + item history should replace full scans. A truncated item history or an expired journal must use a safe full fallback. Never share OAuth tokens or the persisted store when reporting results.
 
 Automated tests cannot validate a live OAuth account or Discord channel here; record these acceptance results before calling the integration full parity.
 

@@ -5,7 +5,7 @@ from .card_theme import background,panel,cover,fit,short,png
 from .typography import text as paint,label,font
 
 WHITE=(241,243,248);MUTED=(161,166,180);LINE=(48,51,62)
-KEYS={'Total watches':'total','Episodes':'episodes','Movies':'movies','Anime':'anime','Unique titles':'titles',
+KEYS={'Total watches':'total','Episodes':'episodes','Movies':'movies','Anime':'anime','Manga chapters':'manga','Unique titles':'titles',
       'Current streak':'streak','XP progression':'progression_xp','Level':'level','Prestige':'prestige'}
 
 
@@ -73,7 +73,8 @@ def render_board(guild_name,category,rows,*,rank_offset=0,avatars=None,show_prog
         if value>0:draw.rounded_rectangle((224,y+77,224+max(4,int(426*value/maximum)),y+82),2,fill=accent)
         poster=(artwork.get(uid) or {}).get('poster')
         if poster:cover(image,poster,(938,y+7,994,y+91),8,contain=True)
-    text(56,height-40,'Selected-source watch history · Shared global progression' if show_progression else 'Members use their selected source',13,MUTED,width=968)
+    footer='AniList manga chapter progress' if key=='manga' else ('Selected-source watch history · Shared global progression' if show_progression else 'Members use their selected source')
+    text(56,height-40,footer,13,MUTED,width=968)
     return png(image)
 
 
@@ -125,5 +126,5 @@ def render_recap(guild_name,subtitle,metrics,leaders,*,icon=None,story=None,avat
             panel(image,(x,1132,x+144,1348),12)
             text(x+12,1224,entry['title'],15,MUTED,width=120)
     if not entries:text(56,1190,'No dated title records are available for this period yet.',20,MUTED)
-    text(56,1381,'TV and anime are shown separately · Each member uses their selected tracker',13,MUTED,width=968)
+    text(56,1381,'Each member uses their selected tracker',13,MUTED,width=968)
     return png(image)

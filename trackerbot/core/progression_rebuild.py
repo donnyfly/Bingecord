@@ -7,6 +7,7 @@ from datetime import datetime,timezone
 from zoneinfo import ZoneInfo
 
 from .achievements import ACHIEVEMENTS
+from .reading import READING_ACHIEVEMENTS
 from .historical_repair import fingerprint
 from .import_work import bounded_map
 from .progression import WATCH_XP_RULE,watch_minutes,xp_for_watch,xp_for_level,level_progress
@@ -177,6 +178,15 @@ def rebuild_from_history(progression,entries,guild_timezones,rebuilt_at,*,provid
         if secondary==provider:continue
         for play in data.get(secondary+'_plays',{}).values():play['xp_key']=None
     _complete_watch_challenges(data,list(data['xp_events']),notify=False)
+    for period, rewards in progression.get("challenge_completions", {}).items():
+        reading_rewards = {key: copy.deepcopy(reward) for key, reward in rewards.items() if key.startswith("reading_")}
+        if reading_rewards:
+            data["challenge_completions"].setdefault(period, {}).update(reading_rewards)
+            data["lifetime_xp"] += sum(reward.get("xp", 0) for reward in reading_rewards.values())
+    data["pending_challenge_notifications"] = [
+        copy.deepcopy(item) for item in progression.get("pending_challenge_notifications", [])
+        if item.get("key", "").rsplit(":", 1)[-1].startswith("reading_")
+    ]
     challenge_xp=data['lifetime_xp']-watch_xp
     guild_unlocks={};eligible=set()
     for gid,tz in guild_timezones.items():
@@ -189,6 +199,12 @@ def rebuild_from_history(progression,entries,guild_timezones,rebuilt_at,*,provid
                                  'media_type':'achievement','title':definition['name'],'amount':amount})
         data['achievement_xp_awarded'][aid]=rebuilt_at
         data['lifetime_xp']+=amount
+    for event in progression.get("xp_events", []):
+        key = event.get("achievement_id")
+        if key in READING_ACHIEVEMENTS and key not in data["achievement_xp_awarded"]:
+            data["xp_events"].append(copy.deepcopy(event))
+            data["achievement_xp_awarded"][key] = progression.get("achievement_xp_awarded", {}).get(key, event["at"])
+            data["lifetime_xp"] += int(event["amount"])
     achievement_xp=data['lifetime_xp']-watch_xp-challenge_xp
     community=sum(max(0,int(value)) for value in data.get('community_rewards',{}).values())
     data['lifetime_xp']+=community

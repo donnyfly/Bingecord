@@ -65,6 +65,7 @@ class ActivityDetails:
         accounts={}
         for manifest in self.app.provider_registry.manifests():
             source=manifest.name
+            if source=='anilist':continue
             configured={'simkl':bool(self.app.SIMKL_CLIENT_ID),'wetrakr':bool(self.app.wetrakr_sync),
                         'mdblist':bool(self.app.mdblist_tracking)}[source]
             if not configured:continue
@@ -107,10 +108,7 @@ class ActivityDetails:
     async def valid(self,part):
         ctx=self.contexts.get((str(part['guild']),str(part['user'])))
         if not ctx or ctx['source']!=part['source'] or str(ctx['account'])!=str(part['account']):return False
-        if await self.app.storage.get_activity_provider(part['guild'],part['user'])!=part['source']:return False
-        try:account=await self.app.provider_registry.get(part['source']).link(part['user'])
-        except ValueError:return False
-        return str(account.account_id)==str(part['account'])
+        return await self.app.storage.activity_account_matches(part['guild'],part['user'],part['source'],part['account'])
 
     async def watches(self,part):
         if part['source']!='simkl':
@@ -379,6 +377,7 @@ class ActivityDetails:
     async def remember(self,message):
         post=current_post.get()
         if not post or not getattr(message,'id',None):return
+        if post.get('standalone') and post['parts'][0]['meta'].get('media_type')!='manga':return
         record=copy.deepcopy(post)
         record.update(message=str(message.id),channel=str(message.channel.id),
                       posted_at=datetime.now(timezone.utc).isoformat())
@@ -386,7 +385,8 @@ class ActivityDetails:
         self.sent.append(record)
 
     async def finish(self,guild_id=None):
-        records=await self.app.storage.get_activity_messages(guild_id)
+        records=[record for record in await self.app.storage.get_activity_messages(guild_id)
+                 if not record.get('standalone')]
         # Only the newest related activity for each account/title is eligible for a late edit.
         latest={}
         for record in records:
@@ -395,7 +395,6 @@ class ActivityDetails:
                           'movie' if part['meta'].get('movie') else 'show',json_ids(part['meta']['ids']))
                 latest[identity]=record['message']
         for record in records:
-            if not any([await self.valid(part) for part in record['parts']]):continue
             parts=copy.deepcopy(record['parts'])
             for part in parts:
                 identity=(part['guild'],part['user'],part['source'],part['account'],
@@ -403,6 +402,7 @@ class ActivityDetails:
                 if latest[identity]!=record['message']:
                     # Freeze older related posts at their original snapshot.
                     part['source']='snapshot:'+part['source']
+            if not any([await self.valid(part) for part in parts]):continue
             try:
                 base=discord.Embed.from_dict(record['base'])
                 rendered=await self.render(base,parts,refresh=True)
@@ -414,7 +414,7 @@ class ActivityDetails:
                     from trackerbot.presentation.activity_cards import activity_card_kwargs
                     # Rebuild from the complete native payload. Failed artwork
                     # leaves the previous card intact and retries next cycle.
-                    kwargs=dict(await activity_card_kwargs(rendered,record['parts'][0],**({'parts':record['parts']} if len(record['parts'])>1 else {})))
+                    kwargs=dict(await activity_card_kwargs(rendered,record['parts'][0],tmdb_client=getattr(self.app,"tmdb",None),**({'parts':record['parts']} if len(record['parts'])>1 else {})))
                     file=kwargs.pop('file')
                     await message.edit(**kwargs,attachments=[file],allowed_mentions=discord.AllowedMentions.none())
                 else:

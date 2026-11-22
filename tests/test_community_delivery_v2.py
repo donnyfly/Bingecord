@@ -43,6 +43,40 @@ def test_debug_community_does_not_refresh_or_publish_live_events(monkeypatch):
     asyncio.run(run())
 
 
+def test_debug_community_reading_goal_without_a_live_event(tmp_path, monkeypatch):
+    import trackerbot.core.storage as storage_module
+
+    async def run():
+        monkeypatch.setattr(storage_module, "DATA_PATH", str(tmp_path / "store.json"))
+        store = storage_module.Storage()
+        monkeypatch.setattr(store, "get_timezone", AsyncMock(return_value={"name": "UTC"}))
+        monkeypatch.setattr(bot, "storage", store)
+        send = AsyncMock()
+        monkeypatch.setattr(bot, "send_community_card", send)
+        interaction = _interaction()
+        interaction.guild.name = "Server"
+        before = deepcopy(store._data)
+        await bot.simkl_debug.callback(
+            interaction, app_commands.Choice(name="Community event card", value="community"),
+            community_event=app_commands.Choice(name="Community Reading Goal", value="reading"),
+        )
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+        preview = send.await_args.args[2]
+        assert send.await_args.kwargs["preview"]
+        assert preview["kind"] == "reading"
+        assert preview["reading"]["kind"] == "readathon"
+        assert "total" not in preview and "art_entries" not in preview
+        assert preview["reading"]["chapters"] == 0
+        assert preview["reading"]["xp"] == 350
+        from trackerbot.presentation.manga_pages import community_page
+        payload = await community_page(interaction.guild, preview["reading"], "42", preview=True)
+        assert payload["view"].embed.title == "Community Readathon"
+        assert Image.open(payload["file"].fp).size == (1080, 1500)
+        assert store._data == before
+
+    asyncio.run(run())
+
+
 def test_delivery_edits_are_throttled_and_notice_failure_retries(monkeypatch):
     async def run():
         s=state();now=datetime.fromisoformat(s['start'])+timedelta(days=1)
