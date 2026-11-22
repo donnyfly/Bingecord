@@ -14,7 +14,6 @@ It supports automatic provider syncing, episode grouping, artwork and ratings, p
 - 🎨 Rich/minimal embeds, optional visual activity cards, artwork choices, and short/detailed activity text
 - 🔗 Per-member, per-server source selection with multiple linked accounts
 - 📊 Personal and server watch statistics
-- 🎲 Watching lists, planned-list random picks, and recommendations
 - 🧩 Cross-provider watch mapping and shared XP duplicate protection
 - 🔥 Watch streaks
 - 🏆 Server leaderboards
@@ -44,9 +43,6 @@ The bot displays **Playing /bingecord help**. Use `/bingecord help` for a privat
 | `/bingecord leaderboard` | Everyone | View server leaderboards |
 | `/bingecord server-stats` | Everyone | View server watch statistics |
 | `/bingecord community` | Everyone | View the rotating weekly cooperative watch goal |
-| `/bingecord watching` | Everyone | View your selected account's watching list and next episodes where available |
-| `/bingecord random` | Everyone | Pick from your selected account's planned list |
-| `/bingecord recommend` | Everyone | Get recommendations using selected-source history and exclusions |
 | `/bingecord style` | Everyone | Change personal activity-post preferences |
 | `/bingecord user-reset` | Everyone | Reset your tracking history for the current server |
 | `/bingecord setchannel` | Manage Server | Choose the activity channel |
@@ -151,7 +147,7 @@ Enable any combination of SIMKL, WeTrakr and MDBList. None is the primary provid
 3. In Discord, run `/bingecord link provider:AniList`, authorize on AniList, and enter the authorization code in the bot's form.
 4. Use `/bingecord source provider:AniList` for anime and independently set `/bingecord source manga:On` for manga. To keep SIMKL for watching and use AniList for manga, leave the watch source on SIMKL and turn manga on.
 
-Each selected list starts with a silent baseline and posts later progress and status changes in the server's activity channel. Turning manga on attempts to set its baseline immediately. If it is pending, run `/bingecord checknow` before updating your next chapter. AniList anime uses the Watch Activity layout and the episode numbers from each AniList entry. Manga posts a portrait-cover Reading Activity card. Admins can use `/bingecord debug` with **Reading Activity card** to preview it privately. Private list entries are skipped. AniList compares list snapshots, so multiple edits between checks are summarized by the latest state. AniList anime activity is separate from XP. AniList activity does not contribute to Watched Together or recommendations. If authorization expires, link AniList again.
+Each selected list starts with a silent baseline and posts later progress and status changes in the server's activity channel. Turning manga on attempts to set its baseline immediately. If it is pending, run `/bingecord checknow` before updating your next chapter. AniList anime uses the Watch Activity layout and the episode numbers from each AniList entry. Manga posts a portrait-cover Reading Activity card. Admins can use `/bingecord debug` with **Reading Activity card** to preview it privately. Private list entries are skipped. AniList compares list snapshots, so multiple edits between checks are summarized by the latest state. AniList anime activity is separate from XP. AniList activity does not contribute to Watched Together. If authorization expires, link AniList again.
 
 Use the **Watch** and **Manga** buttons on member stats, weekly recaps, and community
 event cards to switch pages in the same message. Server stats show AniList totals,
@@ -579,7 +575,7 @@ Personal daily and weekly objectives have a separate rotation and reward budget 
 
 ## Multiple providers, one progression
 
-Each member selects one source **per server**. The selected account supplies watch totals, history, watching/planned lists and recommendation exclusions. Servers can combine members using different providers.
+Each member selects one source **per server**. The selected account supplies watch totals and history. Servers can combine members using different providers.
 
 XP, levels, ranks and prestige remain shared for the Discord user. Initial imports and source-switch catch-up do not post old watches or replay progression animations. Switching itself does not remove XP.
 

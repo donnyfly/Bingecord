@@ -96,12 +96,11 @@ else:
 FEATURE_LABELS={"watched_together":"Watched Together", "progression":"Levels, ranks and prestige", "achievements":"Achievements",
                 "challenges":"Daily and weekly challenges", "community":"Community challenges",
                 "weekly_recaps":"Weekly recaps", "leaderboards":"Leaderboards",
-                "statistics":"Statistics cards", "discovery":"Watching, random picks and recommendations"}
+                "statistics":"Statistics cards"}
 COMMAND_FEATURES={"challenges":"challenges","community":"community",
                   "achievements":"achievements","weekly-recap":"weekly_recaps",
                   "leaderboard":"leaderboards","stats":"statistics",
-                  "server-stats":"statistics","watching":"discovery",
-                  "random":"discovery","recommend":"discovery"}
+                  "server-stats":"statistics"}
 
 async def feature_enabled(g, feature):
     features=await storage.get_features(g)
@@ -2512,10 +2511,6 @@ async def bingecord_help(i):
         "`style` — customize your activity embeds\n"
         "`mapping` — privately inspect cross-provider watch matches\n"
         "`user-reset` — reset this server's imported tracking state; keeps links and global XP",inline=False)
-    embed.add_field(name="Discover",value=
-        "`watching` — your current watching list\n"
-        "`random` — pick from your planned list\n"
-        "`recommend` — recommendations using your selected account",inline=False)
     embed.add_field(name="Progress & community",value=
         "`stats` — your watches, XP and progression\n"
         "`achievements` / `challenges` — achievements and daily/weekly goals\n"
@@ -3915,7 +3910,8 @@ async def wetrakr_tracking_rows(uid, status, targets):
     return rows
 
 
-@bingecord_commands.command(
+# Discovery commands are on hold. Keep their callbacks available for tests.
+@app_commands.command(
     name="watching",
     description="Show what you're currently watching on your active tracker.",
 )
@@ -4155,7 +4151,7 @@ async def _get_recommendation_candidates(sources,excluded,media_filter):
     return rank_candidates(list(candidates.values()))
 
 
-@bingecord_commands.command(
+@app_commands.command(
     name="recommend",
     description="Get personalized recommendations based on your active tracker history.",
 )
@@ -4314,7 +4310,7 @@ async def simkl_recommend(i,type: app_commands.Choice[str] | None = None):
         )
 
 
-@bingecord_commands.command(name="random",description="Pick something random from your active tracker's plan to watch list.")
+@app_commands.command(name="random",description="Pick something random from your active tracker's plan to watch list.")
 @app_commands.choices(type=RANDOM_TYPE_CHOICES,genre=RANDOM_GENRE_CHOICES)
 @app_commands.describe(
     type="Choose what kind of title to pick.",
