@@ -4374,7 +4374,24 @@ async def simkl_random(
                             preferences=await storage.get_embed_preferences(g, uid))
         embed.title = f"🎲 Random Pick · {title}"
         embed.set_footer(text=f"{label} · {provider.manifest.display_name} Plan To Watch")
-        await i.followup.send(embed=embed)
+        from trackerbot.presentation.random_reveal import random_reveal, tracker_link
+        fallback = embed.copy()
+        kwargs = {}
+        view = tracker_link(item.get('url'), provider.manifest.display_name)
+        if view:
+            kwargs['view'] = view
+        try:
+            limit = getattr(i, 'filesize_limit', None) or getattr(i.guild, 'filesize_limit', None) or 8_000_000
+            file = await random_reveal(item, candidates, image, limit)
+            embed.set_image(url=None)
+            embed.set_thumbnail(url=None)
+            await i.followup.send(embed=embed, file=file, **kwargs)
+        except discord.HTTPException as exc:
+            if exc.status != 413 and exc.code != 40005:
+                raise
+            await i.followup.send(embed=fallback, **kwargs)
+        except (OSError, ValueError):
+            await i.followup.send(embed=fallback, **kwargs)
     except ValueError as exc:
         await i.followup.send(str(exc), ephemeral=True)
     except Exception:
