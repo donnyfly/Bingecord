@@ -9,6 +9,14 @@ data is stored on your own host.
 [AniList setup](#anilist) · [Progression and statistics](#progression--statistics) ·
 [Updating](#updating)
 
+<img width="400" height="" alt="image" src="https://github.com/user-attachments/assets/943f4581-1441-4374-ad5d-420c4a8c8fe9" />
+<img width="400" height="" alt="image" src="https://github.com/user-attachments/assets/37cf949c-0d44-4506-b187-f1be517aef9a" />
+<img width="400" height="" alt="image" src="https://github.com/user-attachments/assets/39af5576-b9d2-4ef8-893d-f03ba28d7a73" />
+<img width="400" height="" alt="image" src="https://github.com/user-attachments/assets/d0a5393c-027d-4e9c-bbd3-950ab2deb94c" />
+<img width="400" height="" alt="image" src="https://github.com/user-attachments/assets/9adbd60c-257d-410a-b438-ac42f971fd79" />
+
+
+
 ## What you get
 
 | Provider | Activity |
