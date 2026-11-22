@@ -1,30 +1,32 @@
 # Bingecord
 
-A self-hosted Discord bot that turns your **SIMKL, WeTrakr, or MDBList watch activity** into clean Discord updates for **TV shows, anime, and movies**.
+Bingecord is a self-hosted Discord bot that posts watch and reading activity from
+**SIMKL, WeTrakr, MDBList, and AniList**. It adds visual cards, statistics,
+achievements, challenges, and leaderboards to your Discord server. Linked-account
+data is stored on your own host.
 
-It supports automatic provider syncing, episode grouping, artwork and ratings, personal/server statistics, achievements, XP progression, challenges, leaderboards, and optional weekly recaps. All linked-account data is stored locally on your own server.
+[Install with Docker](#installation) · [Slash commands](#commands) ·
+[AniList setup](#anilist) · [Progression and statistics](#progression--statistics) ·
+[Updating](#updating)
 
 ## What you get
 
-- 🎬 Automatic SIMKL, WeTrakr and MDBList activity tracking for TV, anime, and movies
-- 👥 Watched Together combines matching watches from the same polling cycle, including mixed-provider groups
-- 📺 Consecutive episode grouping for cleaner Discord posts
-- 🖼️ Title logos, episode stills and TMDB artwork with available provider fallbacks
-- ⭐ IMDb ratings and 🌸 MyAnimeList ratings where available
-- 🎨 Rich/minimal embeds, optional visual activity cards, artwork choices, and short/detailed activity text
-- 🔗 Per-member, per-server source selection with multiple linked accounts
-- 📊 Personal and server watch statistics
-- 🧩 Cross-provider watch mapping and shared XP duplicate protection
-- 🔥 Watch streaks
-- 🏆 Server leaderboards
-- 📈 XP, levels, ranks, and prestige
-- 🎯 Daily and weekly watch challenges
-- 🏅 Achievements with XP rewards
-- 📅 Automatic weekly recaps
-- ⚙️ Server-wide feature switches for communities that only want basic activity tracking
-- 🏠 Multi-server support
-- 💾 Local persistent storage
-- 🐳 Docker support with a pre-built image
+| Provider | Activity |
+| --- | --- |
+| SIMKL | Movies, TV, and anime |
+| WeTrakr | Movies, TV, and anime |
+| MDBList | Movies, TV, and anime |
+| AniList | Anime and manga |
+
+Each member chooses one watch source per server and can enable **AniList manga**
+independently. For example, use SIMKL for movies, TV, and anime and AniList for
+manga, or use AniList for both anime and manga.
+
+- **Activity cards** for episode ranges, movies, reading progress, and supported list statuses. Visual cards are the default watch style, with legacy embeds available.
+- **Watched Together** combines matching watches from SIMKL, WeTrakr, and MDBList. The shared watch ledger prevents duplicate watch XP across those providers.
+- **Stats and recaps** include separate Watch and Manga pages where supported. The leaderboard includes a Manga chapters category.
+- **Progression** includes levels, ranks, prestige, achievements, and personal watch and reading challenges. Weekly watch and manga community events run alongside each other.
+- **Server controls** let admins choose posting channels, set defaults, and enable features individually or switch to activity-only mode.
 
 ## Commands
 
@@ -33,28 +35,29 @@ The bot displays **Playing /bingecord help**. Use `/bingecord help` for a privat
 | Command | Who can use it | Purpose |
 | --- | --- | --- |
 | `/bingecord help` | Everyone | View the command guide and setup steps |
-| `/bingecord link` | Everyone | Link a SIMKL, WeTrakr or MDBList account |
-| `/bingecord source` | Everyone | Select the linked account used in this server |
+| `/bingecord link` | Everyone | Link a SIMKL, WeTrakr, MDBList, or AniList account |
+| `/bingecord source` | Everyone | Choose a watch source or toggle AniList manga in this server |
 | `/bingecord mapping` | Everyone | Privately inspect cross-provider matches and possible duplicate awards |
 | `/bingecord unlink` | Everyone | Unlink a provider account |
-| `/bingecord stats` | Everyone | View your watch/progression profile |
+| `/bingecord stats` | Everyone | View watch, manga, and progression stats |
 | `/bingecord achievements` | Everyone | View achievements and XP rewards |
-| `/bingecord challenges` | Everyone | View daily and weekly challenges |
+| `/bingecord challenges` | Everyone | View daily and weekly watch and reading challenges |
 | `/bingecord leaderboard` | Everyone | View server leaderboards |
-| `/bingecord server-stats` | Everyone | View server watch statistics |
-| `/bingecord community` | Everyone | View the rotating weekly cooperative watch goal |
+| `/bingecord server-stats` | Everyone | View server activity totals, including AniList |
+| `/bingecord community` | Everyone | View the weekly Watch and Manga community events |
 | `/bingecord style` | Everyone | Change personal activity-post preferences |
 | `/bingecord user-reset` | Everyone | Reset your tracking history for the current server |
 | `/bingecord setchannel` | Manage Server | Choose the activity channel |
 | `/bingecord style-server` | Manage Server | Set server-wide style defaults |
 | `/bingecord features` | Manage Server | Enable or disable optional feature groups |
 | `/bingecord timezone` | Everyone (personal); Manage Server (server) | Set your activity-card timezone or the server timezone |
-| `/bingecord weekly-recap` | Manage Server | Post/test a weekly recap |
-| `/bingecord status` | Manage Server | View configuration and sync health; optionally check `user: @username` |
+| `/bingecord weekly-recap` | Manage Server | Post a current or previous week recap in the activity channel |
+| `/bingecord status` | Manage Server | View configuration and sync health, with an optional `user: @username` |
 | `/bingecord checknow` | Manage Server | Check selected providers immediately |
-| `/bingecord debug` | Manage Server | Privately preview profile, leaderboard, server/weekly cards and progression notifications without changing XP |
+| `/bingecord debug` | Manage Server | Privately preview activity cards, challenges, stats, recaps, and progression notifications |
+| `/bingecord rebuild` | Manage Server | Preview or apply a provider-based progression rebuild for one member |
 
-### Prefer the simple tracker experience?
+### Activity-only mode
 
 Admins can use:
 
@@ -64,16 +67,7 @@ Admins can use:
 
 This keeps the core activity tracker while disabling optional progression, achievements, challenges, recaps, community goals, leaderboards, and similar extras.
 
-**Watched Together:** matching movies, episodes, or identical episode ranges in the same channel combine when each watch timestamp is within 30 minutes of the others. Mentions do not ping. Everyone keeps their own XP and history. Matching requires a shared title identity and the same movie or episode/range in the same server. Partial-overlap ranges remain separate. Group descriptions display up to five member mentions. Admins can toggle it with `/bingecord features feature: Watched Together enabled: False`. Watches beginning at S1E1, including ranges starting there, include “🆕 Started watching this series.” on the last line after the ratings and a blank line.
-
-
-Use:
-
-```text
-/bingecord features preset: All features
-```
-
-to restore the full experience.
+Use `/bingecord features preset:All features` to re-enable the optional features.
 
 ---
 
@@ -91,6 +85,7 @@ You will need:
 - A TMDB API key
 - A WeTrakr application key if you want WeTrakr tracking
 - An MDBList OAuth Client ID if you want MDBList tracking
+- An AniList Client ID and Client Secret if you want anime or manga tracking through AniList
 - An optional MDBList API key for additional ratings
 
 ### 1. Create a Discord bot
@@ -110,7 +105,7 @@ Create an application in the SIMKL developer settings and copy its **Client ID**
 
 Individual Discord users will connect their own SIMKL accounts later with `/bingecord link provider: SIMKL`.
 
-Leave `SIMKL_CLIENT_ID` blank to disable SIMKL. It is not required for WeTrakr or MDBList. Each provider is enabled independently by its own host credentials.
+Leave `SIMKL_CLIENT_ID` blank if you use other providers. Each provider is enabled independently through its host credentials.
 
 ### 3. Get a TMDB API key
 
@@ -138,8 +133,6 @@ The host configures the application once. Members do not need individual API key
 
 `MDBLIST_CLIENT_ID` enables **tracking**. `MDBLIST_API_KEY` enables optional **ratings enrichment**. They serve different purposes; the ratings key does not replace member OAuth authorization. See [MDBList integration details](docs/mdblist-integration.md) for provider limitations and validation.
 
-Enable any combination of SIMKL, WeTrakr and MDBList. None is the primary provider; leave unused provider credentials blank.
-
 #### AniList
 
 1. Create an OAuth application in [AniList developer settings](https://anilist.co/settings/developer). Use `https://anilist.co/api/v2/oauth/pin` as the redirect URL.
@@ -147,39 +140,16 @@ Enable any combination of SIMKL, WeTrakr and MDBList. None is the primary provid
 3. In Discord, run `/bingecord link provider:AniList`, authorize on AniList, and enter the authorization code in the bot's form.
 4. Use `/bingecord source provider:AniList` for anime and independently set `/bingecord source manga:On` for manga. To keep SIMKL for watching and use AniList for manga, leave the watch source on SIMKL and turn manga on.
 
-Each selected list starts with a silent baseline and posts later progress and status changes in the server's activity channel. Turning manga on attempts to set its baseline immediately. If it is pending, run `/bingecord checknow` before updating your next chapter. AniList anime uses the Watch Activity layout and the episode numbers from each AniList entry. Manga posts a portrait-cover Reading Activity card. Admins can use `/bingecord debug` with **Reading Activity card** to preview it privately. Private list entries are skipped. AniList compares list snapshots, so multiple edits between checks are summarized by the latest state. AniList anime activity is separate from XP. AniList activity does not contribute to Watched Together. If authorization expires, link AniList again.
+The first sync establishes a silent baseline for each enabled list. If manga
+setup reports a pending baseline, ask an admin to run `/bingecord checknow` before
+updating your next chapter. Check your watch source and manga baseline with
+`/bingecord source` without options.
 
-Use the **Watch** and **Manga** buttons on member stats, weekly recaps, and community
-event cards to switch pages in the same message. Server stats show AniList totals,
-and the leaderboard has a Manga chapters category. The initial list
-snapshot contributes to lifetime totals and can unlock lifetime reading achievements
-and their one-time XP rewards. Current chapter totals use the progress reported on
-public list entries. Daily and weekly reading challenges, reading streaks, the
-weekly community reading goal, and period leaderboards use new chapter progress
-detected after the initial sync. Manga never earns per-chapter XP.
-
-The manga community rotation runs Monday to Monday in the server timezone alongside
-the watch rotation. The bot fixes each event's targets from readers active in the
-previous 14 days. With no recent reading history, it uses up to two manga-enabled
-members. The event needs two qualifying readers when its baseline has at least
-two readers. Qualifying members receive 350 XP when the team completes the goal
-and progression is enabled.
-
-| Manga event | Team goal | Individual qualification |
-|---|---|---|
-| Community Readathon | 150 chapters per active reader, minimum 200 | 30 chapters |
-| Manga Genre Expedition | 3–8 genres, each from a distinct title | Read 5 chapters of a manga in an eligible genre |
-| Manga Bingo | One line on a 3×3 board, with three distinct titles | Contribute to a board objective |
-| Manga Decades Tour | 2–5 distinct publication decades | Read 5 chapters of a manga with a known publication year |
-
-Personal challenges reset in UTC. Server recaps, community goals, and period
-leaderboards use the server timezone. Updates use the time Bingecord detects
-them because snapshots can combine several AniList edits. Relinking seeds a fresh
-baseline and preserves previously earned XP.
-
-Admins can preview daily and weekly reading goals with **Personal challenges card**
-in `/bingecord debug`. Choose **Community event card** and any manga event from
-`community_event` to preview that event using cached AniList activity.
+AniList compares snapshots of public list entries. Several edits between polls
+can appear as a single progress range or the latest status. AniList anime uses
+AniList's episode numbering and is excluded from watch XP and Watched Together.
+If access expires, relink the account in Discord. Relinking seeds a fresh
+baseline and preserves earned XP.
 
 ### 5. Create the Docker setup
 
@@ -212,6 +182,8 @@ SIMKL_CLIENT_ID=
 WETRAKR_API_KEY=
 MDBLIST_CLIENT_ID=
 MDBLIST_CLIENT_SECRET=
+ANILIST_CLIENT_ID=
+ANILIST_CLIENT_SECRET=
 
 # Optional additional ratings:
 MDBLIST_API_KEY=
@@ -241,7 +213,7 @@ Once the bot is online:
 1. Run `/bingecord setchannel` to choose where activity should be posted.
 2. Each member runs `/bingecord link` for their provider, then `/bingecord source` to select it.
 3. An admin runs `/bingecord checknow` to import the initial history quietly.
-4. Mark a new watch after that import. Wait for scheduled polling or run `/bingecord checknow` again.
+4. Log a watch or update a manga chapter after the baseline is ready. Wait for the next poll or ask an admin to run `/bingecord checknow` again.
 5. Use `/bingecord stats` and `/bingecord status` to verify the selected account and sync health.
 
 ---
@@ -289,7 +261,7 @@ python bot.py
 
 # Configuration
 
-The main settings live in `.env`. Use `.env.example` as the complete template; leave optional credentials blank until configured.
+The main settings live in `.env`. Use [`.env.example`](.env.example) as the complete template and leave unused provider credentials blank.
 
 | Setting | Required | Default | Purpose |
 | --- | --- | --- | --- |
@@ -299,6 +271,8 @@ The main settings live in `.env`. Use `.env.example` as the complete template; l
 | `WETRAKR_API_KEY` | For WeTrakr | — | Host application key for WeTrakr tracking |
 | `MDBLIST_CLIENT_ID` | For MDBList tracking | — | Host OAuth application ID |
 | `MDBLIST_CLIENT_SECRET` | Application-dependent | — | MDBList token refresh secret, if required |
+| `ANILIST_CLIENT_ID` | For AniList | — | AniList OAuth application ID |
+| `ANILIST_CLIENT_SECRET` | For AniList | — | AniList OAuth application secret |
 | `MDBLIST_API_KEY` | No | — | Additional IMDb/MAL ratings; separate from tracking |
 | `POLL_INTERVAL_MINUTES` | No | `60` | Polling interval in minutes for all selected providers |
 | `POLL_CONCURRENCY` | No | `5` | Concurrent SIMKL user checks |
@@ -365,52 +339,48 @@ Users can run `/bingecord style` to choose:
 
 Server admins can set defaults with `/bingecord style-server`. Personal settings override server defaults. Visual card is the default for new or reset preferences; existing saved style selections are retained.
 
-The default **Visual card** style currently covers individual episode/range
-and film watches for SIMKL, WeTrakr and MDBList. It uses Inter typography, the
-already-resolved still/backdrop and logo, compact rating chips, personal rating and
-verified completion/NEW badges. The card is sent directly as an image attachment, without an outer embed box.
-The backdrop spans the full card width without an inset frame, blending into the
-header and an ambient background sampled from its own colours.
-Status/title text sits below the artwork on the left, with ratings on the right.
-A consistent metadata area keeps ordinary rated and unrated cards the same size;
-4:3 and other aspect ratios retain the full frame over a blurred, darkened fill.
-The title logo replaces duplicate heading text when available, and card height adapts
-to its rating and milestone rows. A View on tracker button opens the title page,
-and View details provides the complete text and profile link privately.
-This replaces the previous embed-wrapped Visual card presentation using the same
-style preference; Rich and Minimal are unchanged. Existing posts stay as sent
-unless a later rating/completion refresh replaces their card. Episode watches retain
-IMDb episode ratings and exclude MAL; anime film cards may include MAL.
+### Watch Activity cards
 
-Try `/bingecord debug feature:Episode activity card` and
-`/bingecord debug feature:Film activity card` first. Previews use your most recent
-cached single-user watch from the selected source, or clearly labelled illustrative
-sample data when none is available. They do not poll providers, change preferences
-or award XP. Enable live testing with `/bingecord style style:Visual card`.
-Use Rich or Minimal to return to native embeds for subsequent watches.
+Watch cards cover episodes and ranges, movies, Watched Together, and supported
+status updates such as Planned, Watching, Paused, Dropped, and Completed.
+They show ratings on the right and place milestones such as starting a series,
+finishing a season, or catching up directly below the activity title when verified.
+The bottom fades into a compact footer.
 
-Watched Together also supports visual cards, showing up to five participants with
-avatars and separate personal ratings using each member’s tracker icon.
-Participants appear in compact two-column tiles beneath the title and public ratings;
-a missing or hidden score is labelled “No rating shared”. Group
-presentation and timestamp follow the first participant’s style and timezone.
-Visual card also covers Planned, Watching, Paused, Dropped and completion status
-updates. These use TMDB landscape artwork, never posters: a known episode still
-when supplied by the provider, otherwise a series backdrop; movies use backdrops.
-Rich and Minimal status styles retain their existing poster presentation.
-Preview the status layout with `/bingecord debug feature:Status activity card`.
-Use `/bingecord debug feature:Watched Together card` for a private preview.
-Style inheritance and forced server defaults still apply. Later rating/completion
-updates regenerate and replace a saved card attachment without changing its base
-watch information. If initial rendering fails, the normal embed is sent; failed
-later renders keep the previous card intact and retry on a later poll. Bounded image
-and PNG caches limit rendering work during bulk activity. No extra catalogue or
-rating lookups are added by the card renderer.
+For a mapped TV episode, the card prefers the episode still and tries a series
+backdrop when the still is missing or fails to load. A placeholder is the final
+fallback. TMDB title logos and backdrops prefer English or language-neutral
+artwork, then allow other available languages. The title appears as text when a
+logo is unavailable. Visual status cards use landscape artwork. Legacy status
+embeds use posters. Episode ratings use episode-specific IMDb scores where
+available. Anime movies and anime status cards can show title-level IMDb and MAL
+scores.
 
+Watched Together groups matching movies, episodes, or identical episode ranges
+in the same server and channel within 30 minutes. Partial overlaps stay separate.
+The card shows up to five participants with avatars and individual personal
+ratings. Mentions stay quiet, and everyone keeps their own XP and history. The
+first participant's style and timezone determine the shared presentation.
 
-Titles and activity headers link to the provider entry and member profile when available. Status activities use posters. Episode watches can use episode stills/backdrops and show individual episode IMDb ratings. They omit MAL and do not substitute the whole show's rating for a missing episode rating. Anime movies and anime status activities can show title-level IMDb and MAL scores.
+### Reading Activity cards
 
-For MDBList, supported playback changes can produce Paused notices. Available notices depend on each provider's API.
+AniList manga uses a portrait cover with a faded banner. If the banner is
+unavailable, the card uses a blurred cover in the background. If the AniList
+cover cannot load, Bingecord tries the corresponding MyAnimeList cover when a
+MAL ID is available, then uses a placeholder. Cards show new chapter ranges,
+rereads, and supported list transitions such as Planned to read, Paused, Dropped,
+and Completed.
+
+Activity cards are posted as direct attachments and omit attachment descriptions,
+which removes Discord's ALT badge from newly posted cards and animations.
+**View details** opens the corresponding text privately. **View on tracker**
+opens the provider's title page when available. A rendering error can fall back
+to an embed.
+
+Admins can preview cards privately via `/bingecord debug`. Choose **Episode
+activity card**, **Film activity card**, **Status activity card**, **Watched
+Together card**, or **Reading Activity card**. Previews use cached activity or
+labelled sample data and do not poll providers or award XP.
 
 ### Personal ratings and completion
 
@@ -430,27 +400,19 @@ Rate before watching to include your score immediately. If you rate, change or r
 
 Watched Together posts show each displayed member's own score, with at most five members' details. `/bingecord style show_personal:Off` hides your score; `/bingecord style-server` supplies the server default and its existing force-override control. Existing public-rating settings and data sources are unchanged. Personal ratings are read only: Bingecord does not submit ratings to your tracker.
 
-See the [ratings and completion test checklist](docs/testing-ratings-completion.md) for examples and live verification across all three providers.
+See the [ratings and completion test checklist](docs/testing-ratings-completion.md) for examples and live verification across SIMKL, WeTrakr, and MDBList.
 
 ---
 
 # Progression & statistics
 
-When enabled, the bot adds a progression layer on top of normal watch tracking.
-
-- Episodes award watch XP
-- Movies award watch XP
-- Achievements and challenges can award bonus XP
-- Users progress through levels, ranks, and prestige tiers
-- `/bingecord stats` shows watch history, XP, streaks, achievements, recent activity, and more
-- `/bingecord leaderboard` compares server members across watch/progression categories
-- Weekly recaps summarize recent server activity
-
-These systems are optional. Servers that only want activity posts can use the **Activity only** feature preset.
+Eligible watches, achievements, and challenges award XP toward shared levels,
+ranks, and prestige. `/bingecord stats` shows personal progression, streaks, and
+recent activity. `/bingecord leaderboard` compares members within the server.
 
 ## Watch XP rewards
 
-All completed **TV episodes, anime episodes, movies and anime movies earn 4 XP per minute** of catalog runtime. Equal watch time earns equal base XP across providers and media types.
+Completed **TV episodes, anime episodes, movies, and anime movies earn 4 XP per minute** of catalog runtime on SIMKL, WeTrakr, and MDBList. Equal watch time earns equal base XP across these providers and media types.
 
 | Watch | Runtime | Base XP |
 | --- | --- | --- |
@@ -474,6 +436,12 @@ View details opens the complete text privately; leaderboards retain category,
 period and page controls below the image. Live progression notifications retain
 the recipient mention. If rendering fails, a readable text embed is sent instead.
 Native watch embed styles remain available separately.
+
+Use **Watch** and **Manga** on member profiles, weekly recaps, and community cards
+to switch pages in the same message. Server stats include AniList totals, and
+the leaderboard offers **Manga chapters**. Use **Profile card**, **Weekly recap
+card**, or **Community event card** in `/bingecord debug` to preview those pages
+privately.
 
 Challenge, community and summary embeds keep their heading, reporting period or
 reset/deadline countdown above the image. **View details** opens the full text
@@ -538,6 +506,23 @@ notifications. Metadata refreshes do not recalculate legacy challenge rewards.
 Use `/bingecord debug feature:Personal challenges card` for a private preview of
 the new design and rules using cached progress, with no awards or data imports.
 
+### Manga progression
+
+The first AniList manga snapshot contributes public list progress and completions
+to lifetime stats. It can unlock eligible lifetime reading achievements and
+their one-time XP rewards. Subsequent chapter progress counts toward reading
+streaks, period leaderboards, recaps, and challenges, using the time Bingecord
+detects it. Reading XP comes from achievements and goals.
+
+| Personal reading challenge | Goal | Bonus XP |
+| --- | --- | ---: |
+| Daily Reading | Read 3 chapters | 250 |
+| Weekly Reading | Read 15 chapters | 1,000 |
+| Reading Variety | Read at least 3 chapters each from 2 titles | 750 |
+
+Personal goals reset in UTC. Server reporting periods use the server's timezone.
+Choose **Personal challenges card** in `/bingecord debug` to preview reading goals.
+
 ## Weekly community events
 
 Community events rotate **Watchathon → Genre Expedition → Community Bingo → Decade Discovery**,
@@ -573,9 +558,29 @@ Stretch rewards, nominated watch clubs and country-specific events are reserved 
 
 Personal daily and weekly objectives have a separate rotation and reward budget from these cooperative events.
 
+### Manga community events
+
+The manga community rotation runs Monday to Monday in the server timezone alongside
+the watch rotation. Its cards show team progress, contributors, and personal
+qualification. The objective panel shows covers, matched genres or decades, or
+the bingo board, depending on the event. The bot fixes each event's targets from readers active in the
+previous 14 days. With no recent reading history, it uses up to two manga-enabled
+members. The event needs two qualifying readers when its baseline has at least
+two readers. Qualifying members receive 350 XP when the team completes the goal
+and progression is enabled.
+
+| Manga event | Team goal | Individual qualification |
+|---|---|---|
+| Community Readathon | 150 chapters per active reader, minimum 200 | 30 chapters |
+| Manga Genre Expedition | 3–8 genres, each from a distinct title | Read 5 chapters of a manga in an eligible genre |
+| Manga Bingo | One line on a 3×3 board, with three distinct titles | Contribute to a board objective |
+| Manga Decades Tour | 2–5 distinct publication decades | Read 5 chapters of a manga with a known publication year |
+
+Open the **Manga** page in `/bingecord community` for your contribution, the team goal, and rewards. Choose **Community event card** and a manga event under `community_event` in `/bingecord debug` to preview it.
+
 ## Multiple providers, one progression
 
-Each member selects one source **per server**. The selected account supplies watch totals and history. Servers can combine members using different providers.
+Each member selects one **watch source per server** and an independent AniList manga setting. Servers can combine members using different providers.
 
 XP, levels, ranks and prestige remain shared for the Discord user. Initial imports and source-switch catch-up do not post old watches or replay progression animations. Switching itself does not remove XP.
 
@@ -587,7 +592,7 @@ A shared watch ledger matches confirmed cross-provider occurrences using catalog
 
 # Updating
 
-When moving to the renamed project, stop the existing Compose deployment before replacing its configuration so two containers do not poll the same accounts. Keep the same `./data:/app/data` mount and existing `.env`. The new image is `ghcr.io/donnyfly/bingecord:experimental`; pull it after the build finishes. The Discord application's display name can be changed separately in the Developer Portal.
+These instructions follow the `experimental` branch and its image, `ghcr.io/donnyfly/bingecord:experimental`. When migrating an older SIMKLTrackerBot deployment, stop the old container before starting Bingecord and reuse the existing data mount and `.env`.
 
 ## Docker Compose
 
@@ -607,8 +612,6 @@ python -m pip install -r requirements.txt
 Then restart the bot.
 
 Keep your existing data directory when upgrading from SIMKL-only releases. Back it up before a migration; do not unlink accounts or delete state as a routine update step. The unified commands use `/bingecord …` names. After editing `.env`, recreate Docker containers with `docker compose up -d --force-recreate` to load the new values.
-
-When this branch is promoted and a stable image containing multi-tracker support is published, switch the image tag to `:latest` and remove `--branch experimental` from new source installations.
 
 ---
 
@@ -643,6 +646,14 @@ Admins can run `/bingecord checknow` and `/bingecord status` for an immediate ch
 
 A “no active SIMKL targets” log is normal when everyone selects another provider. Provider quota delays and authorization errors appear in sync health. WeTrakr journal entries can take several seconds to become visible; a check immediately after marking a watch may return zero, with the next poll picking it up.
 
+### AniList manga is missing from activity or recaps
+
+Run `/bingecord source` to check whether manga tracking is on and its baseline is
+ready. If the baseline is pending, have an admin run `/bingecord checknow`, then
+advance a public manga entry. The initial snapshot appears in lifetime totals.
+Weekly recaps and other period views count activity detected after that snapshot.
+Use the **Manga** button on the recap to see reading activity.
+
 ### Ratings or artwork are missing
 
 An MDBList `TIMEOUT` or `NETWORK_ERROR` means the API connection/read failed. Read requests retry once, with a 10-second connection limit and 30-second total limit per attempt; repeated failures trigger a 60-second cooldown shared by personal-rating reads and watch polling. Existing ratings, watch history, checkpoints and XP stay intact. OAuth token requests are never automatically replayed. If timeouts continue, check the bot host's outbound connectivity to `api.mdblist.com`; these errors alone do not mean you need to relink or reset data.
@@ -673,7 +684,7 @@ Never publicly share or commit:
 - `.env`
 - Discord bot tokens
 - Host application keys and client secrets
-- SIMKL, WeTrakr and MDBList account tokens
+- Linked SIMKL, WeTrakr, MDBList, and AniList account tokens
 - `data/store.json`
 
 If a Discord bot token is exposed, regenerate it immediately in the Discord Developer Portal.
