@@ -726,7 +726,7 @@ class Storage:
 
     async def link_provider_account(self, guild_id: str | int, discord_user_id: str,
                            tokens: dict, account: dict, provider: str = "wetrakr") -> None:
-        """Add an independent WeTrakr link without resetting SIMKL or XP."""
+        """Link a provider in this server while preserving existing progression."""
         gid, uid = str(guild_id), str(discord_user_id)
         async with _lock:
             self._migrate_legacy_guild_locked(gid)
@@ -755,7 +755,10 @@ class Storage:
                 guild["users"][uid] = _default_guild_user()
                 guild["users"][uid]["simkl_linked"] = False
                 guild["users"][uid]["activity_provider"] = provider
-            guild["users"][uid][f"{provider}_linked"] = True
+            guild_user = guild["users"][uid]
+            if provider == "anilist" and not guild_user.get("anilist_linked"):
+                guild_user["anilist_manga"] = True
+            guild_user[f"{provider}_linked"] = True
             if provider == "anilist" and (not prior or str(prior.get("account_id")) != str(account.get("id"))):
                 guild["users"][uid]["anilist_lists"] = {}
             if not prior or str(prior.get("account_id")) != str(account.get("id")):

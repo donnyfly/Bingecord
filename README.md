@@ -146,7 +146,7 @@ The host configures the application once. Members do not need individual API key
 1. Create an OAuth application in [AniList developer settings](https://anilist.co/settings/developer). Use `https://anilist.co/api/v2/oauth/pin` as the redirect URL.
 2. Set `ANILIST_CLIENT_ID` and `ANILIST_CLIENT_SECRET` in your bot's `.env` and recreate the container.
 3. In Discord, run `/bingecord link provider:AniList`, authorize on AniList, and enter the authorization code in the bot's form.
-4. Use `/bingecord source provider:AniList` for anime and independently set `/bingecord source manga:On` for manga. To keep SIMKL for watching and use AniList for manga, leave the watch source on SIMKL and turn manga on.
+4. Linking AniList enables manga tracking in that server. If you already have a watch source, it stays selected. Use `/bingecord source provider:AniList` to select AniList for anime, or `/bingecord source manga:Off` to turn manga off. Existing links keep their saved manga setting.
 
 The first sync establishes a silent baseline for each enabled list. If manga
 setup reports a pending baseline, ask an admin to run `/bingecord checknow` before
