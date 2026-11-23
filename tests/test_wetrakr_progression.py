@@ -93,14 +93,26 @@ def test_journal_challenge_queues_notification_but_baseline_does_not(tmp_path, m
         monkeypatch.setattr(storage_module, "DATA_PATH", str(tmp_path / "store.json"))
         store = storage_module.Storage()
         await store.link_wetrakr("123", "42", {"access_token": "a", "refresh_token": "r"}, {"id": 19})
-        from datetime import datetime, timezone
-        stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        for n in range(1, 4):
-            await store.reconcile_wetrakr_plays("123", "42", [{"source_event_id": f"we-{n}",
-                "media_type": "movie", "title": f"Film {n}", "watched_at": stamp}], complete=n == 1)
+        await store.reconcile_wetrakr_plays("123", "42", [
+            {"source_event_id": "we-1", "media_type": "movie", "title": "Historical feature",
+             "watched_at": "2026-11-22T12:00:00Z", "runtime_minutes": 90},
+            {"source_event_id": "we-2", "media_type": "movie", "title": "Historical short",
+             "watched_at": "2026-11-23T12:00:00Z", "runtime_minutes": 10},
+        ], complete=True)
         progress = await store.get_progression("42")
-        assert progress["challenge_completions"]
-        assert progress["pending_challenge_notifications"]
+        assert "daily_v2_minutes_30" in progress["challenge_completions"]["daily:2026-11-22"]
+        assert "daily:2026-11-23" not in progress["challenge_completions"]
+        assert not progress["pending_challenge_notifications"]
+
+        await store.reconcile_wetrakr_plays("123", "42", [
+            {"source_event_id": "we-3", "media_type": "movie", "title": "Live short",
+             "watched_at": "2026-11-23T13:00:00Z", "runtime_minutes": 25},
+        ])
+        progress = await store.get_progression("42")
+        assert "daily_v2_minutes_30" in progress["challenge_completions"]["daily:2026-11-23"]
+        assert progress["pending_challenge_notifications"] == [
+            {"key": "daily:2026-11-23:daily_v2_minutes_30", "name": "Settle In", "period": "Daily", "xp": 250},
+        ]
     asyncio.run(run())
 
 
