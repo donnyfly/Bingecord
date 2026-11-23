@@ -451,6 +451,12 @@ the leaderboard offers **Manga chapters**. Use **Profile card**, **Weekly recap
 card**, or **Community event card** in `/bingecord debug` to preview those pages
 privately.
 
+The Manga profile shows shared level and prestige alongside a most-read
+spotlight, genres ranked by chapters logged, a recent manga cover shelf,
+reading streaks, and manga rewards. The recent shelf prioritizes chapter
+updates observed by Bingecord and can fill remaining slots from AniList
+list-update dates. Imported progress counts toward lifetime totals.
+
 Challenge, community and summary embeds keep their heading, reporting period or
 reset/deadline countdown above the image. **View details** opens the full text
 privately. If a card cannot render, the full text is shown automatically. Private

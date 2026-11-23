@@ -3110,11 +3110,11 @@ async def show_profile(i,user,*,preview=False):
     await i.response.defer(ephemeral=preview)
     if not preview:await evaluate_achievements(g,str(target.id))
     stats=await storage.get_statistics(g,str(target.id))
-    manga_stats=await storage.get_reading_statistics(g,str(target.id))
-    from trackerbot.presentation.manga_pages import profile_page
+    manga_stats=await storage.get_reading_statistics(g,str(target.id),profile=True)
 
     async def manga():
-        return await profile_page(i.guild,target.display_name,manga_stats,preview=preview,
+        from trackerbot.presentation.manga_pages import profile_page
+        return await profile_page(i.guild,target.display_name,manga_stats,progression,unlocked_achievements,features,preview=preview,
                                   owner=i.user.id if preview else None)
 
     async def send_profile(**payload):
@@ -3124,15 +3124,15 @@ async def show_profile(i,user,*,preview=False):
     active_wetrakr = source != 'simkl'
     source_label = provider_registry.get(source).manifest.display_name
     history=await storage.get_history_import_state(g,str(target.id))
+    progression=await storage.get_progression(str(target.id))
+    unlocked_achievements=await storage.get_achievements(g,str(target.id))
+    features=await storage.get_features(g)
     if manga_stats is None and not active_wetrakr and history["linked"] and not history["complete"] and not (int(stats.get("episodes_watched",0))+int(stats.get("movies_watched",0))):
         await send_profile(embed=discord.Embed(title="Watch history import pending",
             description="Watch totals will appear when the SIMKL import finishes."),ephemeral=True)
         return
-    progression=await storage.get_progression(str(target.id))
     timezone_info=await storage.get_timezone(g)
-    unlocked_achievements=await storage.get_achievements(g,str(target.id))
     current,longest=calculate_streaks(stats.get("watch_dates"),timezone_info["name"])
-    features=await storage.get_features(g)
     if not features["progression"]:
         embed=discord.Embed(title=f"{target.display_name}'s {source_label} Statistics",color=0x5865F2)
         embed.add_field(name="Watch history",value=f"{stats.get('episodes_watched',0):,} episodes · {stats.get('movies_watched',0):,} movies",inline=False)

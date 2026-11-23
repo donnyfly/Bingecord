@@ -1,5 +1,6 @@
 """Manga profile, recap and community cards."""
 import asyncio
+import logging
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -7,17 +8,20 @@ import discord
 from PIL import ImageDraw
 
 from trackerbot.core.manga_events import ROTATION, UNITS
-from trackerbot.core.reading import STATUS_LABELS
-from .activity_cards import _download
+from trackerbot.core.reading import READING_ACHIEVEMENTS, STATUS_LABELS
+from .activity_cards import _download, _mal_manga_cover
 from .card_details import standalone_card
 from .card_theme import background, fit, panel, png, short
 from .community_visuals import ACCENTS, render_community_png
 from .discord_artwork import load_discord_artwork, resolve_card_members
+from .level_visuals import accent_for_tier
+from .profile_visuals import render_profile_png, shared_progression
 from .typography import label, text as paint
 
 ACCENT = (165, 147, 245)
 WHITE = (241, 243, 248)
 MUTED = (167, 171, 186)
+log = logging.getLogger(__name__)
 COMMUNITY_THEMES = {"manga_genres": "genres", "manga_bingo": "bingo", "manga_decades": "decades"}
 COMMUNITY_RULES = {
     "manga_genres": "Read 5 chapters of a manga to qualify it. Each title can fill one genre slot.",
@@ -95,18 +99,95 @@ async def community_page(guild, state, viewer, *, preview=False, client=None):
                                  guild=guild.id, transient=preview)
 
 
-async def profile_page(guild, name, stats, *, preview=False, owner=None):
+def manga_profile_snapshot(stats, progression, achievements, features, *, preview=False):
+    achievement_xp = sum(event.get("amount", 0) for event in progression.get("xp_events", [])
+                         if event.get("achievement_id") in READING_ACHIEVEMENTS)
+    challenge_xp = sum(reward.get("xp", 0) for period in progression.get("challenge_completions", {}).values()
+                       for key, reward in period.items() if key.startswith("reading_"))
+    community_xp = sum(value for key, value in progression.get("community_rewards", {}).items()
+                       if ":reading:" in key)
+    return {
+        **stats, **shared_progression(progression),
+        "manga": True, "provider_label": "AniList", "preview": preview, "total": stats["chapters"],
+        "progression_enabled": features["progression"],
+        "achievements_enabled": features["progression"] and features["achievements"],
+        "achievements": len(READING_ACHIEVEMENTS.keys() & achievements.keys()),
+        "achievement_total": len(READING_ACHIEVEMENTS),
+        "manga_xp": achievement_xp + challenge_xp + community_xp,
+        "achievement_xp": achievement_xp, "challenge_xp": challenge_xp, "community_xp": community_xp,
+    }
+
+
+async def load_manga_profile_artwork(data):
+    featured = data["featured_titles"]
+    titles = {title["key"]: title for title in featured + data["recent_titles"]}
+    if not titles:
+        return {}
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=4)) as session:
+        async def cover(title):
+            image = await _download(session, title.get("cover"))
+            if image is None and title.get("mal_id"):
+                return await _mal_manga_cover(session, title["mal_id"])
+            return image
+
+        banner, *covers = await asyncio.gather(
+            _download(session, featured[0].get("banner") if featured else None),
+            *(cover(title) for title in titles.values()),
+        )
+    posters = dict(zip(titles, covers))
+    hero = banner or (posters.get(featured[0]["key"]) if featured else None)
+    return {"hero": hero, "posters": posters}
+
+
+async def profile_page(guild, name, stats, progression, achievements, features, *, preview=False, owner=None):
     embed = discord.Embed(title=f"{name}'s Manga Stats", color=0xA593F5)
     if stats is None:
         embed.description = "No synced AniList manga list for this member."
         return {"embed": embed}
-    metrics = (("Chapters logged", f"{stats['chapters']:,}"), ("Manga completed", f"{stats['completed']:,}"),
-               ("Best reading streak", f"{stats['streak']:,} days"))
-    sections = [(label, f"{stats['statuses'][key]:,}") for key, label in STATUS_LABELS.items()]
-    for heading, value in (*metrics, *sections):
-        embed.add_field(name=heading, value=value)
-    art = await asyncio.to_thread(render_page, name, "Manga Stats", "AniList reading profile", metrics, sections)
-    return await standalone_card(embed, art, "manga-stats.png", owner=owner, guild=guild.id, transient=preview)
+    data = manga_profile_snapshot(stats, progression, achievements, features, preview=preview)
+    embed.color = discord.Color.from_rgb(*accent_for_tier(data["level"], data["prestige"]))
+    if data["progression_enabled"]:
+        embed.description = (
+            f"Level **{data['level']}** · **{data['rank']}** · Prestige **{data['prestige']}**\n"
+            f"**{data['xp']:,} XP** in current prestige · **{data['lifetime_xp']:,}** lifetime XP"
+        )
+        embed.add_field(name="Manga rewards", value=(
+            f"{data['manga_xp']:,} XP · {data['achievement_xp']:,} from achievements · "
+            f"{data['challenge_xp']:,} from personal challenges · {data['community_xp']:,} from community events"
+        ), inline=False)
+    embed.add_field(name="Reading history", value=(
+        f"{data['total']:,} chapters · {data['completed']:,} manga completed · "
+        f"{data['unique_titles']:,} unique titles read"
+    ), inline=False)
+    embed.add_field(name="List statuses", value=" · ".join(
+        f"{stats['statuses'][key]:,} {label.lower()}" for key, label in STATUS_LABELS.items()
+    ), inline=False)
+    embed.add_field(name="Reading streak", value=(
+        f"{data['current_streak']:,} days current · {data['longest_streak']:,} best · "
+        f"{data['active_days']:,} active days · {data['last_30']:,} chapters in 30 days"
+    ), inline=False)
+    if data["achievements_enabled"]:
+        embed.add_field(name="Manga achievements", value=f"{data['achievements']}/{data['achievement_total']}")
+    if data["featured_titles"]:
+        title = data["featured_titles"][0]
+        embed.add_field(name="Most read manga", value=f"{title['title'][:200]} · {title['count']:,} chapters", inline=False)
+    if data["top_genres"]:
+        embed.add_field(name="Top genres", value="\n".join(
+            f"{genre} · {count / data['genre_covered']:.0%}" for genre, count in data["top_genres"]
+        ), inline=False)
+    if data["recent_titles"]:
+        embed.add_field(name=data["recent_label"], value="\n".join(
+            title["title"][:120] for title in data["recent_titles"]
+        ), inline=False)
+    if data["recent_uses_list_updates"]:
+        embed.set_footer(text="Recent manga includes titles ordered by their AniList list update when a reading date is unavailable.")
+    try:
+        artwork = await load_manga_profile_artwork(data)
+        art = await asyncio.to_thread(render_profile_png, name, data, artwork)
+        return await standalone_card(embed, art, "manga-stats.png", owner=owner, guild=guild.id, transient=preview)
+    except Exception:
+        log.exception("Could not render Manga profile in guild %s", guild.id)
+        return {"embed": embed}
 
 
 async def recap_page(guild, subtitle, stats, *, preview=False, client=None):

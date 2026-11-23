@@ -24,8 +24,11 @@ def progress_state(entry):
 
 def manga_catalogue(entries):
     return {
-        str(entry.media_id): {"title": entry.title, "cover": entry.cover_url, "year": entry.year,
-                              "format": entry.format, "genres": list(entry.genres)}
+        str(entry.media_id): {
+            "title": entry.title, "cover": entry.cover_url, "banner": entry.banner_url,
+            "mal_id": entry.mal_id, "updated_at": entry.updated_at, "year": entry.year,
+            "format": entry.format, "genres": list(entry.genres),
+        }
         for entry in entries if not entry.private
     }
 

@@ -1,8 +1,9 @@
 """AniList manga snapshots and dated reading activity."""
 from collections import Counter
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from .community_events import parse_stamp
+from .streaks import analyze_streaks
 
 COMMUNITY_TARGET = 100
 COMMUNITY_MINIMUM = 3
@@ -30,6 +31,60 @@ def lifetime(snapshot):
         "chapters": sum(max(0, state[2] or 0) for state in public),
         "completed": sum(state[1] == "COMPLETED" or bool(state[3]) for state in public),
         "statuses": {status: counts[status] for status in STATUS_LABELS},
+    }
+
+
+def profile_history(snapshot, record, zone, *, today=None):
+    """Build the manga profile from cached public progress and dated chapter events."""
+    today = today or datetime.now(zone).date()
+    catalogue = record.get("catalogue", {})
+    titles = {}
+    genres = Counter()
+    covered = 0
+    for key, state in snapshot.items():
+        count = max(0, state[2] or 0)
+        if state[4] or not count:
+            continue
+        metadata = catalogue.get(key, {})
+        titles[key] = {**metadata, "key": key, "count": count, "title": metadata.get("title") or f"Manga #{key}"}
+        title_genres = set(metadata.get("genres") or ())
+        if title_genres:
+            covered += count
+            genres.update({genre: count for genre in title_genres})
+
+    recent = {}
+    daily = Counter()
+    for event in record.get("events", []):
+        account, _, key = event["media"].partition(":")
+        if account != record.get("account") or not event["chapters"]:
+            continue
+        state = snapshot.get(key)
+        if state is None or state[4]:
+            continue
+        stamp = parse_stamp(event["at"])
+        if stamp is None or (day := stamp.astimezone(zone).date()) > today:
+            continue
+        daily[day.isoformat()] += event["chapters"]
+        if key in titles and (key not in recent or recent[key] < stamp):
+            recent[key] = stamp
+    dated = sorted(recent, key=lambda key: (recent[key], key), reverse=True)[:7]
+    fallback = sorted(
+        (key for key, title in titles.items() if key not in recent and title.get("updated_at")),
+        key=lambda key: (titles[key]["updated_at"], key), reverse=True,
+    )[:7 - len(dated)]
+    streak = analyze_streaks({day: {"total": count} for day, count in daily.items()}, str(zone), today=today)
+    return {
+        "unique_titles": len(titles),
+        "featured_titles": sorted(titles.values(), key=lambda title: (-title["count"], title["key"]))[:1],
+        "recent_titles": [titles[key] for key in dated + fallback],
+        "recent_label": "Recent manga" if fallback else "Last read manga",
+        "recent_uses_list_updates": bool(fallback),
+        "top_genres": sorted(genres.items(), key=lambda pair: (-pair[1], pair[0]))[:3],
+        "genre_covered": covered,
+        "current_streak": streak["current"],
+        "longest_streak": streak["longest"],
+        "active_days": len(streak["days"]),
+        "last_30": sum(count for day, count in streak["days"].items() if day >= today - timedelta(days=29)),
     }
 
 
