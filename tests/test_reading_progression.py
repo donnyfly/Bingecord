@@ -29,6 +29,10 @@ def test_manga_baseline_live_rewards_and_relink(tmp_path, monkeypatch):
         assert stats["chapters"] == 200
         assert stats["statuses"]["PLANNING"] == 1
         assert not stats["completed"]
+        imported_profile = await store.get_reading_statistics("1", "2", profile=True)
+        assert imported_profile["featured_titles"][0]["key"] == "10"
+        assert imported_profile["unique_titles"] == 1
+        assert imported_profile["last_30"] == 0
         assert (await store.get_progression("2"))["lifetime_xp"] == 350
         assert await store.get_guild_reading_summary("1", start, start + timedelta(hours=1)) == {
             "chapters": 0, "started": 0, "statuses": {},
@@ -37,6 +41,15 @@ def test_manga_baseline_live_rewards_and_relink(tmp_path, monkeypatch):
         update = {**imported, "10": [1, "CURRENT", 212, 0, False], "11": [2, "CURRENT", 3, 0, False]}
         for guild in ("1", "3"):
             await observe(guild, update, start + timedelta(hours=1))
+        from trackerbot.core.reading import profile_history
+        from zoneinfo import ZoneInfo
+
+        record = store._data["guilds"]["1"]["reading"]["2"]
+        profile = profile_history(update, record, ZoneInfo("UTC"), today=start.date())
+        assert profile["featured_titles"][0]["count"] == 212
+        assert {title["key"] for title in profile["recent_titles"]} == {"10", "11"}
+        assert profile["last_30"] == 15
+        assert profile["current_streak"] == profile["longest_streak"] == 1
         assert (await store.get_progression("2"))["lifetime_xp"] == 350 + 250 + 1000 + 750
         state = await store.get_challenge_state("2", reading_enabled=True)
         cards = snapshot(state, start + timedelta(hours=1))["sections"]

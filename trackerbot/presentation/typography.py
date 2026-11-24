@@ -27,7 +27,7 @@ def label(draw,xy,value,*,size=14,fill=(172,176,185)):
 def unit_label(unit, value):
     """Return a readable count noun rather than blindly stripping a final s."""
     pairs={'minutes':'minute','titles':'title','squares':'square','watches':'watch',
-           'episodes':'episode','movies':'movie','genres':'genre','decades':'decade'}
+           'episodes':'episode','movies':'movie','genres':'genre','decades':'decade','chapters':'chapter','days':'day'}
     reverse={singular:plural for plural,singular in pairs.items()}
     if value==1:return pairs.get(unit,unit)
     return reverse.get(unit,unit)

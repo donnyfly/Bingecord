@@ -726,7 +726,7 @@ class Storage:
 
     async def link_provider_account(self, guild_id: str | int, discord_user_id: str,
                            tokens: dict, account: dict, provider: str = "wetrakr") -> None:
-        """Add an independent WeTrakr link without resetting SIMKL or XP."""
+        """Link a provider in this server while preserving existing progression."""
         gid, uid = str(guild_id), str(discord_user_id)
         async with _lock:
             self._migrate_legacy_guild_locked(gid)
@@ -755,7 +755,10 @@ class Storage:
                 guild["users"][uid] = _default_guild_user()
                 guild["users"][uid]["simkl_linked"] = False
                 guild["users"][uid]["activity_provider"] = provider
-            guild["users"][uid][f"{provider}_linked"] = True
+            guild_user = guild["users"][uid]
+            if provider == "anilist" and not guild_user.get("anilist_linked"):
+                guild_user["anilist_manga"] = True
+            guild_user[f"{provider}_linked"] = True
             if provider == "anilist" and (not prior or str(prior.get("account_id")) != str(account.get("id"))):
                 guild["users"][uid]["anilist_lists"] = {}
             if not prior or str(prior.get("account_id")) != str(account.get("id")):
@@ -1259,7 +1262,7 @@ class Storage:
                 })
         roll_prestige(progression)
 
-    async def get_reading_statistics(self, guild_id, user_id):
+    async def get_reading_statistics(self, guild_id, user_id, *, profile=False):
         async with _lock:
             guild = self._guild(str(guild_id)) or {}
             member = self._guild_user(str(guild_id), str(user_id))
@@ -1272,7 +1275,12 @@ class Storage:
                 return None
             snapshot = record.get("snapshot", baseline)
             stats = reading.lifetime(snapshot)
-            stats["streak"] = reading.longest_streak(record.get("events", []), _resolve_timezone(guild.get("timezone")))
+            zone = _resolve_timezone(guild.get("timezone"))
+            if profile:
+                stats.update(reading.profile_history(snapshot, record, zone))
+                stats["streak"] = stats["longest_streak"]
+            else:
+                stats["streak"] = reading.longest_streak(record.get("events", []), zone)
             return stats
 
     async def get_guild_reading_summary(self, guild_id, start, end, *, with_readers=False):

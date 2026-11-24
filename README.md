@@ -14,7 +14,7 @@ data is stored on your own host.
 <img width="400" height="" alt="image" src="https://github.com/user-attachments/assets/39af5576-b9d2-4ef8-893d-f03ba28d7a73" />
 <img width="400" height="" alt="image" src="https://github.com/user-attachments/assets/d0a5393c-027d-4e9c-bbd3-950ab2deb94c" />
 <img width="400" height="" alt="image" src="https://github.com/user-attachments/assets/9adbd60c-257d-410a-b438-ac42f971fd79" />
-<img width="400" height="" alt="image" src="https://github.com/user-attachments/assets/ec386e11-bf2a-4b8a-81b1-a35e9fc342f1" />
+<img width="400" height="" alt="image" src="https://github.com/user-attachments/assets/c16822be-d842-4413-bb27-6100eaab91b8" />
 
 
 
@@ -148,7 +148,7 @@ The host configures the application once. Members do not need individual API key
 1. Create an OAuth application in [AniList developer settings](https://anilist.co/settings/developer). Use `https://anilist.co/api/v2/oauth/pin` as the redirect URL.
 2. Set `ANILIST_CLIENT_ID` and `ANILIST_CLIENT_SECRET` in your bot's `.env` and recreate the container.
 3. In Discord, run `/bingecord link provider:AniList`, authorize on AniList, and enter the authorization code in the bot's form.
-4. Use `/bingecord source provider:AniList` for anime and independently set `/bingecord source manga:On` for manga. To keep SIMKL for watching and use AniList for manga, leave the watch source on SIMKL and turn manga on.
+4. Linking AniList enables manga tracking in that server. If you already have a watch source, it stays selected. Use `/bingecord source provider:AniList` to select AniList for anime, or `/bingecord source manga:Off` to turn manga off. Existing links keep their saved manga setting.
 
 The first sync establishes a silent baseline for each enabled list. If manga
 setup reports a pending baseline, ask an admin to run `/bingecord checknow` before
@@ -452,6 +452,12 @@ to switch pages in the same message. Server stats include AniList totals, and
 the leaderboard offers **Manga chapters**. Use **Profile card**, **Weekly recap
 card**, or **Community event card** in `/bingecord debug` to preview those pages
 privately.
+
+The Manga profile shows shared level and prestige alongside a most-read
+spotlight, genres ranked by chapters logged, a recent manga cover shelf,
+reading streaks, and manga rewards. The recent shelf prioritizes chapter
+updates observed by Bingecord and can fill remaining slots from AniList
+list-update dates. Imported progress counts toward lifetime totals.
 
 Challenge, community and summary embeds keep their heading, reporting period or
 reset/deadline countdown above the image. **View details** opens the full text

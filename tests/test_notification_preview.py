@@ -420,15 +420,23 @@ def test_consolidated_xp_leaderboard_orders_prestige_then_xp(monkeypatch):
 
 def test_debug_profile_uses_live_renderer_without_awarding_achievements(monkeypatch):
     async def scenario():
-        from trackerbot.presentation import profile_artwork
+        from datetime import datetime, timezone
+        from trackerbot.presentation import manga_pages, profile_artwork
         with tempfile.TemporaryDirectory() as directory:
             monkeypatch.setattr(storage_module,'DATA_PATH',f'{directory}/store.json')
             store=storage_module.Storage();monkeypatch.setattr(bot,'storage',store)
             await store.link_user('123','42','token',None,'Viewer','2026-09-20T00:00:00Z')
             await store.record_watch('123','42','episode','Show','series:shows:1:1:1','2026-09-20T00:00:00Z')
+            await store.link_provider_account('123','42',{'access_token':'reading'},
+                                              {'id':7,'username':'Viewer'},provider='anilist')
+            manga = {'7': [1, 'CURRENT', 120, 0, False]}
+            await store.record_reading('123','42','reading',manga,datetime.now(timezone.utc),
+                                       catalogue={'7': {'title':'Sample manga','genres':['Adventure']}})
+            await store.anilist_snapshot('123','42','reading','MANGA',replace=manga,seed=True)
             interaction=_interaction();interaction.user.display_name='Viewer'
             evaluator=AsyncMock();monkeypatch.setattr(bot,'evaluate_achievements',evaluator)
             monkeypatch.setattr(profile_artwork,'load_profile_artwork',AsyncMock(return_value={}))
+            monkeypatch.setattr(manga_pages,'load_manga_profile_artwork',AsyncMock(return_value={}))
             # The callback still invokes the same exported renderer as /stats.
             captured=[]
             def render(name,data,art):captured.append((name,data,art));return BytesIO(b'profile-preview')
@@ -441,7 +449,19 @@ def test_debug_profile_uses_live_renderer_without_awarding_achievements(monkeypa
             interaction.response.defer.assert_awaited_once_with(ephemeral=True)
             assert interaction.followup.send.await_args.kwargs['file'].filename=='profile.png'
             assert interaction.followup.send.await_args.kwargs['embed'] is None
-            assert interaction.followup.send.await_args.kwargs['view'].pages['watch'][2].embed.fields[0].name=='Watch history'
+            view=interaction.followup.send.await_args.kwargs['view']
+            assert view.pages['watch'][2].embed.fields[0].name=='Watch history'
+            page_interaction=SimpleNamespace(response=SimpleNamespace(defer=AsyncMock()),
+                                             edit_original_response=AsyncMock())
+            await view.switch(page_interaction,'manga')
+            _, (png, filename), details = view.pages['manga']
+            assert filename == 'manga-stats.png'
+            assert Image.open(BytesIO(png)).size == (1080, 1380)
+            assert f"Level **{captured[0][1]['level']}**" in details.embed.description
+            fields = {field.name: field.value for field in details.embed.fields}
+            assert fields["Most read manga"] == "Sample manga · 120 chapters"
+            assert fields["Top genres"] == "Adventure · 100%"
+            assert fields["Manga achievements"] == "1/3"
             assert await store.get_progression('42')==before
     asyncio.run(scenario())
 

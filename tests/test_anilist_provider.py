@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from trackerbot.core import storage as storage_module
+from trackerbot.integrations import anilist_provider
 from trackerbot.integrations.anilist_client import AniListEntry
 from trackerbot.integrations.anilist_provider import AniListProvider, list_update, progress_state
 
@@ -67,7 +68,6 @@ def test_manga_and_anime_switch_independently_and_deliver_after_baseline(tmp_pat
         await store.link_provider_account("1", "2", {"access_token": "anilist"},
                                           {"id": 42, "username": "Viewer"}, provider="anilist")
         await store.set_channel("1", 3)
-        assert await store.set_anilist_manga("1", "2", True)
         assert await store.get_activity_provider("1", "2") == "simkl"
         assert await provider.initialize_manga("1", "2")
         assert [call.args[-1] for call in provider._read_list.await_args_list] == ["MANGA"]
@@ -90,9 +90,45 @@ def test_manga_and_anime_switch_independently_and_deliver_after_baseline(tmp_pat
         provider._read_list.side_effect = lambda _, linked, kind: (entry(kind, progress=6),)
         assert await provider.poll("1") == 2
         assert await store.set_anilist_manga("1", "2", False)
+        await store.link_provider_account("1", "2", {"access_token": "renewed"},
+                                          {"id": 42, "username": "Viewer"}, provider="anilist")
+        assert await store.anilist_snapshot("1", "2", "renewed", "MANGA") == (False, None)
         assert await store.get_activity_provider("1", "2") == "anilist"
         assert await store.unlink_provider_account("1", "2", provider="anilist")
         assert await store.get_activity_provider("1", "2") == "simkl"
         assert not await store.get_provider_targets("anilist")
+
+    asyncio.run(run())
+
+
+def test_link_modal_enables_manga_and_seeds_it_silently(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage_module, "DATA_PATH", str(tmp_path / "data.json"))
+    store = storage_module.Storage()
+    app = SimpleNamespace(
+        ANILIST_CLIENT_ID="123", ANILIST_CLIENT_SECRET="secret", storage=store,
+        calculate_token_expiry=lambda _: None,
+    )
+    provider = AniListProvider(app)
+    provider._read_list = AsyncMock(return_value=(entry(),))
+    provider._send = AsyncMock()
+    client = SimpleNamespace(
+        exchange_code=AsyncMock(return_value={"access_token": "token"}),
+        viewer=AsyncMock(return_value=SimpleNamespace(id=42, name="Viewer")),
+    )
+    monkeypatch.setattr(anilist_provider, "AniListClient", lambda _: client)
+
+    async def run():
+        interaction = SimpleNamespace(
+            guild_id=1, user=SimpleNamespace(id=2),
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        await anilist_provider.AniListLinkModal(provider).on_submit(interaction)
+        assert await store.anilist_snapshot("1", "2", "token", "MANGA") == (
+            True, {"10": progress_state(entry())},
+        )
+        assert provider._read_list.await_args.args[-1] == "MANGA"
+        provider._send.assert_not_awaited()
+        assert "Manga tracking is on" in interaction.followup.send.await_args.args[0]
 
     asyncio.run(run())

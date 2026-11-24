@@ -24,8 +24,11 @@ def progress_state(entry):
 
 def manga_catalogue(entries):
     return {
-        str(entry.media_id): {"title": entry.title, "cover": entry.cover_url, "year": entry.year,
-                              "format": entry.format, "genres": list(entry.genres)}
+        str(entry.media_id): {
+            "title": entry.title, "cover": entry.cover_url, "banner": entry.banner_url,
+            "mal_id": entry.mal_id, "updated_at": entry.updated_at, "year": entry.year,
+            "format": entry.format, "genres": list(entry.genres),
+        }
         for entry in entries if not entry.private
     }
 
@@ -85,15 +88,17 @@ class AniListLinkModal(discord.ui.Modal, title="Link your AniList account"):
 
     async def on_submit(self, interaction):
         await interaction.response.defer(ephemeral=True)
+        app = self.provider.app
+        guild_id, uid = interaction.guild_id, str(interaction.user.id)
         try:
             async with aiohttp.ClientSession() as session:
                 client = AniListClient(session)
-                app = self.provider.app
                 tokens = await client.exchange_code(self.code.value.strip(), app.ANILIST_CLIENT_ID, app.ANILIST_CLIENT_SECRET)
-                account = await client.viewer(tokens["access_token"])
-            await self.provider.app.storage.link_provider_account(
-                interaction.guild_id, str(interaction.user.id),
-                {"access_token": tokens["access_token"], "expires_at": app.calculate_token_expiry(tokens.get("expires_in"))},
+                token = tokens["access_token"]
+                account = await client.viewer(token)
+            await app.storage.link_provider_account(
+                guild_id, uid,
+                {"access_token": token, "expires_at": app.calculate_token_expiry(tokens.get("expires_in"))},
                 {"id": account.id, "username": account.name}, provider="anilist",
             )
         except (AniListError, ValueError):
@@ -102,9 +107,16 @@ class AniListLinkModal(discord.ui.Modal, title="Link your AniList account"):
                 ephemeral=True,
             )
             return
+        manga_enabled, _ = await app.storage.anilist_snapshot(guild_id, uid, token, "MANGA")
+        if not manga_enabled:
+            detail = "Manga tracking is off. Use `/bingecord source manga:On` to enable it."
+        elif await self.provider.initialize_manga(guild_id, uid):
+            detail = "Manga tracking is on. You can update your next chapter now."
+        else:
+            detail = "Manga tracking is on. The first sync is pending. Wait for the next poll or ask an admin to run `/bingecord checknow` before updating a chapter."
         await interaction.followup.send(
-            "AniList linked. Use `/bingecord source provider:AniList` for anime and "
-            "`/bingecord source manga:On` for manga.",
+            f"AniList linked. {detail}\n"
+            "Use `/bingecord source provider:AniList` to select AniList for anime.",
             ephemeral=True,
         )
 
