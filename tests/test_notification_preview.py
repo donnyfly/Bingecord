@@ -240,6 +240,51 @@ def test_anime_movie_with_virtual_episode_uses_movie_activity_and_english_title(
     asyncio.run(scenario())
 
 
+def test_simkl_off_monster_card_uses_tmdb_episode_and_official_season_art(monkeypatch):
+    from trackerbot.presentation.activity_cards import image_url
+
+    async def scenario():
+        item = {
+            "show": {"title": "Monogatari Series: Off & Monster Season", "ids": {"simkl": 2352394}},
+            "mapped_tvdb_seasons": [6],
+            "seasons": [{"number": 1, "episodes": [{"number": 10, "watched_at": "2026-11-25T01:00:00Z"}]}],
+        }
+        still_url = "https://image.tmdb.org/t/p/w780/still.jpg"
+        details = AsyncMock(return_value={"name": "Shinobu Mustard, Part Two", "runtime": 24})
+        still = AsyncMock(return_value=still_url)
+        monkeypatch.setattr(bot.tmdb, "get_episode_details", details)
+        monkeypatch.setattr(bot.tmdb, "get_episode_still", still)
+        monkeypatch.setattr(bot.tmdb, "get_watch_runtime", AsyncMock(return_value=24))
+        generic = AsyncMock()
+        monkeypatch.setattr(bot.tmdb, "find_anime_episode", generic)
+        monkeypatch.setattr(bot.storage, "get_announced", AsyncMock(return_value=set()))
+        monkeypatch.setattr(bot.storage, "get_activity_state", AsyncMock(return_value={"watch_times": {}}))
+        record = AsyncMock()
+        monkeypatch.setattr(bot.storage, "record_activity_batch", record)
+        monkeypatch.setattr(bot, "prefs", AsyncMock(return_value={"style": "card", "activity_text": "short", "show_imdb": False}))
+        monkeypatch.setattr(bot, "evaluate_achievements", AsyncMock())
+        send = AsyncMock(return_value=True)
+        monkeypatch.setattr(bot.activity_details, "single", send)
+
+        assert await bot.process_shows(object(), "1", "42", "Viewer", None, "anime", [item], None) == (1, True)
+        details.assert_awaited_once_with(46195, 5, 10)
+        still.assert_awaited_once_with(46195, 5, 10)
+        generic.assert_not_awaited()
+        embed, meta = send.await_args.args[2], send.await_args.args[-1]
+        assert embed.title == item["show"]["title"]
+        assert embed.description == "Watched **S6E10**\n*Shinobu Mustard, Part Two*"
+        assert embed.image.url == still_url
+        assert image_url(embed.thumbnail.url) == bot.OFF_MONSTER_LOGO
+        assert meta["artwork_tmdb_id"] == 46195 and meta["ids"] == {"simkl": 2352394}
+        assert record.await_args.args[-1][0]["item_key"] == "series:anime:2352394:6:10"
+
+        details.return_value = None
+        entry = next(bot.iter_show_episodes("anime", [item]))
+        assert (await bot.episode_media("anime", entry))[0] == bot.OFF_MONSTER_EPISODE_10_STILL
+
+    asyncio.run(scenario())
+
+
 def test_episode_range_records_stats_xp_and_challenges_as_one_group(monkeypatch):
     async def scenario():
         with tempfile.TemporaryDirectory() as directory:

@@ -370,7 +370,24 @@ def group_consecutive(es):
         else: groups[-1].append(e)
     return groups
 
+# SIMKL stores Off & Monster Season separately. Its TVDB display season
+# is 6, while TMDB groups the 14 regular episodes under Monogatari season 5.
+OFF_MONSTER_SIMKL_ID = "2352394"
+OFF_MONSTER_TMDB_ID = 46195
+OFF_MONSTER_LOGO = "https://monogatari-usa.com/oms/assets/img/logo_kv.png"
+OFF_MONSTER_EPISODE_10_STILL = "https://image.tmdb.org/t/p/w780/dDrQkVOb0xtDwQYa62ivpYPDc1g.jpg"
+
 async def episode_media(t,e):
+    if (t == "anime" and str(e.get("simkl_id")) == OFF_MONSTER_SIMKL_ID
+            and e.get("season_num") in (1, 6) and e.get("original_season_num") != 0
+            and 1 <= e["episode_number"] <= 14):
+        number = e["episode_number"]
+        episode = await tmdb.get_episode_details(OFF_MONSTER_TMDB_ID, 5, number) or {}
+        still = await tmdb.get_episode_still(OFF_MONSTER_TMDB_ID, 5, number) if episode else None
+        if number == 10:
+            still = still or OFF_MONSTER_EPISODE_10_STILL
+        return (still, episode.get("name") or e.get("episode_title"),
+                (episode.get("external_ids") or {}).get("imdb_id"), episode.get("runtime"))
     candidates=[]
     # For anime, SIMKL's season number is authoritative. Seasonal anime are
     # commonly stored as separate SIMKL/Kitsu-style entries, while TMDB may
@@ -626,6 +643,7 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
     start_claimed=set()
     for (sid,sn,kind),es in groups.items():
         es=sorted(es,key=lambda x:x["episode_number"]); title=es[0]["show_title"]; url=simkl_title_url(t,sid,es[0]["slug"]); fallback=simkl_poster_url(es[0]["poster"])
+        off_monster = t == "anime" and str(sid) == OFF_MONSTER_SIMKL_ID
         anime_tmdb_id=None
         if t=="anime":
             try:
@@ -634,7 +652,7 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
                     "tvdb": es[0].get("tvdb_id"),
                 })
                 english_title=None
-                if anime_tmdb_id is not None:
+                if anime_tmdb_id is not None and not off_monster:
                     english_title=await tmdb.get_tv_title(
                         anime_tmdb_id,
                         prefer_english=True,
@@ -680,7 +698,10 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
             logo=None
             if p.get("style") == "card" or p["artwork"] in ("auto", "backdrop"):
                 try:
-                    logo=await tmdb.get_tv_logo(series_tmdb_id) if series_tmdb_id is not None else None
+                    if off_monster:
+                        logo=OFF_MONSTER_LOGO
+                    elif series_tmdb_id is not None:
+                        logo=await tmdb.get_tv_logo(series_tmdb_id)
                 except Exception:
                     log.warning("TMDB TV logo lookup failed for %s.", title, exc_info=True)
             # Ranged activity optimization:
@@ -716,6 +737,8 @@ async def process_shows(ch,g,uid,name,member,t,items,profile,batch=None):
             detail_meta={'ids':{**(grp[0].get('ids') or {}),**({'tmdb':series_tmdb_id} if series_tmdb_id else {})},'movie':False,'season':sn,
                          'episodes':[x['episode_number'] for x in grp],'new_watch':True,'rewatched':kind=='rewatched',
                          'entry_seasons':sorted({x.get('mapped_tvdb_season_num') for x in grp if x.get('mapped_tvdb_season_num') is not None})}
+            if off_monster:
+                detail_meta['artwork_tmdb_id'] = OFF_MONSTER_TMDB_ID
             if batch is not None:
                 # Verified provider-neutral title IDs plus canonical coordinates
                 # keep grouping independent of the selected account.

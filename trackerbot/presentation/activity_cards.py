@@ -21,6 +21,7 @@ from .card_details import details_view
 
 WHITE=(241,243,248);MUTED=(161,166,180);LINE=(48,51,62)
 HOSTS={'image.tmdb.org','simkl.in','cdn.simkl.in','simkl.net','cdn.simkl.net','cdn.discordapp.com','media.discordapp.net','discord.com','s4.anilist.co','cdn.myanimelist.net'}
+OFFICIAL_ARTWORK={'https://monogatari-usa.com/oms/assets/img/logo_kv.png'}
 _images=OrderedDict();_cards=OrderedDict();_download_gate=asyncio.Semaphore(4);_render_gate=asyncio.Semaphore(2)
 
 
@@ -30,7 +31,7 @@ def image_url(value):
     if parsed.hostname=='wsrv.nl':
         target=(parse_qs(parsed.query).get('url') or [''])[0]
         return image_url(target) if urlparse(target).hostname=='simkl.in' else None
-    if parsed.scheme!='https' or parsed.hostname not in HOSTS or parsed.username or parsed.password:return None
+    if parsed.scheme!='https' or (parsed.hostname not in HOSTS and value not in OFFICIAL_ARTWORK) or parsed.username or parsed.password:return None
     try:
         if parsed.port not in (None,443):return None
     except ValueError:return None
@@ -535,6 +536,8 @@ async def activity_card_kwargs(embed,part,*,preview=False,sample=False,parts=Non
     if tmdb_client is not None and not model['movie'] and not model['reading'] and not meta.get('status') and meta.get('episodes'):
         ids=meta.get('ids') or {}
         episode_ids={key: ids[key] for key in ('tmdb','tvdb','imdb') if ids.get(key)}
+        if meta.get('artwork_tmdb_id'):
+            episode_ids['tmdb']=meta['artwork_tmdb_id']
         if episode_ids:
             model['series_artwork_ids']=episode_ids
     key=hashlib.sha256(json.dumps(model,sort_keys=True).encode()).hexdigest()
